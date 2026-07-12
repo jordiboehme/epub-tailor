@@ -1,0 +1,189 @@
+# epub-tailor
+
+Books, made to measure. `epub-tailor` cleans, fixes and transforms EPUB files, driven by composable JSON profiles: a device profile carries your e-reader's actual measurements (screen, image budgets, CSS limits, which HTML it can render) and the book gets cut to fit them exactly. No profile at all and it simply repairs the book - regenerated packaging, junk files gone, epubcheck-clean output - without touching a hair on its typography.
+
+EPUBs accumulate grime. Vendors leave marker files and watermark blocks in every chapter while conversion tools scatter `META-INF` droppings and duplicate ids, and e-ink firmware quietly bins your fonts, mashes your tables into rubble and draws your crisp SVG diagram as the literal word `[Image]`. This tool deals with all of it, and never touches your original file.
+
+## What it does
+
+**Always (the repair core):**
+
+- Rebuilds the packaging from scratch: a clean OPF, navigation document and NCX, all epubcheck-clean.
+- Drops junk `META-INF` files (`cdp.info`, Apple display options, calibre leftovers).
+- Removes duplicate element ids, a genuine EPUB spec violation.
+- Normalizes text to NFC and strips XML-invalid characters.
+- Refuses DRM-protected books with a clear error instead of pretending.
+
+**With content filter rules (JSON, yours):**
+
+- Replaces occurrences of a string with another, book-wide.
+- Removes strings, then prunes the elements the removal left empty - a chapter-trailing `<div><p><a><i>watermark</i></a></p></div>` disappears whole, not as a husk of empty tags.
+- Removes links by target and stray files by name, so a vendor's marker file does not ride along into the clean copy.
+
+**With a device profile (x4, x3 or your own):**
+
+- Transcodes every image to baseline grayscale JPEG or PNG, pre-fit to the screen and inside the device's byte budgets.
+- Rasterizes SVG with a real renderer (resvg, 2x supersampled), because the device has no SVG decoder at all.
+- Bakes ordered-list numbers into the text, so `1. 2. 3.` does not silently read "• • •".
+- Linearizes tables into labeled paragraphs, or rasterizes complex ones into crisp line-art images with `--tables image`.
+- Rebuilds `<pre>` and code blocks with explicit breaks and spacing so indentation survives.
+- Strips embedded fonts the device will never load.
+- Rescues and scopes chapter `<style>` blocks the firmware would otherwise ignore or misapply.
+- Splits oversized chapters at heading boundaries before they stall the indexer.
+
+## Install
+
+macOS, with Homebrew:
+
+```sh
+brew install jordiboehme/tap/epub-tailor
+```
+
+Windows and Linux: grab a binary from [Releases](https://github.com/jordiboehme/epub-tailor/releases). Prebuilt for macOS (arm64 and Intel), Linux (arm64 and amd64, static) and Windows (amd64 and arm64).
+
+## Quickstart
+
+Repair a book (no device tailoring, just hygiene):
+
+```sh
+epub-tailor fit book.epub
+```
+
+Writes `book.tailored.epub` beside the original and prints exactly what changed.
+
+Fit a book to an Xteink X4 running [CrossPoint](https://github.com/crosspoint-reader/crosspoint-reader):
+
+```sh
+epub-tailor fit book.epub --profile x4
+```
+
+Writes `book.x4.epub`, with every image, list, table and oversized chapter rewritten for the device.
+
+Stack profiles - device tailoring plus your own content filters:
+
+```sh
+epub-tailor fit book.epub --profile x4 --profile ./strip-watermarks.json
+```
+
+Convert a Markdown file (with its local images) into a fresh EPUB:
+
+```sh
+epub-tailor md book.md --profile x4
+```
+
+Diagnose a book without converting it (structural checks by default, device checks with a profile):
+
+```sh
+epub-tailor check book.epub --profile x4
+```
+
+## Profiles
+
+A profile is a JSON file bundling device capabilities, feature switches, tunables, an output filename appendix and content filter rules. Three ship built in:
+
+| Name   | Screen  | Output           | What it is |
+|--------|---------|------------------|------------|
+| `epub` | -       | `.tailored.epub` | The default: repair and cleanup only, everything the EPUB standard allows stays. |
+| `x4`   | 480x800 | `.x4.epub`       | Xteink X4 running CrossPoint firmware, the full conversion. |
+| `x3`   | 528x792 | `.x3.epub`       | Xteink X3, same treatment with its own geometry. |
+
+`--profile` repeats and composes left to right: scalar settings later-wins, feature switches merge per key and filter rules concatenate. `epub-tailor profiles` lists the built-ins; `epub-tailor profiles x4 ./mine.json` prints the fully resolved composition as JSON, which is the fastest way to see what a stack actually does.
+
+### Writing a filter profile
+
+```json
+{
+  "name": "strip-watermarks",
+  "filters": [
+    { "action": "remove", "match": "FreeBookStamp.example", "in": ["text"] },
+    { "action": "remove", "match": "freebookstamp.example", "in": ["href", "file"] },
+    { "action": "replace", "match": "colour", "with": "color" }
+  ]
+}
+```
+
+Matching is plain case-sensitive substring search. `in` says where to look: `text` (chapter text, title, authors, TOC labels), `href` (link targets; a `remove` match detaches the whole link) and `file` (archive paths; a `remove` match drops the whole file). When a removal empties an element, the empty husk is pruned upward too - images, table cells and other structure are never pruned. A filter profile carries no device settings, so it composes with any device profile or stands alone on top of the repair core.
+
+### Writing a device profile
+
+Start from a built-in (`epub-tailor profiles x4` prints one) and adjust. Every field is optional; anything you omit keeps the value from earlier layers:
+
+```json
+{
+  "name": "my-reader",
+  "device": {
+    "screen": { "width": 600, "height": 800, "ppi": 213 },
+    "gray_levels": 16,
+    "images": { "inline_max": [600, 730], "cover_max": [600, 800], "inline_budget_kb": 150, "cover_budget_kb": 200 },
+    "css": { "max_file_kb": 256, "max_rules": 4000 }
+  },
+  "features": { "strip_fonts": true, "transcode_images": true, "linearize_tables": false },
+  "output": { "appendix": "my-reader" }
+}
+```
+
+The full schema, every feature switch and the composition rules are documented in [`docs/profiles.md`](docs/profiles.md).
+
+## Flags
+
+Available on `fit` and `md` unless noted. Flags override profile values; flags you do not pass leave the profile alone.
+
+| Flag | Default | What it does |
+|---|---|---|
+| `--profile <NAME\|PATH>` | `epub` | A built-in profile or a path to your own JSON. Repeatable, composes left to right. |
+| `--quality low\|std\|high\|1-100` | from profile | JPEG quality. `low` is 70, `std` is 82, `high` is 90. |
+| `--tables text\|image\|image-all` | from profile | `image` rasterizes a table only when flattening would hurt it; `image-all` rasterizes every table it safely can. |
+| `--split-tall-images` | from profile | Slice an image taller than the screen into page-sized tiles. |
+| `--split-level 1\|2` | `1` | `md` only: heading level that starts a new chapter. |
+| `--max-chapter-kb <N>` | from profile | Split a chapter larger than this at a heading boundary. |
+| `--dry-run` | off | Report what would change and write nothing. |
+| `--report human\|json` | `human` | Use `json` for machine-readable output. |
+| `-o, --output <PATH>` | next to the input | Where to write the result. |
+
+## FAQ
+
+**What does the default profile actually change?**
+As little as possible. The packaging is regenerated, junk `META-INF` files are dropped, duplicate ids are fixed, text is NFC-normalized and every document is re-serialized as strict XHTML. Fonts, CSS, images and tables pass through byte for byte.
+
+**Why is my SVG now a JPEG or a PNG?**
+Only under a device profile, and because the X4 has no SVG decoder at all - an SVG left in place renders as nothing or an `[Image]` label. Pure vector art comes out a crisp PNG; an SVG carrying an embedded photo gets classified from its pixels, which usually means JPEG.
+
+**Why did my numbered list turn into paragraphs?**
+The CrossPoint firmware draws every list item with a "•" and no number, so a genuine `<ol>` reads "• • •". Under a device profile each item becomes a paragraph with its number ("1.", "2." and "2.1." for nested lists) baked into the text.
+
+**Why did my table become a picture?**
+Only with `--tables image`, and only for tables where flattening would actually hurt: three or more columns, a nested table or cells that are mostly numbers. A table carrying a link or an anchor target is never rasterized, because a picture cannot be clicked or jumped to.
+
+**Where did my beautiful embedded fonts go?**
+Under a device profile, into the bin, and your file is lighter for it. The device renders only its own built-in faces and never loads an embedded one. Under the default profile they stay exactly where they were.
+
+**Why will it not convert my DRM book?**
+Encrypted content cannot be read, let alone repaired or tailored. Strip the DRM first (Calibre and the usual suspects) then run it again.
+
+**Does the filter syntax support regex?**
+Not yet, on purpose. Plain substrings cover the real cases we have met and cannot catastrophically backtrack. If a pattern spans styled text (`Some<b>Watermark</b>.example`), match the link target with `"in": ["href"]` instead - that is the robust move anyway.
+
+**What about my book's description and publisher metadata?**
+Known v0.1 limitation: the regenerated OPF currently keeps title, authors, language and identifier. `dc:description`, `dc:publisher`, subjects and dates are dropped in the rewrite. Richer metadata passthrough is planned for 0.2.
+
+**What is Markdown frontmatter?**
+An optional YAML block at the very top of your `.md` that sets the book metadata:
+
+```yaml
+---
+title: My Book
+author: Jane Author
+language: en
+cover: images/cover.png
+---
+```
+
+`author` takes one name or a list. Omit the block entirely and the first `# H1` becomes the title.
+
+## The deep lore
+
+None of the device quirks are guesses. We read the CrossPoint firmware source so you do not have to, and wrote down every decode cap, supported CSS property and rendering trap in [`docs/device-constraints.md`](docs/device-constraints.md), with full citations in [`research/`](research/). It is a genuinely fun read if you have ever wondered what a 480x800, 4-gray, 400KB-of-RAM e-reader thinks of your stylesheet.
+
+## License and compatibility
+
+MIT licensed, see [LICENSE](LICENSE). The built-in device profiles target the Xteink X4 and X3 running the [CrossPoint](https://github.com/crosspoint-reader/crosspoint-reader) reader firmware. This is an independent project and is not affiliated with or endorsed by Xteink or CrossPoint.

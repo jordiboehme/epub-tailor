@@ -1,0 +1,20 @@
+{
+  "name": "epub",
+  "description": "Repair and cleanup only - everything the EPUB standard allows stays",
+  "features": {
+    "strip_fonts": false,
+    "filter_css": false,
+    "relocate_styles": false,
+    "transcode_images": false,
+    "rasterize_svg": false,
+    "linearize_tables": false,
+    "degrade_boxes": false,
+    "bake_ordered_lists": false,
+    "preserve_code_blocks": false,
+    "normalize_footnotes": false,
+    "relocate_anchors": false,
+    "dedupe_ids": true,
+    "unicode_hygiene": true,
+    "chapter_split": false
+  }
+}

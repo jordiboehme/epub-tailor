@@ -1,0 +1,91 @@
+name: Homebrew
+
+on:
+  release:
+    # Fires when a release is published, i.e. when release.yml's draft is
+    # manually published - never on the draft creation itself.
+    types: [published]
+
+jobs:
+  homebrew:
+    name: update homebrew tap
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Download release checksums
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/release
+          gh release download "${{ github.event.release.tag_name }}" \
+            --repo "${{ github.repository }}" \
+            --pattern SHA256SUMS --dir /tmp/release
+
+      - name: Regenerate and push the formula
+        env:
+          TAP_GITHUB_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG="${{ github.event.release.tag_name }}"
+          VERSION="${TAG#v}"
+          sums="/tmp/release/SHA256SUMS"
+
+          sha_macos_arm=$(grep "epub-tailor-${TAG}-macos-arm64.tar.gz" "$sums" | awk '{print $1}')
+          sha_macos_intel=$(grep "epub-tailor-${TAG}-macos-amd64.tar.gz" "$sums" | awk '{print $1}')
+          sha_linux_arm=$(grep "epub-tailor-${TAG}-linux-arm64.tar.gz" "$sums" | awk '{print $1}')
+          sha_linux_intel=$(grep "epub-tailor-${TAG}-linux-amd64.tar.gz" "$sums" | awk '{print $1}')
+
+          git clone "https://x-access-token:${TAP_GITHUB_TOKEN}@github.com/jordiboehme/homebrew-tap.git" \
+            "${{ runner.temp }}/homebrew-tap"
+
+          mkdir -p "${{ runner.temp }}/homebrew-tap/Formula"
+
+          cat > "${{ runner.temp }}/homebrew-tap/Formula/epub-tailor.rb" << FORMULA
+          class EpubTailor < Formula
+            desc "Clean, fix and tailor EPUB books to fit your e-reader"
+            homepage "https://github.com/jordiboehme/epub-tailor"
+            license "MIT"
+            version "${VERSION}"
+
+            on_macos do
+              on_arm do
+                url "https://github.com/jordiboehme/epub-tailor/releases/download/v#{version}/epub-tailor-v#{version}-macos-arm64.tar.gz"
+                sha256 "${sha_macos_arm}"
+              end
+
+              on_intel do
+                url "https://github.com/jordiboehme/epub-tailor/releases/download/v#{version}/epub-tailor-v#{version}-macos-amd64.tar.gz"
+                sha256 "${sha_macos_intel}"
+              end
+            end
+
+            on_linux do
+              on_arm do
+                url "https://github.com/jordiboehme/epub-tailor/releases/download/v#{version}/epub-tailor-v#{version}-linux-arm64.tar.gz"
+                sha256 "${sha_linux_arm}"
+              end
+
+              on_intel do
+                url "https://github.com/jordiboehme/epub-tailor/releases/download/v#{version}/epub-tailor-v#{version}-linux-amd64.tar.gz"
+                sha256 "${sha_linux_intel}"
+              end
+            end
+
+            def install
+              bin.install "epub-tailor"
+            end
+
+            test do
+              assert_match version.to_s, shell_output("#{bin}/epub-tailor --version")
+            end
+          end
+          FORMULA
+
+          cd "${{ runner.temp }}/homebrew-tap"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/epub-tailor.rb
+          git commit -m "Update epub-tailor to ${VERSION}"
+          git push

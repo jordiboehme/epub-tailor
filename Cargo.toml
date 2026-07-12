@@ -1,0 +1,55 @@
+[workspace]
+resolver = "3"
+members = ["crates/core", "crates/cli", "xtask"]
+
+[workspace.package]
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/jordiboehme/epub-tailor"
+version = "0.1.0"
+
+[workspace.dependencies]
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+clap = { version = "4", features = ["derive"] }
+zip = { version = "8", default-features = false, features = ["deflate"] }
+roxmltree = "0.21"
+encoding_rs = "0.8"
+indexmap = "2"
+kuchikiki = "0.8"
+html5ever = "0.26"
+image = { version = "0.25", default-features = false, features = [
+    "png",
+    "jpeg",
+    "gif",
+    "webp",
+    "tiff",
+    "bmp",
+] }
+jpeg-encoder = "0.7"
+# `text` renders `<text>` with the bundled font; `raster-images` lets an SVG's
+# embedded `<image>` rasters render. `system-fonts`/`memmap-fonts` are off so
+# rendering is deterministic and offline (only the bundled DejaVu Sans is used).
+resvg = { version = "0.47", default-features = false, features = [
+    "text",
+    "raster-images",
+] }
+lightningcss = { version = "=1.0.0-alpha.71", default-features = false }
+unicode-normalization = "0.1"
+# Default features pull in the standalone `comrak` CLI binary (clap, bon,
+# shell-words, xdg) and syntax highlighting (syntect-onig) - none of which we
+# use (M3 already owns code-block handling); dropping them also drops
+# `fmt2io` (MITNFA, not on the license allow-list) and syntect's `bincode`/
+# `yaml-rust` transitive deps (both unmaintained per `cargo deny`).
+comrak = { version = "0.53", default-features = false }
+serde_yaml_ng = "0.10"
+askama = "0.16"
+time = { version = "0.3", features = ["formatting"] }
+proptest = "1"
+insta = "1"
+epub-tailor-core = { path = "crates/core", version = "0.1.0" }
+
+[workspace.lints.clippy]
+# Intentionally empty: keep clippy's default lint levels.
+# CI enforces `-D warnings` on the command line (see .github/workflows/ci.yml).

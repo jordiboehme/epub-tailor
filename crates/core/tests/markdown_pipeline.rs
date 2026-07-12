@@ -1,0 +1,320 @@
+//! End-to-end gate for the Markdown frontend: `Input::Markdown` must flow
+//! through the exact same finalize pipeline `Input::Epub` uses (M3 transforms,
+//! CSS generation, image processing, the epubcheck-clean writer). This is
+//! separate from `crates/core/src/markdown/`'s own unit tests,
+//! which check `build_book` in isolation before `convert` ever runs.
+
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Output};
+
+use epub_tailor_core::{AssetResolver, ConvertOptions, FsResolver, Input, convert};
+
+struct MapResolver(HashMap<String, Vec<u8>>);
+
+impl AssetResolver for MapResolver {
+    fn resolve(&self, href: &str) -> Option<Vec<u8>> {
+        self.0.get(href).cloned()
+    }
+}
+
+fn resolver(entries: &[(&str, &[u8])]) -> Box<dyn AssetResolver> {
+    Box::new(MapResolver(
+        entries
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_vec()))
+            .collect(),
+    ))
+}
+
+fn chapter_text(epub: &[u8], name_fragment: &str) -> String {
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(epub)).expect("valid zip");
+    let name = (0..archive.len())
+        .map(|i| archive.by_index(i).unwrap().name().to_string())
+        .find(|n| n.contains(name_fragment))
+        .unwrap_or_else(|| panic!("no zip entry contains {name_fragment}"));
+    let mut file = archive.by_name(&name).expect("entry exists");
+    let mut buf = String::new();
+    std::io::Read::read_to_string(&mut file, &mut buf).expect("utf8 chapter");
+    buf
+}
+
+#[test]
+fn gfm_table_is_linearized_by_the_shared_m3_pipeline() {
+    let md = "# Chapter One\n\n| A | B |\n|---|---|\n| 1 | 2 |\n";
+    let converted = convert(
+        Input::Markdown {
+            text: md.to_string(),
+            assets: resolver(&[]),
+        },
+        &ConvertOptions::default(),
+    )
+    .expect("conversion should succeed");
+    let ch1 = chapter_text(&converted.epub, "ch-001.xhtml");
+    assert!(!ch1.contains("<table"), "table must be linearized: {ch1}");
+}
+
+#[test]
+fn footnote_reference_ids_are_relocated_onto_block_elements() {
+    let md = "# Chapter One\n\nA note.[^1]\n\n[^1]: The body.\n";
+    let converted = convert(
+        Input::Markdown {
+            text: md.to_string(),
+            assets: resolver(&[]),
+        },
+        &ConvertOptions::default(),
+    )
+    .expect("conversion should succeed");
+    let ch1 = chapter_text(&converted.epub, "ch-001.xhtml");
+    // M3's anchor relocation moves the inline `id="fnref-1"` (on the `<a>`
+    // inside `<sup>`) up to its nearest block ancestor (the enclosing `<p>`);
+    // the internal `href="#fn-1"` link into the footnotes section survives.
+    assert!(
+        ch1.contains(r##"href="#fn-1""##),
+        "internal footnote link expected: {ch1}"
+    );
+    assert!(
+        ch1.contains(r#"<p id="fnref-1">"#),
+        "the id must relocate onto the block ancestor: {ch1}"
+    );
+    assert!(
+        !ch1.contains(r##"<a href="#fn-1" id="fnref-1""##),
+        "the id must no longer sit on the inline <a>: {ch1}"
+    );
+}
+
+#[test]
+fn task_list_items_survive_the_pipeline() {
+    let md = "# Chapter One\n\n- [x] done\n- [ ] not done\n";
+    let converted = convert(
+        Input::Markdown {
+            text: md.to_string(),
+            assets: resolver(&[]),
+        },
+        &ConvertOptions::default(),
+    )
+    .expect("conversion should succeed");
+    let ch1 = chapter_text(&converted.epub, "ch-001.xhtml");
+    assert!(ch1.contains(r#"type="checkbox""#), "got: {ch1}");
+}
+
+#[test]
+fn local_image_is_processed_by_the_shared_image_pipeline_into_jpeg_or_png() {
+    // A real, tiny, valid baseline JPEG (same fixture style as the epub tests).
+    const TINY_JPEG: &[u8] = &[
+        0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46, 0x00, 0x01, 0x01, 0x00, 0x00,
+        0x01, 0x00, 0x01, 0x00, 0x00, 0xFF, 0xDB, 0x00, 0x43, 0x00, 0x06, 0x04, 0x05, 0x06, 0x05,
+        0x04, 0x06, 0x06, 0x05, 0x06, 0x07, 0x07, 0x06, 0x08, 0x0A, 0x10, 0x0A, 0x0A, 0x09, 0x09,
+        0x0A, 0x14, 0x0E, 0x0F, 0x0C, 0x10, 0x17, 0x14, 0x18, 0x18, 0x17, 0x14, 0x16, 0x16, 0x1A,
+        0x1D, 0x25, 0x1F, 0x1A, 0x1B, 0x23, 0x1C, 0x16, 0x16, 0x20, 0x2C, 0x20, 0x23, 0x26, 0x27,
+        0x29, 0x2A, 0x29, 0x19, 0x1F, 0x2D, 0x30, 0x2D, 0x28, 0x30, 0x25, 0x28, 0x29, 0x28, 0xFF,
+        0xC0, 0x00, 0x0B, 0x08, 0x00, 0x02, 0x00, 0x02, 0x01, 0x01, 0x11, 0x00, 0xFF, 0xC4, 0x00,
+        0x1F, 0x00, 0x00, 0x01, 0x05, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B,
+        0xFF, 0xC4, 0x00, 0xB5, 0x10, 0x00, 0x02, 0x01, 0x03, 0x03, 0x02, 0x04, 0x03, 0x05, 0x05,
+        0x04, 0x04, 0x00, 0x00, 0x01, 0x7D, 0x01, 0x02, 0x03, 0x00, 0x04, 0x11, 0x05, 0x12, 0x21,
+        0x31, 0x41, 0x06, 0x13, 0x51, 0x61, 0x07, 0x22, 0x71, 0x14, 0x32, 0x81, 0x91, 0xA1, 0x08,
+        0x23, 0x42, 0xB1, 0xC1, 0x15, 0x52, 0xD1, 0xF0, 0x24, 0x33, 0x62, 0x72, 0x82, 0x09, 0x0A,
+        0x16, 0x17, 0x18, 0x19, 0x1A, 0x25, 0x26, 0x27, 0x28, 0x29, 0x2A, 0x34, 0x35, 0x36, 0x37,
+        0x38, 0x39, 0x3A, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48, 0x49, 0x4A, 0x53, 0x54, 0x55, 0x56,
+        0x57, 0x58, 0x59, 0x5A, 0x63, 0x64, 0x65, 0x66, 0x67, 0x68, 0x69, 0x6A, 0x73, 0x74, 0x75,
+        0x76, 0x77, 0x78, 0x79, 0x7A, 0x83, 0x84, 0x85, 0x86, 0x87, 0x88, 0x89, 0x8A, 0x92, 0x93,
+        0x94, 0x95, 0x96, 0x97, 0x98, 0x99, 0x9A, 0xA2, 0xA3, 0xA4, 0xA5, 0xA6, 0xA7, 0xA8, 0xA9,
+        0xAA, 0xB2, 0xB3, 0xB4, 0xB5, 0xB6, 0xB7, 0xB8, 0xB9, 0xBA, 0xC2, 0xC3, 0xC4, 0xC5, 0xC6,
+        0xC7, 0xC8, 0xC9, 0xCA, 0xD2, 0xD3, 0xD4, 0xD5, 0xD6, 0xD7, 0xD8, 0xD9, 0xDA, 0xE1, 0xE2,
+        0xE3, 0xE4, 0xE5, 0xE6, 0xE7, 0xE8, 0xE9, 0xEA, 0xF1, 0xF2, 0xF3, 0xF4, 0xF5, 0xF6, 0xF7,
+        0xF8, 0xF9, 0xFA, 0xFF, 0xDA, 0x00, 0x08, 0x01, 0x01, 0x00, 0x00, 0x3F, 0x00, 0xF6, 0x0A,
+        0xFF, 0xD9,
+    ];
+
+    let md = "# Chapter One\n\n![a photo](pic.jpg)\n";
+    let converted = convert(
+        Input::Markdown {
+            text: md.to_string(),
+            assets: resolver(&[("pic.jpg", TINY_JPEG)]),
+        },
+        &ConvertOptions::default(),
+    )
+    .expect("conversion should succeed");
+
+    let mut archive =
+        zip::ZipArchive::new(std::io::Cursor::new(&converted.epub)).expect("valid zip");
+    let names: Vec<String> = (0..archive.len())
+        .map(|i| archive.by_index(i).unwrap().name().to_string())
+        .collect();
+    let image_name = names
+        .iter()
+        .find(|n| n.starts_with("OEBPS/images/") && (n.ends_with(".jpg") || n.ends_with(".png")))
+        .unwrap_or_else(|| panic!("expected a jpg/png under OEBPS/images/, got: {names:?}"));
+    assert!(image_name.ends_with(".jpg") || image_name.ends_with(".png"));
+}
+
+/// Path traversal via a real `FsResolver`: `![x](../../etc/passwd)` must never
+/// escape the resolver's root, regardless of what actually exists there.
+#[test]
+fn path_traversal_does_not_escape_the_resolver_root() {
+    let dir =
+        std::env::temp_dir().join(format!("epub-tailor-core-traversal-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("create temp dir");
+    let assets = Box::new(FsResolver::new(&dir));
+
+    let md = "# Chapter One\n\n![x](../../etc/passwd)\n";
+    let converted = convert(
+        Input::Markdown {
+            text: md.to_string(),
+            assets,
+        },
+        &ConvertOptions::default(),
+    )
+    .expect("conversion should succeed despite the unresolved image");
+
+    assert!(
+        converted
+            .report
+            .warnings
+            .iter()
+            .any(|w| w.message.contains("could not resolve")),
+        "expected an unresolved-image warning, got: {:?}",
+        converted.report.warnings
+    );
+    let mut archive =
+        zip::ZipArchive::new(std::io::Cursor::new(&converted.epub)).expect("valid zip");
+    for i in 0..archive.len() {
+        let name = archive.by_index(i).unwrap().name().to_string();
+        assert!(
+            !name.contains("passwd"),
+            "no resource may have escaped the root: {name}"
+        );
+    }
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// Run epubcheck against `path`, preferring the `epubcheck` launcher on `PATH`
+/// and falling back to `java -jar $EPUBCHECK_JAR`. Returns `None` if neither is
+/// available (mirrors `tests/epubcheck_roundtrip.rs`).
+fn run_epubcheck(path: &Path) -> Option<Output> {
+    if let Ok(output) = Command::new("epubcheck").arg(path).output() {
+        return Some(output);
+    }
+    if let Ok(jar) = std::env::var("EPUBCHECK_JAR")
+        && let Ok(output) = Command::new("java").arg("-jar").arg(jar).arg(path).output()
+    {
+        return Some(output);
+    }
+    None
+}
+
+#[test]
+fn markdown_sourced_book_is_epubcheck_clean() {
+    let md = "\
+---
+title: The Sample Book
+author: Jane Doe
+language: en
+cover: images/cover.jpg
+---
+
+Front matter content before the first chapter.
+
+# Chapter One
+
+A paragraph with a footnote.[^1]
+
+| Item | Cost |
+|------|------|
+| Pen  | 1    |
+| Ink  | 2    |
+
+- [x] Write the draft
+- [ ] Edit the draft
+
+## A Section
+
+More text and a local image.
+
+![a cover-ish photo](art/pic.jpg)
+
+[^1]: The footnote body.
+
+# Chapter Two
+
+```rust
+fn main() {}
+```
+
+1. First
+2. Second
+";
+
+    const TINY_JPEG: &[u8] = &[
+        0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46, 0x00, 0x01, 0x01, 0x00, 0x00,
+        0x01, 0x00, 0x01, 0x00, 0x00, 0xFF, 0xDB, 0x00, 0x43, 0x00, 0x06, 0x04, 0x05, 0x06, 0x05,
+        0x04, 0x06, 0x06, 0x05, 0x06, 0x07, 0x07, 0x06, 0x08, 0x0A, 0x10, 0x0A, 0x0A, 0x09, 0x09,
+        0x0A, 0x14, 0x0E, 0x0F, 0x0C, 0x10, 0x17, 0x14, 0x18, 0x18, 0x17, 0x14, 0x16, 0x16, 0x1A,
+        0x1D, 0x25, 0x1F, 0x1A, 0x1B, 0x23, 0x1C, 0x16, 0x16, 0x20, 0x2C, 0x20, 0x23, 0x26, 0x27,
+        0x29, 0x2A, 0x29, 0x19, 0x1F, 0x2D, 0x30, 0x2D, 0x28, 0x30, 0x25, 0x28, 0x29, 0x28, 0xFF,
+        0xC0, 0x00, 0x0B, 0x08, 0x00, 0x02, 0x00, 0x02, 0x01, 0x01, 0x11, 0x00, 0xFF, 0xC4, 0x00,
+        0x1F, 0x00, 0x00, 0x01, 0x05, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B,
+        0xFF, 0xC4, 0x00, 0xB5, 0x10, 0x00, 0x02, 0x01, 0x03, 0x03, 0x02, 0x04, 0x03, 0x05, 0x05,
+        0x04, 0x04, 0x00, 0x00, 0x01, 0x7D, 0x01, 0x02, 0x03, 0x00, 0x04, 0x11, 0x05, 0x12, 0x21,
+        0x31, 0x41, 0x06, 0x13, 0x51, 0x61, 0x07, 0x22, 0x71, 0x14, 0x32, 0x81, 0x91, 0xA1, 0x08,
+        0x23, 0x42, 0xB1, 0xC1, 0x15, 0x52, 0xD1, 0xF0, 0x24, 0x33, 0x62, 0x72, 0x82, 0x09, 0x0A,
+        0x16, 0x17, 0x18, 0x19, 0x1A, 0x25, 0x26, 0x27, 0x28, 0x29, 0x2A, 0x34, 0x35, 0x36, 0x37,
+        0x38, 0x39, 0x3A, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48, 0x49, 0x4A, 0x53, 0x54, 0x55, 0x56,
+        0x57, 0x58, 0x59, 0x5A, 0x63, 0x64, 0x65, 0x66, 0x67, 0x68, 0x69, 0x6A, 0x73, 0x74, 0x75,
+        0x76, 0x77, 0x78, 0x79, 0x7A, 0x83, 0x84, 0x85, 0x86, 0x87, 0x88, 0x89, 0x8A, 0x92, 0x93,
+        0x94, 0x95, 0x96, 0x97, 0x98, 0x99, 0x9A, 0xA2, 0xA3, 0xA4, 0xA5, 0xA6, 0xA7, 0xA8, 0xA9,
+        0xAA, 0xB2, 0xB3, 0xB4, 0xB5, 0xB6, 0xB7, 0xB8, 0xB9, 0xBA, 0xC2, 0xC3, 0xC4, 0xC5, 0xC6,
+        0xC7, 0xC8, 0xC9, 0xCA, 0xD2, 0xD3, 0xD4, 0xD5, 0xD6, 0xD7, 0xD8, 0xD9, 0xDA, 0xE1, 0xE2,
+        0xE3, 0xE4, 0xE5, 0xE6, 0xE7, 0xE8, 0xE9, 0xEA, 0xF1, 0xF2, 0xF3, 0xF4, 0xF5, 0xF6, 0xF7,
+        0xF8, 0xF9, 0xFA, 0xFF, 0xDA, 0x00, 0x08, 0x01, 0x01, 0x00, 0x00, 0x3F, 0x00, 0xF6, 0x0A,
+        0xFF, 0xD9,
+    ];
+
+    let assets: Box<dyn AssetResolver> =
+        resolver(&[("art/pic.jpg", TINY_JPEG), ("images/cover.jpg", TINY_JPEG)]);
+
+    let converted = convert(
+        Input::Markdown {
+            text: md.to_string(),
+            assets,
+        },
+        &ConvertOptions::default(),
+    )
+    .expect("conversion should succeed");
+    assert!(!converted.epub.is_empty());
+
+    let out_path = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("markdown-sample.epub");
+    std::fs::write(&out_path, &converted.epub).expect("write converted epub to temp dir");
+
+    match run_epubcheck(&out_path) {
+        None => {
+            eprintln!(
+                "SKIP: epubcheck not found (not on PATH, EPUBCHECK_JAR unset); \
+                 skipping the markdown-sourced epubcheck validation"
+            );
+        }
+        Some(output) => {
+            let combined = format!(
+                "{}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr),
+            );
+            let offenders: Vec<&str> = combined
+                .lines()
+                .filter(|line| {
+                    line.contains("FATAL(") || line.contains("ERROR(") || line.contains("WARNING(")
+                })
+                .collect();
+            assert!(
+                offenders.is_empty(),
+                "epubcheck reported {} problem(s) (status {:?}):\n{}",
+                offenders.len(),
+                output.status.code(),
+                combined,
+            );
+        }
+    }
+}

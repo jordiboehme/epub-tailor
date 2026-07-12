@@ -1,0 +1,7 @@
+---
+source: crates/core/src/html/boxes.rs
+expression: out
+---
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>T</title></head><body><img src="a.jpg" alt="a"/><p class="et-caption">A cat</p></body></html>

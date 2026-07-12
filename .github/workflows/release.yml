@@ -1,0 +1,204 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  # Manual dry run: exercises the full build-and-package matrix without
+  # publishing a GitHub Release (the publish job only runs for a tag push).
+  workflow_dispatch: {}
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: build (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            platform: macos-arm64
+            os: macos-latest
+            archive_ext: tar.gz
+            test: true
+          - target: x86_64-apple-darwin
+            platform: macos-amd64
+            # macos-13 (the Intel image the brief named) was retired by
+            # GitHub on 2025-12-04; macos-15-intel is the current Intel
+            # macOS image.
+            os: macos-15-intel
+            archive_ext: tar.gz
+            test: true
+          - target: x86_64-unknown-linux-musl
+            platform: linux-amd64
+            os: ubuntu-latest
+            archive_ext: tar.gz
+            musl: true
+            test: true
+          - target: aarch64-unknown-linux-musl
+            platform: linux-arm64
+            os: ubuntu-24.04-arm
+            archive_ext: tar.gz
+            musl: true
+          - target: x86_64-pc-windows-msvc
+            platform: windows-amd64
+            os: windows-latest
+            archive_ext: zip
+            rustflags: '-C target-feature=+crt-static'
+            test: true
+          - target: aarch64-pc-windows-msvc
+            platform: windows-arm64
+            os: windows-11-arm
+            archive_ext: zip
+            rustflags: '-C target-feature=+crt-static'
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable branch
+        with:
+          toolchain: stable
+
+      - name: Add release target
+        run: rustup target add ${{ matrix.target }}
+
+      - name: Install musl-tools
+        if: matrix.musl
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          key: release-${{ matrix.target }}
+
+      - name: Resolve release version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            tag="${{ github.ref_name }}"
+            echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=0.0.0-dev" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build epub-tailor
+        run: cargo build --release -p epub-tailor --target ${{ matrix.target }}
+        env:
+          RUSTFLAGS: ${{ matrix.rustflags }}
+
+      - name: Locate the built binary
+        id: bin
+        shell: bash
+        run: |
+          set -euo pipefail
+          bin="target/${{ matrix.target }}/release/epub-tailor"
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            bin="target/${{ matrix.target }}/release/epub-tailor.exe"
+          fi
+          if [ ! -f "$bin" ]; then
+            echo "::error::built binary not found at $bin"
+            exit 1
+          fi
+          echo "path=$bin" >> "$GITHUB_OUTPUT"
+
+      # Only the four established, well-proven runner images (both macOS
+      # legs, and the x64 legs on Linux and Windows) run the workspace test
+      # suite here. The two arm64 Linux/Windows runners are newer, less
+      # proven images: CI already covers the workspace's correctness on
+      # ubuntu-24.04/macos-15/windows-2025, so this is a release-specific
+      # smoke check, not a substitute for CI.
+      - name: Run workspace tests
+        if: matrix.test
+        run: cargo test --workspace --release --target ${{ matrix.target }}
+        env:
+          RUSTFLAGS: ${{ matrix.rustflags }}
+
+      - name: Stage archive contents
+        id: stage
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ steps.version.outputs.version }}"
+          name="epub-tailor-v${version}-${{ matrix.platform }}"
+          stage="dist/$name"
+          mkdir -p "$stage"
+          cp "${{ steps.bin.outputs.path }}" "$stage/"
+          cp LICENSE "$stage/"
+          cp README.md "$stage/"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+
+      - name: Package archive (tar.gz)
+        if: matrix.archive_ext == 'tar.gz'
+        shell: bash
+        working-directory: dist
+        run: tar czf "${{ steps.stage.outputs.name }}.tar.gz" "${{ steps.stage.outputs.name }}"
+
+      - name: Package archive (zip)
+        if: matrix.archive_ext == 'zip'
+        shell: pwsh
+        working-directory: dist
+        run: Compress-Archive -Path "${{ steps.stage.outputs.name }}/*" -DestinationPath "${{ steps.stage.outputs.name }}.zip"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: epub-tailor-${{ matrix.platform }}
+          path: dist/${{ steps.stage.outputs.name }}.${{ matrix.archive_ext }}
+          if-no-files-found: error
+
+  publish:
+    name: publish release
+    needs: build
+    runs-on: ubuntu-latest
+    # Only a tag push produces a real GitHub Release; workflow_dispatch stops
+    # after the build matrix above so it can be used as a dry run.
+    if: github.ref_type == 'tag'
+    permissions:
+      contents: write
+    steps:
+      # Full history and tags are required for git-cliff to resolve the
+      # commit range for the release notes below.
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+
+      - name: Download all archives
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: downloads
+
+      - name: Collect archives and generate checksums
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          find downloads -type f \( -name '*.tar.gz' -o -name '*.zip' \) -exec cp {} release/ \;
+          cd release
+          sha256sum -- * > SHA256SUMS
+          ls -la
+
+      - name: Generate release notes
+        uses: orhun/git-cliff-action@f50e11560dce63f7c33227798f90b924471a88b5 # v4.8.0
+        with:
+          config: cliff.toml
+          args: --latest
+        env:
+          OUTPUT: release-notes.md
+
+      # Created as a draft on purpose: the release notes get a hand-polish
+      # pass before publishing. Publishing the draft is what triggers
+      # homebrew.yml to update the tap formula.
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release create "${{ github.ref_name }}" release/* \
+            --draft \
+            --title "${{ github.ref_name }}" \
+            --notes-file release-notes.md

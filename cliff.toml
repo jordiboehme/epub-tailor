@@ -1,0 +1,43 @@
+# git-cliff configuration for epub-tailor release notes.
+# https://git-cliff.org/docs/configuration
+#
+# Notes are generated per release (`git cliff --latest` in the publish job,
+# `git cliff --unreleased` for local testing) and fed straight into the
+# GitHub release body - terse bullets, no scopes, no commit SHAs or links.
+# Empty sections are omitted because `filter_commits` drops everything that
+# doesn't match a parser below, so a group with zero matching commits never
+# reaches the template.
+
+[changelog]
+body = """
+{% for group, commits in commits | group_by(attribute="group") %}
+### {{ group }}
+{% for commit in commits %}
+- {{ commit.message | upper_first }}\
+{% endfor %}
+{% endfor %}
+"""
+trim = true
+render_always = true
+
+[git]
+conventional_commits = true
+filter_unconventional = true
+require_conventional = false
+split_commits = false
+# A `!` marker or `BREAKING CHANGE` footer always wins the group, regardless
+# of commit type, so it must be matched before the feat/fix parsers below.
+protect_breaking_commits = true
+commit_parsers = [
+    { field = "breaking", pattern = "true", group = "Breaking Changes" },
+    { message = "^feat", group = "New & Noteworthy" },
+    { message = "^fix", group = "Fixes" },
+]
+# Everything else (chore/docs/ci/style/refactor/test) matches no parser
+# above and is dropped here rather than listed as a skip rule per type.
+filter_commits = true
+fail_on_unmatched_commit = false
+link_parsers = []
+topo_order = false
+topo_order_commits = true
+sort_commits = "oldest"

@@ -1,0 +1,7 @@
+---
+source: crates/core/src/html/lists.rs
+expression: out
+---
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>T</title></head><body><p class="et-ol-item">I. one</p><p class="et-ol-item">II. two</p><p class="et-ol-item">III. three</p></body></html>

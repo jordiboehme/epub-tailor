@@ -1,0 +1,43 @@
+[licenses]
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Zlib",
+    "MPL-2.0",
+    "CDLA-Permissive-2.0",
+    "Unicode-DFS-2016",
+    # Independent JPEG Group License. Reaches us only through jpeg-encoder
+    # (license `(MIT OR Apache-2.0) AND IJG`), the baseline-guaranteed grayscale
+    # JPEG encoder the image pipeline (M5) relies on: it ports the IJG reference
+    # quantization/Huffman tables, hence the IJG term. IJG is a permissive,
+    # FSF Free/Libre license (attribution only, commercial use allowed). Flagged
+    # for review rather than added silently.
+    "IJG",
+]
+
+[advisories]
+ignore = [
+    # fxhash is unmaintained. It reaches us only transitively, through
+    # kuchikiki -> selectors -> fxhash; we do not use selectors' CSS matching,
+    # and there is no vulnerability here (unmaintained-only advisory). Nothing
+    # in our dependency tree lets us swap it out, so we accept it.
+    "RUSTSEC-2025-0057",
+    # ttf-parser is unmaintained (author has stated no further fixes). It reaches
+    # us only transitively, through resvg -> usvg -> {fontdb, rustybuzz} ->
+    # ttf-parser, the SVG rasterizer the image pipeline (M6) relies on. This is
+    # an unmaintained-only advisory: no vulnerability, and no safe upgrade is
+    # available. resvg's whole font/text stack is built on ttf-parser, so nothing
+    # in our tree lets us swap it out. Flagged for review rather than added
+    # silently.
+    "RUSTSEC-2026-0192",
+]
+
+[bans]
+multiple-versions = "allow"
+
+[sources]

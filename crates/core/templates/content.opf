@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="pub-id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="pub-id">{{ identifier }}</dc:identifier>
+    <dc:title>{{ title }}</dc:title>
+{%- for author in authors %}
+    <dc:creator>{{ author }}</dc:creator>
+{%- endfor %}
+    <dc:language>{{ language }}</dc:language>
+    <meta property="dcterms:modified">{{ modified }}</meta>
+{%- if !cover_id.is_empty() %}
+    <meta name="cover" content="{{ cover_id }}"/>
+{%- endif %}
+  </metadata>
+  <manifest>
+{%- for item in items %}
+    <item id="{{ item.id }}" href="{{ item.href }}" media-type="{{ item.media_type }}"{% if !item.properties.is_empty() %} properties="{{ item.properties }}"{% endif %}/>
+{%- endfor %}
+  </manifest>
+  <spine{% if !ncx_id.is_empty() %} toc="{{ ncx_id }}"{% endif %}>
+{%- for idref in spine %}
+    <itemref idref="{{ idref }}"/>
+{%- endfor %}
+  </spine>
+</package>

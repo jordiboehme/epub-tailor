@@ -1,0 +1,17 @@
+/target
+.superpowers/
+.claude/
+.DS_Store
+*.tailored.epub
+*.x4.epub
+*.x3.epub
+.idea/
+.vscode/
+plans/
+CLAUDE.md
+AGENTS.md
+
+# release build artifacts (packaged locally while testing release.yml)
+/*.tar.gz
+/*.zip
+/SHA256SUMS

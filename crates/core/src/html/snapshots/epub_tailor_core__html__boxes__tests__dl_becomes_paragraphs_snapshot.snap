@@ -1,0 +1,7 @@
+---
+source: crates/core/src/html/boxes.rs
+expression: out
+---
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>T</title></head><body><p class="et-dt"><strong>Term</strong></p><p class="et-dd">Definition</p><p class="et-dt"><strong>T2</strong></p><p class="et-dd">D2</p></body></html>

@@ -1,0 +1,39 @@
+{
+  "name": "x3",
+  "description": "Xteink X3 running CrossPoint firmware",
+  "device": {
+    "screen": { "width": 528, "height": 792, "ppi": 220 },
+    "gray_levels": 4,
+    "images": {
+      "max_source_px": [2048, 1536],
+      "inline_max": [528, 722],
+      "cover_max": [528, 792],
+      "inline_budget_kb": 100,
+      "cover_budget_kb": 127
+    },
+    "css": { "max_file_kb": 128, "max_rules": 1500 }
+  },
+  "features": {
+    "strip_fonts": true,
+    "filter_css": true,
+    "relocate_styles": true,
+    "transcode_images": true,
+    "rasterize_svg": true,
+    "linearize_tables": true,
+    "degrade_boxes": true,
+    "bake_ordered_lists": true,
+    "preserve_code_blocks": true,
+    "normalize_footnotes": true,
+    "relocate_anchors": true,
+    "dedupe_ids": true,
+    "unicode_hygiene": true,
+    "chapter_split": true
+  },
+  "options": {
+    "jpeg_quality": 82,
+    "tables": "text",
+    "split_tall_images": false,
+    "max_chapter_kb": 200
+  },
+  "output": { "appendix": "x3" }
+}

@@ -1,0 +1,5 @@
+---
+source: crates/core/src/css/subset.rs
+expression: filtered.css
+---
+body{text-align:center;margin:0 auto}h1,.title{font-weight:700}.hidden{display:none}sub{vertical-align:sub}.up{vertical-align:super}.s{margin-left:2em}.o{padding:1em}.trailing{text-align:center}
