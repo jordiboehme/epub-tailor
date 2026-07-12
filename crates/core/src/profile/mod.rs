@@ -44,6 +44,13 @@ pub const DEFAULT_APPENDIX: &str = "tailored";
 const EPUB_JSON: &str = include_str!("../../profiles/epub.json");
 const X4_JSON: &str = include_str!("../../profiles/x4.json");
 const X3_JSON: &str = include_str!("../../profiles/x3.json");
+
+/// The shared feature block every capable modern reader wants. Not a built-in
+/// name of its own: on its own it carries no screen geometry, so
+/// `transcode_images` would re-encode every image without resizing it - lossy
+/// for no gain. It only ever appears underneath a device layer.
+const MODERN_READER_JSON: &str = include_str!("../../profiles/_modern-reader.json");
+
 const NOMAD_JSON: &str = include_str!("../../profiles/nomad.json");
 const KINDLE_JSON: &str = include_str!("../../profiles/kindle.json");
 const KINDLE_PAPERWHITE_JSON: &str = include_str!("../../profiles/kindle-paperwhite.json");
@@ -55,24 +62,183 @@ const TOLINO_SHINE_JSON: &str = include_str!("../../profiles/tolino-shine.json")
 const TOLINO_SHINE_COLOR_JSON: &str = include_str!("../../profiles/tolino-shine-color.json");
 const TOLINO_VISION_COLOR_JSON: &str = include_str!("../../profiles/tolino-vision-color.json");
 const TOLINO_EPOS_3_JSON: &str = include_str!("../../profiles/tolino-epos-3.json");
+const KOBO_CLARA_BW_JSON: &str = include_str!("../../profiles/kobo-clara-bw.json");
+const KOBO_CLARA_COLOUR_JSON: &str = include_str!("../../profiles/kobo-clara-colour.json");
+const KOBO_LIBRA_COLOUR_JSON: &str = include_str!("../../profiles/kobo-libra-colour.json");
+const KOBO_ELIPSA_2E_JSON: &str = include_str!("../../profiles/kobo-elipsa-2e.json");
+const POCKETBOOK_VERSE_JSON: &str = include_str!("../../profiles/pocketbook-verse.json");
+const POCKETBOOK_VERSE_PRO_JSON: &str = include_str!("../../profiles/pocketbook-verse-pro.json");
+const POCKETBOOK_ERA_JSON: &str = include_str!("../../profiles/pocketbook-era.json");
+const POCKETBOOK_ERA_COLOR_JSON: &str = include_str!("../../profiles/pocketbook-era-color.json");
+const POCKETBOOK_INKPAD_4_JSON: &str = include_str!("../../profiles/pocketbook-inkpad-4.json");
+const POCKETBOOK_INKPAD_COLOR_3_JSON: &str =
+    include_str!("../../profiles/pocketbook-inkpad-color-3.json");
+const BOOX_PAGE_JSON: &str = include_str!("../../profiles/boox-page.json");
+const BOOX_GO_7_JSON: &str = include_str!("../../profiles/boox-go-7.json");
+const BOOX_GO_COLOR_7_JSON: &str = include_str!("../../profiles/boox-go-color-7.json");
+const BOOX_PALMA_2_PRO_JSON: &str = include_str!("../../profiles/boox-palma-2-pro.json");
+
+/// One built-in profile: the name it lists under, any alternative spellings
+/// that resolve to it, and the layer stack it composes from.
+struct Builtin {
+    name: &'static str,
+    /// Alternative spellings, accepted but not listed. Kobo brands its color
+    /// devices "Colour"; we take either.
+    aliases: &'static [&'static str],
+    /// Composed left to right, exactly like user-supplied `--profile` layers.
+    layers: &'static [&'static str],
+}
 
 /// Every built-in profile, in listing order: the device-neutral baseline first,
-/// then one entry per device we have researched firmware behavior for.
-const BUILTINS: &[(&str, &str)] = &[
-    ("epub", EPUB_JSON),
-    ("x4", X4_JSON),
-    ("x3", X3_JSON),
-    ("nomad", NOMAD_JSON),
-    ("kindle", KINDLE_JSON),
-    ("kindle-paperwhite", KINDLE_PAPERWHITE_JSON),
-    ("kindle-colorsoft", KINDLE_COLORSOFT_JSON),
-    ("kindle-scribe", KINDLE_SCRIBE_JSON),
-    ("kindle-scribe-colorsoft", KINDLE_SCRIBE_COLORSOFT_JSON),
-    ("tolino-shine", TOLINO_SHINE_JSON),
-    ("tolino-shine-color", TOLINO_SHINE_COLOR_JSON),
-    ("tolino-vision-color", TOLINO_VISION_COLOR_JSON),
-    ("tolino-epos-3", TOLINO_EPOS_3_JSON),
+/// then the CrossPoint readers, then one entry per device whose firmware
+/// behavior we have researched (see `research/`).
+const BUILTINS: &[Builtin] = &[
+    Builtin {
+        name: "epub",
+        aliases: &["default"],
+        layers: &[EPUB_JSON],
+    },
+    // The Xteink readers are their own world: a microcontroller-class renderer
+    // that needs every downgrade the pipeline has. They do not share the
+    // modern-reader base.
+    Builtin {
+        name: "x4",
+        aliases: &[],
+        layers: &[X4_JSON],
+    },
+    Builtin {
+        name: "x3",
+        aliases: &[],
+        layers: &[X3_JSON],
+    },
+    Builtin {
+        name: "nomad",
+        aliases: &["supernote-nomad"],
+        layers: &[MODERN_READER_JSON, NOMAD_JSON],
+    },
+    Builtin {
+        name: "kindle",
+        aliases: &[],
+        layers: &[MODERN_READER_JSON, KINDLE_JSON],
+    },
+    Builtin {
+        name: "kindle-paperwhite",
+        aliases: &[],
+        layers: &[MODERN_READER_JSON, KINDLE_PAPERWHITE_JSON],
+    },
+    Builtin {
+        name: "kindle-colorsoft",
+        aliases: &[],
+        layers: &[MODERN_READER_JSON, KINDLE_COLORSOFT_JSON],
+    },
+    Builtin {
+        name: "kindle-scribe",
+        aliases: &[],
+        layers: &[MODERN_READER_JSON, KINDLE_SCRIBE_JSON],
+    },
+    Builtin {
+        name: "kindle-scribe-colorsoft",
+        aliases: &[],
+        layers: &[MODERN_READER_JSON, KINDLE_SCRIBE_COLORSOFT_JSON],
+    },
+    Builtin {
+        name: "kobo-clara-bw",
+        aliases: &[],
+        layers: &[MODERN_READER_JSON, KOBO_CLARA_BW_JSON],
+    },
+    Builtin {
+        name: "kobo-clara-colour",
+        aliases: &["kobo-clara-color"],
+        layers: &[MODERN_READER_JSON, KOBO_CLARA_COLOUR_JSON],
+    },
+    Builtin {
+        name: "kobo-libra-colour",
+        aliases: &["kobo-libra-color"],
+        layers: &[MODERN_READER_JSON, KOBO_LIBRA_COLOUR_JSON],
+    },
+    Builtin {
+        name: "kobo-elipsa-2e",
+        aliases: &[],
+        layers: &[MODERN_READER_JSON, KOBO_ELIPSA_2E_JSON],
+    },
+    Builtin {
+        name: "pocketbook-verse",
+        aliases: &[],
+        layers: &[MODERN_READER_JSON, POCKETBOOK_VERSE_JSON],
+    },
+    Builtin {
+        name: "pocketbook-verse-pro",
+        aliases: &[],
+        layers: &[MODERN_READER_JSON, POCKETBOOK_VERSE_PRO_JSON],
+    },
+    Builtin {
+        name: "pocketbook-era",
+        aliases: &[],
+        layers: &[MODERN_READER_JSON, POCKETBOOK_ERA_JSON],
+    },
+    Builtin {
+        name: "pocketbook-era-color",
+        aliases: &["pocketbook-era-colour"],
+        layers: &[MODERN_READER_JSON, POCKETBOOK_ERA_COLOR_JSON],
+    },
+    Builtin {
+        name: "pocketbook-inkpad-4",
+        aliases: &[],
+        layers: &[MODERN_READER_JSON, POCKETBOOK_INKPAD_4_JSON],
+    },
+    Builtin {
+        name: "pocketbook-inkpad-color-3",
+        aliases: &["pocketbook-inkpad-colour-3"],
+        layers: &[MODERN_READER_JSON, POCKETBOOK_INKPAD_COLOR_3_JSON],
+    },
+    Builtin {
+        name: "boox-page",
+        aliases: &[],
+        layers: &[MODERN_READER_JSON, BOOX_PAGE_JSON],
+    },
+    Builtin {
+        name: "boox-go-7",
+        aliases: &[],
+        layers: &[MODERN_READER_JSON, BOOX_GO_7_JSON],
+    },
+    Builtin {
+        name: "boox-go-color-7",
+        aliases: &["boox-go-colour-7"],
+        layers: &[MODERN_READER_JSON, BOOX_GO_COLOR_7_JSON],
+    },
+    Builtin {
+        name: "boox-palma-2-pro",
+        aliases: &[],
+        layers: &[MODERN_READER_JSON, BOOX_PALMA_2_PRO_JSON],
+    },
+    Builtin {
+        name: "tolino-shine",
+        aliases: &[],
+        layers: &[MODERN_READER_JSON, TOLINO_SHINE_JSON],
+    },
+    Builtin {
+        name: "tolino-shine-color",
+        aliases: &["tolino-shine-colour"],
+        layers: &[MODERN_READER_JSON, TOLINO_SHINE_COLOR_JSON],
+    },
+    Builtin {
+        name: "tolino-vision-color",
+        aliases: &["tolino-vision-colour"],
+        layers: &[MODERN_READER_JSON, TOLINO_VISION_COLOR_JSON],
+    },
+    Builtin {
+        name: "tolino-epos-3",
+        aliases: &[],
+        layers: &[MODERN_READER_JSON, TOLINO_EPOS_3_JSON],
+    },
 ];
+
+impl Builtin {
+    /// Whether `name` (already lowercased) selects this profile.
+    fn matches(&self, name: &str) -> bool {
+        self.name == name || self.aliases.contains(&name)
+    }
+}
 
 /// A fully resolved profile: the composition of one or more layers over the
 /// repair-only baseline.
@@ -209,8 +375,9 @@ struct RawOutput {
 pub fn resolve(specs: &[String]) -> Result<Profile, ProfileError> {
     let mut profile = base_profile();
     for spec in specs {
-        let raw = load_raw(spec)?;
-        apply_layer(&mut profile, raw);
+        for raw in load_layers(spec)? {
+            apply_layer(&mut profile, raw);
+        }
     }
     Ok(profile)
 }
@@ -219,13 +386,16 @@ pub fn resolve(specs: &[String]) -> Result<Profile, ProfileError> {
 pub fn builtins() -> Vec<Profile> {
     BUILTINS
         .iter()
-        .map(|(name, _)| resolve(&[name.to_string()]).expect("built-in profiles must resolve"))
+        .map(|builtin| {
+            resolve(&[builtin.name.to_string()]).expect("built-in profiles must resolve")
+        })
         .collect()
 }
 
-/// The built-in profile names, in listing order.
+/// The built-in profile names, in listing order. Aliases are accepted by
+/// [`resolve`] but not listed.
 pub fn builtin_names() -> Vec<&'static str> {
-    BUILTINS.iter().map(|(name, _)| *name).collect()
+    BUILTINS.iter().map(|builtin| builtin.name).collect()
 }
 
 /// The repair-only baseline every resolution starts from: the built-in `epub`
@@ -251,15 +421,14 @@ fn base_profile() -> Profile {
 /// Load one layer: a built-in name (case-insensitive) or a path to a JSON
 /// file. Anything containing a path separator or ending in `.json` is treated
 /// as a path.
-fn load_raw(spec: &str) -> Result<RawProfile, ProfileError> {
-    let lower = spec.to_ascii_lowercase();
-    let name = if lower == "default" { "epub" } else { &lower };
-    let builtin = BUILTINS
-        .iter()
-        .find(|(builtin, _)| *builtin == name)
-        .map(|(_, json)| *json);
-    if let Some(json) = builtin {
-        return parse_raw(json, spec);
+fn load_layers(spec: &str) -> Result<Vec<RawProfile>, ProfileError> {
+    let name = spec.to_ascii_lowercase();
+    if let Some(builtin) = BUILTINS.iter().find(|builtin| builtin.matches(&name)) {
+        return builtin
+            .layers
+            .iter()
+            .map(|json| parse_raw(json, spec))
+            .collect();
     }
     let looks_like_path =
         spec.contains('/') || spec.contains('\\') || spec.to_ascii_lowercase().ends_with(".json");
@@ -272,7 +441,7 @@ fn load_raw(spec: &str) -> Result<RawProfile, ProfileError> {
         path: spec.to_string(),
         source,
     })?;
-    parse_raw(&text, spec)
+    Ok(vec![parse_raw(&text, spec)?])
 }
 
 fn parse_raw(text: &str, origin: &str) -> Result<RawProfile, ProfileError> {

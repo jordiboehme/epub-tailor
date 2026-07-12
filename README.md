@@ -81,7 +81,7 @@ epub-tailor check book.epub --profile x4
 
 ## Profiles
 
-A profile is a JSON file bundling device capabilities, feature switches, tunables, an output filename appendix and content filter rules. Thirteen ship built in:
+A profile is a JSON file bundling device capabilities, feature switches, tunables, an output filename appendix and content filter rules. Twenty-seven ship built in, one per device we have actually researched. Output lands as `book.<profile>.epub`.
 
 | Name   | Screen  | Panel | What it is |
 |--------|---------|-------|------------|
@@ -94,15 +94,35 @@ A profile is a JSON file bundling device capabilities, feature switches, tunable
 | `kindle-colorsoft` | 1264x1680 | color | Kindle Colorsoft / Signature, Kaleido 3. |
 | `kindle-scribe` | 1980x2640 | gray16 | Kindle Scribe 3rd gen (2025), 11in. |
 | `kindle-scribe-colorsoft` | 1980x2640 | color | Kindle Scribe Colorsoft (2025), Kaleido 3. |
+| `kobo-clara-bw` | 1072x1448 | gray16 | Kobo Clara BW, Carta 1300. |
+| `kobo-clara-colour` | 1072x1448 | color | Kobo Clara Colour, Kaleido 3. |
+| `kobo-libra-colour` | 1264x1680 | color | Kobo Libra Colour, Kaleido 3. |
+| `kobo-elipsa-2e` | 1404x1872 | gray16 | Kobo Elipsa 2E, 10.3in at 227ppi. |
+| `pocketbook-verse` | 758x1024 | gray16 | PocketBook Verse, 6in at 212ppi. |
+| `pocketbook-verse-pro` | 1072x1448 | gray16 | PocketBook Verse Pro. |
+| `pocketbook-era` | 1264x1680 | gray16 | PocketBook Era. |
+| `pocketbook-era-color` | 1264x1680 | color | PocketBook Era Color, Kaleido 3. |
+| `pocketbook-inkpad-4` | 1404x1872 | gray16 | PocketBook InkPad 4. |
+| `pocketbook-inkpad-color-3` | 1404x1872 | color | PocketBook InkPad Color 3, Kaleido 3. |
+| `boox-page` | 1264x1680 | gray16 | Onyx Boox Page. |
+| `boox-go-7` | 1264x1680 | gray16 | Onyx Boox Go 7. |
+| `boox-go-color-7` | 1264x1680 | color | Onyx Boox Go Color 7 Gen II, Kaleido 3. |
+| `boox-palma-2-pro` | 824x1648 | color | Onyx Boox Palma 2 Pro, the phone-shaped one. |
 | `tolino-shine` | 1072x1448 | gray16 | tolino shine 5th gen. |
 | `tolino-shine-color` | 1072x1448 | color | tolino shine color, Kaleido 3. |
 | `tolino-vision-color` | 1264x1680 | color | tolino vision color, Kaleido 3. |
 | `tolino-epos-3` | 1440x1920 | gray16 | tolino epos 3 (the older Android platform). |
 
-Each output lands as `book.<profile>.epub`. Two things worth knowing about the device profiles:
+Kobo brands its colour models "Colour" and everyone else writes "Color", so both spellings resolve: `--profile kobo-clara-color` is the same thing as `--profile kobo-clara-colour`.
+
+Four things worth knowing about the device profiles:
 
 - **A Kindle cannot open an EPUB at all.** It ingests one through Send to Kindle, which converts it server side. So the `kindle-*` profiles tailor a book to survive Amazon's converter, not to drive a renderer.
-- **Only the Xteink readers get the full conversion.** Every other device here has a real HTML renderer, so the aggressive transforms (CSS subsetting, table linearization, code-block rebuilding) stay off - they would damage the book. What those profiles do is repair it, fit its images to the panel and rasterize its SVG. The reasoning, device by device, is in [`research/`](research/).
+- **A plain EPUB on a Kobo renders through Adobe RMSDK**, whose CSS parser is frozen around 2013 and throws away the *entire* stylesheet if it meets a single `calc()`, `var()` or `clamp()` - sometimes refusing to open the book at all. The same engine sits under PocketBook's EPUB2 path and tolino's RMSDK mode. Those profiles switch on `sanitize_css`, which removes exactly those constructs and leaves the rest of the stylesheet alone.
+- **Only the Xteink readers get the full conversion.** Every other device here has a real HTML renderer, so the aggressive transforms (CSS subsetting, table linearization, code-block rebuilding) stay off - they would damage the book. What those profiles do is repair it, fit its images to the panel and rasterize its SVG.
+- **Boox is the weakest target and we say so.** It is plain Android with the Play Store, its stock NeoReader is widely considered mediocre, and most experienced owners install KOReader instead. The profile still helps: fitting images to the panel is what stops NeoReader's V2 engine getting stuck on an oversized image, and it helps whatever app you read in.
+
+The reasoning, device by device with sources and an explicit list of what nobody publishes, is in [`research/`](research/).
 
 `--profile` repeats and composes left to right: scalar settings later-wins, feature switches merge per key and filter rules concatenate. `epub-tailor profiles` lists the built-ins; `epub-tailor profiles x4 ./mine.json` prints the fully resolved composition as JSON, which is the fastest way to see what a stack actually does.
 

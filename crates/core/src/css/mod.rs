@@ -1,15 +1,20 @@
-//! CSS handling: filter every stylesheet down to the subset the CrossPoint
-//! firmware parses ([`subset`]) and enforce the device's byte and rule caps
-//! ([`caps`]).
+//! CSS handling. Two very different passes, for two very different renderers:
 //!
-//! The device's CSS grammar is tiny (see `docs/device-constraints.md`), and
-//! `<style>` in `<head>` is never read while external `.css` files are, so the
-//! pipeline filters every stylesheet in place, relocates head/inline styles into
-//! an external sheet, and drops everything outside the supported subset.
+//! - [`subset`] filters a stylesheet down to the dozen properties the
+//!   CrossPoint firmware parses (see `docs/device-constraints.md`). It is a
+//!   demolition job, and it is only ever right for the Xteink readers.
+//! - [`sanitize`] keeps a stylesheet whole and removes only the handful of
+//!   modern constructs that make Adobe RMSDK - the engine behind a plain
+//!   `.epub` on Kobo, PocketBook's EPUB2 path and tolino's RMSDK mode - throw
+//!   the *entire* stylesheet away.
+//!
+//! [`caps`] enforces the device's byte and rule caps on whatever survives.
 
+pub mod sanitize;
 pub mod subset;
 
 pub(crate) mod caps;
 pub(crate) mod scope;
 
+pub use sanitize::{SanitizedCss, sanitize_css};
 pub use subset::{FilteredCss, FilteredRule, filter_css, filter_css_rules, filter_inline_style};

@@ -1,6 +1,6 @@
 {
-  "name": "tolino-vision-color",
-  "description": "tolino vision color, 7in Kaleido 3 (Kobo-based firmware)",
+  "name": "pocketbook-era-color",
+  "description": "PocketBook Era Color, 7in Kaleido 3",
   "device": {
     "screen": { "width": 1264, "height": 1680, "ppi": 300 },
     "panel": "color",
@@ -13,11 +13,7 @@
     }
   },
   "features": {
-    "sanitize_css": true,
-    "chapter_split": true
+    "sanitize_css": true
   },
-  "options": {
-    "max_chapter_kb": 500
-  },
-  "output": { "appendix": "tolino-vision-color" }
+  "output": { "appendix": "pocketbook-era-color" }
 }

@@ -286,7 +286,7 @@ fn filter_declarations(block: &DeclarationBlock<'_>) -> (String, usize) {
 /// (it serializes `0.5em` as `.5em`). The device's naive CSS parser may reject a
 /// number with no integer part, so a leading-dot number gets its zero restored:
 /// `.5em` -> `0.5em`, `-.5em` -> `-0.5em`, while `1.5em` is left untouched.
-fn restore_leading_zeros(value: &str) -> String {
+pub(crate) fn restore_leading_zeros(value: &str) -> String {
     let mut out = String::with_capacity(value.len() + 1);
     let mut prev: Option<char> = None;
     let mut chars = value.chars().peekable();
@@ -305,6 +305,13 @@ fn restore_leading_zeros(value: &str) -> String {
 
 /// Whether a property (by canonical name and serialized value) is kept.
 fn property_is_supported(name: &str, value: &str) -> bool {
+    // A modern value function is unreadable to the device's parser whatever
+    // property carries it: `width: calc(100% - 2em)` is in the allowed property
+    // list but is still gibberish to firmware that cannot do arithmetic. See
+    // [`super::sanitize::uses_modern_function`], which the RMSDK pass shares.
+    if super::sanitize::uses_modern_function(value) {
+        return false;
+    }
     match name {
         // The device only models `display: none`; every other display is a no-op.
         "display" => value.eq_ignore_ascii_case("none"),
@@ -389,6 +396,17 @@ mod tests {
     fn filter(css: &str) -> FilteredCss {
         let mut warnings = Vec::new();
         filter_css(css, "test.css", &mut warnings)
+    }
+
+    #[test]
+    fn an_allowed_property_carrying_calc_is_still_dropped() {
+        // `width` is on the allow-list, but the device cannot do arithmetic, so
+        // `calc()` reaching it is gibberish. The property being supported is not
+        // enough - the value has to be readable too.
+        let out = filter("img{width:calc(100% - 2em);height:40px}");
+        assert!(!out.css.contains("calc"), "got: {}", out.css);
+        assert!(out.css.contains("height"), "siblings survive: {}", out.css);
+        assert_eq!(out.decls_dropped, 1);
     }
 
     /// Re-parse `css` and assert every rule is a plain style rule whose

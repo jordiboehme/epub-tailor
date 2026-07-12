@@ -13,23 +13,9 @@
     }
   },
   "features": {
-    "strip_fonts": false,
-    "filter_css": false,
-    "relocate_styles": false,
-    "transcode_images": true,
-    "rasterize_svg": true,
-    "linearize_tables": false,
-    "degrade_boxes": false,
-    "bake_ordered_lists": false,
-    "preserve_code_blocks": false,
-    "normalize_footnotes": false,
-    "relocate_anchors": false,
-    "dedupe_ids": true,
-    "unicode_hygiene": true,
     "chapter_split": true
   },
   "options": {
-    "jpeg_quality": 85,
     "max_chapter_kb": 20480
   },
   "output": { "appendix": "kindle-scribe-colorsoft" }

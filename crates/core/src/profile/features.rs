@@ -15,6 +15,11 @@ pub struct Features {
     pub strip_fonts: bool,
     /// Filter stylesheets down to the device-supported CSS grammar and caps.
     pub filter_css: bool,
+    /// Remove the modern CSS constructs that make Adobe RMSDK discard a whole
+    /// stylesheet (or refuse the book): `calc()`, `var()`, `clamp()`, `min()`,
+    /// `max()`, `env()`, `@supports`, range-syntax media queries. Unlike
+    /// `filter_css` this keeps the stylesheet whole.
+    pub sanitize_css: bool,
     /// Lift `<head>`/inline `<style>` CSS into an external stylesheet.
     pub relocate_styles: bool,
     /// Transcode, fit and re-encode raster images to the device caps.
@@ -42,11 +47,19 @@ pub struct Features {
 }
 
 impl Features {
-    /// Every transform on: the full device conversion (x4/x3 profiles).
+    /// The full CrossPoint device conversion (the x4/x3 profiles): every
+    /// transform on, except `sanitize_css`.
+    ///
+    /// `sanitize_css` is off here and that is not an oversight: it exists to
+    /// stop Adobe RMSDK discarding a stylesheet, and `filter_css` - which these
+    /// profiles do run - has already reduced the sheet to a dozen properties
+    /// with no modern value functions left in it. Running both would be
+    /// redundant work on a device that has never heard of RMSDK.
     pub fn all_on() -> Self {
         Features {
             strip_fonts: true,
             filter_css: true,
+            sanitize_css: false,
             relocate_styles: true,
             transcode_images: true,
             rasterize_svg: true,
@@ -68,6 +81,7 @@ impl Features {
         Features {
             strip_fonts: false,
             filter_css: false,
+            sanitize_css: false,
             relocate_styles: false,
             transcode_images: false,
             rasterize_svg: false,
@@ -91,6 +105,7 @@ impl Features {
 pub(crate) struct RawFeatures {
     pub strip_fonts: Option<bool>,
     pub filter_css: Option<bool>,
+    pub sanitize_css: Option<bool>,
     pub relocate_styles: Option<bool>,
     pub transcode_images: Option<bool>,
     pub rasterize_svg: Option<bool>,
@@ -116,6 +131,7 @@ impl RawFeatures {
         merge!(
             strip_fonts,
             filter_css,
+            sanitize_css,
             relocate_styles,
             transcode_images,
             rasterize_svg,

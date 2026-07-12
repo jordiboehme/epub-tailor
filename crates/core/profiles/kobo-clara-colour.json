@@ -1,0 +1,19 @@
+{
+  "name": "kobo-clara-colour",
+  "description": "Kobo Clara Colour, 6in Kaleido 3",
+  "device": {
+    "screen": { "width": 1072, "height": 1448, "ppi": 300 },
+    "panel": "color",
+    "images": {
+      "max_source_px": [1950, 1950],
+      "inline_max": [1072, 1448],
+      "cover_max": [1072, 1448],
+      "inline_budget_kb": 600,
+      "cover_budget_kb": 1200
+    }
+  },
+  "features": {
+    "sanitize_css": true
+  },
+  "output": { "appendix": "kobo-clara-colour" }
+}

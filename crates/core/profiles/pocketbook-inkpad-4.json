@@ -1,0 +1,19 @@
+{
+  "name": "pocketbook-inkpad-4",
+  "description": "PocketBook InkPad 4, 7.8in Carta 1200 mono",
+  "device": {
+    "screen": { "width": 1404, "height": 1872, "ppi": 300 },
+    "panel": "gray16",
+    "images": {
+      "max_source_px": [2000, 2000],
+      "inline_max": [1404, 1872],
+      "cover_max": [1404, 1872],
+      "inline_budget_kb": 500,
+      "cover_budget_kb": 1000
+    }
+  },
+  "features": {
+    "sanitize_css": true
+  },
+  "output": { "appendix": "pocketbook-inkpad-4" }
+}

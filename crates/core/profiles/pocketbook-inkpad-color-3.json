@@ -1,0 +1,19 @@
+{
+  "name": "pocketbook-inkpad-color-3",
+  "description": "PocketBook InkPad Color 3, 7.8in Kaleido 3",
+  "device": {
+    "screen": { "width": 1404, "height": 1872, "ppi": 300 },
+    "panel": "color",
+    "images": {
+      "max_source_px": [2000, 2000],
+      "inline_max": [1404, 1872],
+      "cover_max": [1404, 1872],
+      "inline_budget_kb": 700,
+      "cover_budget_kb": 1400
+    }
+  },
+  "features": {
+    "sanitize_css": true
+  },
+  "output": { "appendix": "pocketbook-inkpad-color-3" }
+}

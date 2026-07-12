@@ -158,10 +158,18 @@ pub fn convert(input: Input, opts: &ConvertOptions) -> Result<Converted, Convert
         HashSet::new()
     };
 
-    // Filter every source stylesheet in place, before chapters are serialized.
-    // Running total of kept rules feeds the book-wide rule cap check.
+    // Rework every source stylesheet in place, before chapters are serialized.
+    // Two passes, and a book can ask for either:
+    //
+    // - `sanitize_css` keeps the sheet whole and removes only what makes Adobe
+    //   RMSDK throw all of it away (Kobo, PocketBook, tolino in RMSDK mode).
+    // - `filter_css` demolishes it down to CrossPoint's dozen properties.
+    //
+    // Sanitizing runs first so that a profile with both on (nobody's, today)
+    // still behaves: filtering a sanitized sheet is the same as filtering the
+    // original, since everything sanitize drops, filter drops too.
     let mut total_css_rules = 0usize;
-    if opts.features.filter_css {
+    if opts.features.sanitize_css || opts.features.filter_css {
         let css_paths: Vec<String> = book
             .resources
             .iter()
@@ -170,7 +178,34 @@ pub fn convert(input: Input, opts: &ConvertOptions) -> Result<Converted, Convert
             .collect();
         for path in css_paths {
             let source = String::from_utf8_lossy(&book.resources[&path].data).into_owned();
-            let filtered = filter_css(&source, &path, &mut warnings);
+
+            let source = if opts.features.sanitize_css {
+                let sanitized = css::sanitize_css(&source, &path, &mut warnings);
+                if sanitized.decls_dropped > 0 || sanitized.rules_dropped > 0 {
+                    transformations.push(Transformation {
+                        kind: "css-sanitized".to_string(),
+                        detail: format!(
+                            "removed {} declaration(s) and {} rule(s) Adobe RMSDK cannot parse",
+                            sanitized.decls_dropped, sanitized.rules_dropped
+                        ),
+                        file: Some(path.clone()),
+                    });
+                }
+                sanitized.css
+            } else {
+                source
+            };
+
+            let filtered = if opts.features.filter_css {
+                filter_css(&source, &path, &mut warnings)
+            } else {
+                FilteredCss {
+                    css: source,
+                    rules_kept: 0,
+                    rules_dropped: 0,
+                    decls_dropped: 0,
+                }
+            };
             total_css_rules += filtered.rules_kept;
             store_filtered_css(
                 &mut book,

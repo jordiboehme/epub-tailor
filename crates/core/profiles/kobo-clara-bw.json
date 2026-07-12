@@ -1,0 +1,19 @@
+{
+  "name": "kobo-clara-bw",
+  "description": "Kobo Clara BW, 6in Carta 1300 mono",
+  "device": {
+    "screen": { "width": 1072, "height": 1448, "ppi": 300 },
+    "panel": "gray16",
+    "images": {
+      "max_source_px": [1950, 1950],
+      "inline_max": [1072, 1448],
+      "cover_max": [1072, 1448],
+      "inline_budget_kb": 400,
+      "cover_budget_kb": 800
+    }
+  },
+  "features": {
+    "sanitize_css": true
+  },
+  "output": { "appendix": "kobo-clara-bw" }
+}

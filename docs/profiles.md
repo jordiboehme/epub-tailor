@@ -130,15 +130,38 @@ floats, borders and positioning, and a Kobo-based tolino honors the publisher
 stylesheet too. `linearize_tables` flattens a table into labelled paragraphs;
 Kindle and Kobo render real tables. `preserve_code_blocks` rebuilds code with
 `<br/>` and `&nbsp;`; Kindle has a real monospaced font for `<pre>`/`<code>`.
-So the `nomad`, `kindle-*` and `tolino-*` profiles keep only what genuinely
-helps on a capable device: repair, image fitting to the panel, and SVG
-rasterization. See `docs/device-constraints.md` and `research/` for the
-per-device evidence behind each switch.
+So every non-Xteink profile keeps only what genuinely helps on a capable device:
+repair, image fitting to the panel, and SVG rasterization. They share those
+switches through an internal base layer, so the set cannot drift apart between
+devices. See `docs/device-constraints.md` and `research/` for the per-device
+evidence behind each switch.
+
+### `filter_css` vs `sanitize_css`
+
+Two CSS passes for two very different renderers. They are not variations of each
+other, and only one of them is ever right for a given device.
+
+| | `filter_css` | `sanitize_css` |
+|---|---|---|
+| For | Xteink / CrossPoint | Kobo, PocketBook, tolino |
+| Because | its CSS grammar is ~12 properties | Adobe RMSDK's parser is frozen around 2013 |
+| Does | demolishes the sheet down to that grammar | keeps the sheet whole |
+| Removes | everything not on the allow-list | only `calc()`, `var()`, `clamp()`, `min()`, `max()`, `env()`, `@supports` and range-syntax media queries |
+
+`sanitize_css` exists because RMSDK has no fault tolerance: one construct it
+cannot read and it discards the **entire stylesheet**, and on some firmware
+refuses to open the book at all, which the reader sees as a corrupt file with no
+explanation. Dropping those few declarations costs nothing - none of them do
+anything on an e-ink reader anyway - and it saves the sheet.
+
+Where a value can be folded to a plain one (`min(1em, 2em)` is just `1em`), the
+declaration survives with its value intact rather than being dropped.
 
 | Switch | What it enables |
 |---|---|
 | `strip_fonts` | Remove embedded font files and the links pointing at them. |
 | `filter_css` | Filter stylesheets to the device-supported grammar and enforce the CSS caps. |
+| `sanitize_css` | Remove only the CSS constructs Adobe RMSDK cannot parse, keeping the rest. |
 | `relocate_styles` | Lift `<head>`/inline `<style>` CSS into an external stylesheet, scoped per chapter. |
 | `transcode_images` | Re-encode raster images to baseline grayscale JPEG/8-bit PNG, fitted and budgeted. |
 | `rasterize_svg` | Rasterize SVG resources and inline `<svg>` elements. |

@@ -1,0 +1,16 @@
+{
+  "name": "boox-palma-2-pro",
+  "description": "Onyx Boox Palma 2 Pro, 6.13in Kaleido 3 (NeoReader)",
+  "device": {
+    "screen": { "width": 824, "height": 1648, "ppi": 300 },
+    "panel": "color",
+    "images": {
+      "max_source_px": [4096, 4096],
+      "inline_max": [824, 1648],
+      "cover_max": [824, 1648],
+      "inline_budget_kb": 600,
+      "cover_budget_kb": 1200
+    }
+  },
+  "output": { "appendix": "boox-palma-2-pro" }
+}

@@ -1,11 +1,11 @@
 {
-  "name": "kindle-colorsoft",
-  "description": "Kindle Colorsoft / Signature, 7in Kaleido 3 - via Send to Kindle",
+  "name": "kobo-libra-colour",
+  "description": "Kobo Libra Colour, 7in Kaleido 3",
   "device": {
     "screen": { "width": 1264, "height": 1680, "ppi": 300 },
     "panel": "color",
     "images": {
-      "max_source_px": [4096, 4096],
+      "max_source_px": [1950, 1950],
       "inline_max": [1264, 1680],
       "cover_max": [1264, 1680],
       "inline_budget_kb": 700,
@@ -13,10 +13,7 @@
     }
   },
   "features": {
-    "chapter_split": true
+    "sanitize_css": true
   },
-  "options": {
-    "max_chapter_kb": 20480
-  },
-  "output": { "appendix": "kindle-colorsoft" }
+  "output": { "appendix": "kobo-libra-colour" }
 }

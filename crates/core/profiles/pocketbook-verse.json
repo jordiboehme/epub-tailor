@@ -1,0 +1,19 @@
+{
+  "name": "pocketbook-verse",
+  "description": "PocketBook Verse, 6in mono",
+  "device": {
+    "screen": { "width": 758, "height": 1024, "ppi": 212 },
+    "panel": "gray16",
+    "images": {
+      "max_source_px": [2000, 2000],
+      "inline_max": [758, 1024],
+      "cover_max": [758, 1024],
+      "inline_budget_kb": 300,
+      "cover_budget_kb": 600
+    }
+  },
+  "features": {
+    "sanitize_css": true
+  },
+  "output": { "appendix": "pocketbook-verse" }
+}

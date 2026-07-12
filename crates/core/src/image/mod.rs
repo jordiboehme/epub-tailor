@@ -1,20 +1,30 @@
 //! The image pipeline: turn whatever raster an EPUB carries into something the
-//! CrossPoint firmware can actually decode and render well.
+//! target device can actually decode and render well.
 //!
-//! The device only decodes baseline JPEG and 8-bit PNG (progressive JPEG blurs;
-//! GIF/WebP/TIFF/BMP/SVG render as nothing), quantizes everything to four gray
-//! levels, and aborts on images past 2048x1536 px. So every raster is sniffed
-//! from its magic bytes (EPUBs lie about extensions), decoded, uprighted per its
-//! EXIF orientation, flattened onto white, converted to grayscale, classified as
-//! line art or photo, contrast-stretched (photos only), downscaled to the
-//! reading area, and re-encoded as a baseline grayscale JPEG (photos) or 8-bit
-//! grayscale PNG (line art), inside a byte budget. Broken input is left
-//! untouched with a warning: one bad image must never fail a whole conversion.
+//! Every raster is sniffed from its magic bytes (EPUBs lie about extensions),
+//! decoded, uprighted per its EXIF orientation, flattened onto white, reduced to
+//! the panel's color space, classified as line art or photo, contrast-stretched
+//! (grayscale photos only), downscaled to the reading area, and re-encoded as a
+//! baseline JPEG (photos) or an 8-bit PNG (line art) inside a byte budget.
+//! Broken input is left untouched with a warning: one bad image must never fail
+//! a whole conversion.
 //!
-//! SVG has no decoder on the device either; it is handled in [`svg`], which
-//! either unwraps a single-`<image>` wrapper (letting its raster payload flow
-//! through this pipeline) or rasterizes real vector art and hands the result to
-//! [`encode_rendered`], reusing the same classify/encode/budget path.
+//! The panel decides the color space (see [`canvas::Canvas`] and
+//! [`crate::profile::Panel`]): a grayscale e-ink device gets 8-bit luma, which
+//! is all it can show and a third of the bytes, while a Kaleido-class color
+//! panel keeps its images in RGB the whole way through. Alpha is composited onto
+//! white for both - no target device renders transparency, and Amazon says so
+//! outright.
+//!
+//! Formats are chosen for the worst decoder in the family: the CrossPoint
+//! firmware only reads baseline JPEG and 8-bit PNG (a progressive JPEG blurs;
+//! GIF/WebP/TIFF/BMP/SVG render as nothing) and aborts past 2048x1536 px, so
+//! everything is normalized to baseline JPEG or PNG regardless of target.
+//!
+//! SVG has no decoder on several of these devices; it is handled in [`svg`],
+//! which either unwraps a single-`<image>` wrapper (letting its raster payload
+//! flow through this pipeline) or rasterizes real vector art and hands the
+//! result to [`encode_rendered`], reusing the same classify/encode/budget path.
 
 mod autocontrast;
 mod canvas;
@@ -386,10 +396,8 @@ fn to_device_canvas(img: DynamicImage, panel: Panel) -> (Canvas, bool) {
     let flattened = flatten_alpha_onto_white(img);
     let mut canvas = Canvas::from_flattened(flattened, panel.is_color());
     let line_art = classify::classify(&canvas.to_luma()) == classify::Kind::LineArt;
-    if !line_art {
-        if let Canvas::Gray(gray) = &mut canvas {
-            autocontrast::autocontrast(gray);
-        }
+    if !line_art && let Canvas::Gray(gray) = &mut canvas {
+        autocontrast::autocontrast(gray);
     }
     (canvas, line_art)
 }

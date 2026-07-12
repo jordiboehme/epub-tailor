@@ -7,8 +7,14 @@ Every transform in the pipeline exists because of a line in this file.
 **Every other device we ship a profile for is far more capable**, and turning the CrossPoint transforms on for them would damage the book. Their constraints, and the evidence behind each profile's switches, live in:
 
 - [`research/supernote-a6x2-nomad.md`](../research/supernote-a6x2-nomad.md) - Supernote Nomad (`nomad`)
-- [`research/kindle-epub-ingestion.md`](../research/kindle-epub-ingestion.md) - the Kindle family (`kindle*`); note a Kindle cannot open an EPUB at all, so the profile targets Amazon's Send-to-Kindle converter
+- [`research/kindle-epub-ingestion.md`](../research/kindle-epub-ingestion.md) - the Kindle family (`kindle-*`); note a Kindle cannot open an EPUB at all, so the profile targets Amazon's Send-to-Kindle converter
+- [`research/kobo-readers.md`](../research/kobo-readers.md) - the Kobo family (`kobo-*`); a plain `.epub` sideload renders through Adobe RMSDK
+- [`research/pocketbook-readers.md`](../research/pocketbook-readers.md) - the PocketBook family (`pocketbook-*`); same Adobe engine on the EPUB2 path
+- [`research/boox-readers.md`](../research/boox-readers.md) - the Onyx Boox family (`boox-*`); the weakest-evidence target, and the doc says why
 - [`research/tolino-readers.md`](../research/tolino-readers.md) - the tolino family (`tolino-*`); the current models run Kobo firmware, the epos 3 does not
+- [`research/ereader-market.md`](../research/ereader-market.md) - why these devices and not others, and why we cite no market-share percentages
+
+**Adobe RMSDK is the one constraint that spans families.** It is the engine behind a plain `.epub` on a Kobo, PocketBook's EPUB2 path and tolino's RMSDK mode. Its CSS parser has no fault tolerance: a single `calc()`, `var()` or `clamp()` and it discards the whole stylesheet, or refuses the book. That is what `sanitize_css` exists for.
 
 ## Device profiles
 

@@ -1,6 +1,6 @@
 {
-  "name": "tolino-shine",
-  "description": "tolino shine 5th gen, 6in Carta 1300 mono (Kobo-based firmware)",
+  "name": "pocketbook-verse-pro",
+  "description": "PocketBook Verse Pro, 6in mono",
   "device": {
     "screen": { "width": 1072, "height": 1448, "ppi": 300 },
     "panel": "gray16",
@@ -13,11 +13,7 @@
     }
   },
   "features": {
-    "sanitize_css": true,
-    "chapter_split": true
+    "sanitize_css": true
   },
-  "options": {
-    "max_chapter_kb": 500
-  },
-  "output": { "appendix": "tolino-shine" }
+  "output": { "appendix": "pocketbook-verse-pro" }
 }

@@ -1,6 +1,6 @@
 {
-  "name": "kindle-colorsoft",
-  "description": "Kindle Colorsoft / Signature, 7in Kaleido 3 - via Send to Kindle",
+  "name": "boox-go-color-7",
+  "description": "Onyx Boox Go Color 7 Gen II, 7in Kaleido 3 (NeoReader)",
   "device": {
     "screen": { "width": 1264, "height": 1680, "ppi": 300 },
     "panel": "color",
@@ -12,11 +12,5 @@
       "cover_budget_kb": 1400
     }
   },
-  "features": {
-    "chapter_split": true
-  },
-  "options": {
-    "max_chapter_kb": 20480
-  },
-  "output": { "appendix": "kindle-colorsoft" }
+  "output": { "appendix": "boox-go-color-7" }
 }

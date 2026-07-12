@@ -120,6 +120,20 @@ fn builtins_lists_every_shipped_profile() {
             "kindle-colorsoft",
             "kindle-scribe",
             "kindle-scribe-colorsoft",
+            "kobo-clara-bw",
+            "kobo-clara-colour",
+            "kobo-libra-colour",
+            "kobo-elipsa-2e",
+            "pocketbook-verse",
+            "pocketbook-verse-pro",
+            "pocketbook-era",
+            "pocketbook-era-color",
+            "pocketbook-inkpad-4",
+            "pocketbook-inkpad-color-3",
+            "boox-page",
+            "boox-go-7",
+            "boox-go-color-7",
+            "boox-palma-2-pro",
             "tolino-shine",
             "tolino-shine-color",
             "tolino-vision-color",
@@ -154,6 +168,12 @@ fn the_color_devices_keep_their_color_and_the_rest_do_not() {
     for name in [
         "kindle-colorsoft",
         "kindle-scribe-colorsoft",
+        "kobo-clara-colour",
+        "kobo-libra-colour",
+        "pocketbook-era-color",
+        "pocketbook-inkpad-color-3",
+        "boox-go-color-7",
+        "boox-palma-2-pro",
         "tolino-shine-color",
         "tolino-vision-color",
     ] {
@@ -168,6 +188,14 @@ fn the_color_devices_keep_their_color_and_the_rest_do_not() {
         "kindle",
         "kindle-paperwhite",
         "kindle-scribe",
+        "kobo-clara-bw",
+        "kobo-elipsa-2e",
+        "pocketbook-verse",
+        "pocketbook-verse-pro",
+        "pocketbook-era",
+        "pocketbook-inkpad-4",
+        "boox-page",
+        "boox-go-7",
         "tolino-shine",
         "tolino-epos-3",
     ] {
@@ -189,6 +217,20 @@ fn a_capable_reader_never_gets_the_crosspoint_downgrades() {
         "kindle-colorsoft",
         "kindle-scribe",
         "kindle-scribe-colorsoft",
+        "kobo-clara-bw",
+        "kobo-clara-colour",
+        "kobo-libra-colour",
+        "kobo-elipsa-2e",
+        "pocketbook-verse",
+        "pocketbook-verse-pro",
+        "pocketbook-era",
+        "pocketbook-era-color",
+        "pocketbook-inkpad-4",
+        "pocketbook-inkpad-color-3",
+        "boox-page",
+        "boox-go-7",
+        "boox-go-color-7",
+        "boox-palma-2-pro",
         "tolino-shine",
         "tolino-shine-color",
         "tolino-vision-color",
@@ -212,6 +254,72 @@ fn a_capable_reader_never_gets_the_crosspoint_downgrades() {
             "{name} still gets repair"
         );
     }
+}
+
+#[test]
+fn a_colour_spelling_resolves_to_the_same_profile_as_color() {
+    // Kobo brands them "Colour"; we take either, so nobody has to guess.
+    for (official, alias) in [
+        ("kobo-clara-colour", "kobo-clara-color"),
+        ("kobo-libra-colour", "kobo-libra-color"),
+        ("pocketbook-era-color", "pocketbook-era-colour"),
+        ("boox-go-color-7", "boox-go-colour-7"),
+    ] {
+        let by_name = resolve_specs(&[official]).expect("official name resolves");
+        let by_alias = resolve_specs(&[alias]).expect("alias resolves");
+        assert_eq!(by_alias, by_name, "{alias} should resolve to {official}");
+        // The alias is accepted but never listed.
+        assert!(
+            !builtins().iter().any(|p| p.name == alias),
+            "{alias} must not be listed twice"
+        );
+    }
+}
+
+#[test]
+fn the_adobe_rmsdk_devices_sanitize_their_css() {
+    // Kobo (plain .epub), PocketBook (EPUB2 path) and tolino (RMSDK mode) all
+    // run through Adobe RMSDK, which discards a whole stylesheet over one
+    // modern value function. They must all have the escape hatch on.
+    for name in [
+        "kobo-clara-bw",
+        "kobo-clara-colour",
+        "kobo-libra-colour",
+        "kobo-elipsa-2e",
+        "pocketbook-verse",
+        "pocketbook-era",
+        "pocketbook-inkpad-4",
+        "tolino-shine",
+        "tolino-epos-3",
+    ] {
+        let f = resolve_specs(&[name]).expect("resolves").features;
+        assert!(f.sanitize_css, "{name} renders through Adobe RMSDK");
+        assert!(
+            !f.filter_css,
+            "{name} must not get CrossPoint's CSS grammar"
+        );
+    }
+    // The CrossPoint profiles do not: filter_css has already stripped anything
+    // modern, so sanitizing on top would be redundant.
+    for name in ["x4", "x3"] {
+        let f = resolve_specs(&[name]).expect("resolves").features;
+        assert!(!f.sanitize_css, "{name} filters instead");
+        assert!(f.filter_css);
+    }
+}
+
+#[test]
+fn a_device_layer_inherits_the_shared_modern_reader_features() {
+    // The device JSONs no longer carry a features block; they inherit it. If the
+    // layer stack ever stopped composing, every one of them would silently fall
+    // back to repair-only and quietly stop tailoring images.
+    let p = resolve_specs(&["kobo-clara-bw"]).expect("resolves");
+    assert!(p.features.transcode_images, "inherited from the base layer");
+    assert!(p.features.rasterize_svg, "inherited from the base layer");
+    assert_eq!(p.jpeg_quality, 85, "inherited from the base layer");
+    // ...while its own layer still wins where it speaks.
+    assert_eq!(p.caps.screen_w, 1072);
+    assert_eq!(p.appendix.as_deref(), Some("kobo-clara-bw"));
 }
 
 #[test]

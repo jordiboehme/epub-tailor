@@ -1,6 +1,6 @@
 {
-  "name": "kindle-paperwhite",
-  "description": "Kindle Paperwhite 12th gen / Signature (2024), 7in - via Send to Kindle",
+  "name": "boox-page",
+  "description": "Onyx Boox Page, 7in Carta 1200 mono (NeoReader)",
   "device": {
     "screen": { "width": 1264, "height": 1680, "ppi": 300 },
     "panel": "gray16",
@@ -12,11 +12,5 @@
       "cover_budget_kb": 1000
     }
   },
-  "features": {
-    "chapter_split": true
-  },
-  "options": {
-    "max_chapter_kb": 20480
-  },
-  "output": { "appendix": "kindle-paperwhite" }
+  "output": { "appendix": "boox-page" }
 }
