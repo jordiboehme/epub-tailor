@@ -265,6 +265,10 @@ impl Profile {
     }
 
     /// Translate this profile into the options `convert` consumes.
+    ///
+    /// Metadata is deliberately absent: a profile describes a *device* and is
+    /// meant to be reused across every book you own, while metadata belongs to
+    /// exactly one book. The caller layers that on afterwards.
     pub fn to_options(&self) -> ConvertOptions {
         ConvertOptions {
             device: self.caps,
@@ -276,6 +280,7 @@ impl Profile {
             max_chapter_bytes: self.max_chapter_bytes,
             split_level: 1,
             dry_run: false,
+            ..ConvertOptions::default()
         }
     }
 }

@@ -586,9 +586,8 @@ mod tests {
         let book = Book {
             metadata: Metadata {
                 title: "T".to_string(),
-                authors: vec![],
                 language: "en".to_string(),
-                identifier: None,
+                ..Metadata::default()
             },
             resources,
             spine: vec!["text/a.xhtml".to_string(), "text/b.xhtml".to_string()],

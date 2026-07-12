@@ -4,81 +4,40 @@
 //! `front_matter` extension captured for a `NodeValue::FrontMatter` node
 //! (opening delimiter line, YAML body, closing delimiter line, verbatim) - this
 //! module never has to decide whether a block is present, only turn a known
-//! one into a [`Frontmatter`]. Unknown keys are ignored silently (no
+//! one into a [`MetadataDoc`]. Unknown keys are ignored silently (no
 //! `deny_unknown_fields`).
-
-use serde::Deserialize;
+//!
+//! The block *is* a [`MetadataDoc`] - the same type `--metadata` takes and
+//! `metadata fetch` emits. So the full metadata vocabulary works here for free,
+//! and a record looked up from Open Library can be pasted straight into the top
+//! of a `.md` file. Before 0.2 this parsed four keys and silently swallowed the
+//! rest, so `publisher:` in a front-matter block did precisely nothing.
 
 use crate::error::ConvertError;
-
-/// Book metadata read from the Markdown frontmatter block. Every field is
-/// optional: [`crate::markdown`] fills in the fallbacks (first H1 for the
-/// title, `"en"` for the language) once the rest of the document has been
-/// parsed.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct Frontmatter {
-    pub title: Option<String>,
-    pub authors: Vec<String>,
-    pub language: Option<String>,
-    pub cover: Option<String>,
-}
-
-/// The YAML shape accepted in the frontmatter block, before `author`'s
-/// string-or-list flexibility is normalized away.
-#[derive(Debug, Deserialize)]
-struct RawFrontmatter {
-    title: Option<String>,
-    author: Option<AuthorField>,
-    language: Option<String>,
-    cover: Option<String>,
-}
-
-/// `author:` accepts either a single string or a list of strings.
-#[derive(Debug, Deserialize)]
-#[serde(untagged)]
-enum AuthorField {
-    One(String),
-    Many(Vec<String>),
-}
-
-impl AuthorField {
-    fn into_vec(self) -> Vec<String> {
-        match self {
-            AuthorField::One(s) => vec![s],
-            AuthorField::Many(v) => v,
-        }
-    }
-}
+use crate::metadata::MetadataDoc;
 
 /// The delimiter comrak's `front_matter` extension is configured with; see
 /// [`crate::markdown::render::comrak_options`].
 const DELIMITER: &str = "---";
 
 /// Parse a frontmatter block's raw text (delimiters included, exactly as
-/// captured by comrak's parser) into a [`Frontmatter`].
+/// captured by comrak's parser) into a [`MetadataDoc`].
 ///
 /// # Errors
 /// Returns [`ConvertError::InvalidMarkdown`] if the YAML between the
 /// delimiters does not parse, with a message naming the line inside the block.
-pub fn parse_frontmatter(raw_block: &str) -> Result<Frontmatter, ConvertError> {
+pub fn parse_frontmatter(raw_block: &str) -> Result<MetadataDoc, ConvertError> {
     let yaml_text = strip_delimiters(raw_block, DELIMITER);
     if yaml_text.trim().is_empty() {
-        return Ok(Frontmatter::default());
+        return Ok(MetadataDoc::default());
     }
 
-    let raw: RawFrontmatter = serde_yaml_ng::from_str(yaml_text).map_err(|e| {
+    serde_yaml_ng::from_str(yaml_text).map_err(|e| {
         let context = e
             .location()
             .map(|loc| format!(" (line {} of the frontmatter block)", loc.line()))
             .unwrap_or_default();
         ConvertError::InvalidMarkdown(format!("frontmatter YAML is malformed{context}: {e}"))
-    })?;
-
-    Ok(Frontmatter {
-        title: raw.title,
-        authors: raw.author.map(AuthorField::into_vec).unwrap_or_default(),
-        language: raw.language,
-        cover: raw.cover,
     })
 }
 
@@ -111,55 +70,95 @@ fn strip_delimiters<'a>(raw_block: &'a str, delimiter: &str) -> &'a str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::epub::model::Metadata;
+    use crate::metadata::{self, MergeMode};
+
+    /// Resolve a front-matter block the way `build_book` does, so the tests
+    /// exercise the real path rather than the document's internal shape.
+    fn resolved(raw: &str) -> Metadata {
+        let doc = parse_frontmatter(raw).expect("valid frontmatter");
+        let mut meta = Metadata::default();
+        metadata::apply(
+            &doc,
+            &mut meta,
+            MergeMode::Fill,
+            &mut Vec::new(),
+            &mut Vec::new(),
+        );
+        meta
+    }
 
     #[test]
     fn parses_title_and_single_string_author() {
-        let raw = "---\ntitle: My Book\nauthor: Jane Doe\n---\n";
-        let fm = parse_frontmatter(raw).expect("valid frontmatter");
-        assert_eq!(fm.title, Some("My Book".to_string()));
-        assert_eq!(fm.authors, vec!["Jane Doe".to_string()]);
+        let meta = resolved("---\ntitle: My Book\nauthor: Jane Doe\n---\n");
+        assert_eq!(meta.title, "My Book");
+        assert_eq!(meta.authors[0].name, "Jane Doe");
     }
 
     #[test]
     fn parses_author_as_a_list() {
-        let raw = "---\nauthor:\n  - Jane Doe\n  - John Smith\n---\n";
-        let fm = parse_frontmatter(raw).expect("valid frontmatter");
-        assert_eq!(
-            fm.authors,
-            vec!["Jane Doe".to_string(), "John Smith".to_string()]
-        );
+        let meta = resolved("---\nauthor:\n  - Jane Doe\n  - John Smith\n---\n");
+        let names: Vec<&str> = meta.authors.iter().map(|a| a.name.as_str()).collect();
+        assert_eq!(names, vec!["Jane Doe", "John Smith"]);
     }
 
     #[test]
     fn parses_language_and_cover() {
-        let raw = "---\nlanguage: de\ncover: images/cover.jpg\n---\n";
-        let fm = parse_frontmatter(raw).expect("valid frontmatter");
-        assert_eq!(fm.language, Some("de".to_string()));
-        assert_eq!(fm.cover, Some("images/cover.jpg".to_string()));
+        let doc = parse_frontmatter("---\nlanguage: de\ncover: images/cover.jpg\n---\n")
+            .expect("valid frontmatter");
+        assert_eq!(doc.language, Some("de".to_string()));
+        assert_eq!(doc.cover, Some("images/cover.jpg".to_string()));
     }
 
     #[test]
     fn missing_fields_default_to_none_or_empty() {
-        let raw = "---\ntitle: Only Title\n---\n";
-        let fm = parse_frontmatter(raw).expect("valid frontmatter");
-        assert_eq!(fm.title, Some("Only Title".to_string()));
-        assert!(fm.authors.is_empty());
-        assert_eq!(fm.language, None);
-        assert_eq!(fm.cover, None);
+        let doc = parse_frontmatter("---\ntitle: Only Title\n---\n").expect("valid frontmatter");
+        assert_eq!(doc.title, Some("Only Title".to_string()));
+        assert!(doc.authors.is_none());
+        assert_eq!(doc.language, None);
+        assert_eq!(doc.cover, None);
     }
 
     #[test]
-    fn unknown_keys_are_ignored_silently() {
-        let raw = "---\ntitle: T\npublisher: Acme\n---\n";
-        let fm = parse_frontmatter(raw).expect("unknown keys must not error");
-        assert_eq!(fm.title, Some("T".to_string()));
+    fn the_full_metadata_vocabulary_works_in_frontmatter() {
+        // Until 0.2 the block understood four keys and silently threw away the
+        // rest, so a `publisher:` here did nothing at all. It is the same
+        // document type `--metadata` takes now, so all of this lands.
+        let meta = resolved(
+            "---\n\
+             title: A Book\n\
+             author: Jane Author\n\
+             publisher: Acme Press\n\
+             description: A blurb.\n\
+             subjects: [Fantasy, Adventure]\n\
+             date: '1937-09-21'\n\
+             isbn: '9780261102217'\n\
+             series: The Chronicles\n\
+             series_index: '2'\n\
+             ---\n",
+        );
+        assert_eq!(meta.publisher.as_deref(), Some("Acme Press"));
+        assert_eq!(meta.description.as_deref(), Some("A blurb."));
+        assert_eq!(meta.subjects, vec!["Fantasy", "Adventure"]);
+        assert_eq!(meta.date.as_deref(), Some("1937-09-21"));
+        assert_eq!(meta.identifiers[0].value, "9780261102217");
+        assert_eq!(meta.identifiers[0].scheme.as_deref(), Some("ISBN"));
+        let series = meta.series.expect("series");
+        assert_eq!(series.name, "The Chronicles");
+        assert_eq!(series.index.as_deref(), Some("2"));
     }
 
     #[test]
-    fn blank_block_yields_default_frontmatter() {
-        let raw = "---\n\n---\n";
-        let fm = parse_frontmatter(raw).expect("blank block is valid");
-        assert_eq!(fm, Frontmatter::default());
+    fn a_genuinely_unknown_key_is_still_ignored_silently() {
+        let doc = parse_frontmatter("---\ntitle: T\nfavourite_biscuit: hobnob\n---\n")
+            .expect("unknown keys must not error");
+        assert_eq!(doc.title, Some("T".to_string()));
+    }
+
+    #[test]
+    fn blank_block_yields_an_empty_document() {
+        let doc = parse_frontmatter("---\n\n---\n").expect("blank block is valid");
+        assert!(doc.is_empty());
     }
 
     #[test]

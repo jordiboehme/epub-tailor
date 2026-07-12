@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::filter::FilterRule;
+use crate::metadata::{MergeMode, MetadataDoc};
 use crate::profile::{DeviceCaps, Features};
 
 /// User-facing knobs controlling how a conversion is performed.
@@ -19,6 +20,27 @@ pub struct ConvertOptions {
     pub max_chapter_bytes: usize,
     pub split_level: u8,
     pub dry_run: bool,
+    /// Metadata the user supplied to fill what the book is missing (from
+    /// `--metadata`, the per-field flags, or a looked-up record). Empty by
+    /// default: the book's own metadata is authoritative.
+    pub metadata: MetadataDoc,
+    /// Whether [`Self::metadata`] fills only the gaps (the default) or
+    /// overwrites.
+    pub metadata_merge: MergeMode,
+    /// A cover image to embed, already read from disk by the caller. This crate
+    /// never opens a file (nor a socket), so a cover arrives as bytes.
+    pub cover_image: Option<CoverImage>,
+}
+
+/// A cover image handed to [`crate::convert`] as bytes.
+#[derive(Debug, Clone)]
+pub struct CoverImage {
+    /// The encoded image.
+    pub data: Vec<u8>,
+    /// Its media type, e.g. `image/jpeg`.
+    pub media_type: String,
+    /// The filename to store it under, e.g. `cover.jpg`.
+    pub file_name: String,
 }
 
 impl Default for ConvertOptions {
@@ -33,6 +55,9 @@ impl Default for ConvertOptions {
             max_chapter_bytes: 200 * 1024,
             split_level: 1,
             dry_run: false,
+            metadata: MetadataDoc::default(),
+            metadata_merge: MergeMode::Fill,
+            cover_image: None,
         }
     }
 }

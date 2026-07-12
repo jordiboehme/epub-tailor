@@ -14,7 +14,7 @@ use time::OffsetDateTime;
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipWriter};
 
-use crate::epub::model::{Book, Metadata, TocEntry};
+use crate::epub::model::{Book, Creator, Metadata, TocEntry};
 use crate::error::ConvertError;
 use crate::html::escape::{escape_attr, escape_text};
 
@@ -121,11 +121,47 @@ pub fn write_epub(book: &Book) -> Result<Vec<u8>, ConvertError> {
         book.metadata.language.clone()
     };
 
+    let meta = &book.metadata;
+    // Each creator and secondary identifier needs a stable id so its EPUB3
+    // refinements (`file-as`, `role`, `identifier-type`) have something to point
+    // at. They are positional and local to this document, so a plain counter is
+    // enough - and it keeps the output deterministic.
+    let creators = |prefix: &str, list: &[Creator]| -> Vec<OpfCreator> {
+        list.iter()
+            .enumerate()
+            .map(|(i, c)| OpfCreator {
+                id: format!("{prefix}{}", i + 1),
+                name: c.name.clone(),
+                file_as: c.file_as.clone().unwrap_or_default(),
+                role: c.role.clone().unwrap_or_default(),
+            })
+            .collect()
+    };
+    let series = meta.series.clone().unwrap_or_default();
+
     let opf_bytes = OpfTemplate {
         identifier: identifier.clone(),
-        title: book.metadata.title.clone(),
-        authors: book.metadata.authors.clone(),
+        identifiers: meta
+            .identifiers
+            .iter()
+            .enumerate()
+            .map(|(i, id)| OpfIdentifier {
+                id: format!("id{}", i + 1),
+                value: id.value.clone(),
+                scheme: id.scheme.clone().unwrap_or_default(),
+            })
+            .collect(),
+        title: meta.title.clone(),
+        authors: creators("creator", &meta.authors),
+        contributors: creators("contrib", &meta.contributors),
         language: opf_language,
+        publisher: meta.publisher.clone().unwrap_or_default(),
+        description: meta.description.clone().unwrap_or_default(),
+        subjects: meta.subjects.clone(),
+        date: meta.date.clone().unwrap_or_default(),
+        rights: meta.rights.clone().unwrap_or_default(),
+        series: series.name,
+        series_index: series.index.unwrap_or_default(),
         modified: now_utc_iso8601(),
         cover_id,
         ncx_id,
@@ -215,14 +251,41 @@ struct ContainerTemplate {
 #[template(path = "content.opf", escape = "html")]
 struct OpfTemplate {
     identifier: String,
+    /// Secondary identifiers (ISBNs and the like). The unique one is above.
+    identifiers: Vec<OpfIdentifier>,
     title: String,
-    authors: Vec<String>,
+    authors: Vec<OpfCreator>,
+    contributors: Vec<OpfCreator>,
     language: String,
+    publisher: String,
+    description: String,
+    subjects: Vec<String>,
+    date: String,
+    rights: String,
+    series: String,
+    series_index: String,
     modified: String,
     cover_id: String,
     ncx_id: String,
     items: Vec<OpfItem>,
     spine: Vec<String>,
+}
+
+/// A `dc:creator`/`dc:contributor` as the template needs it: an id to hang the
+/// refinements off, and empty strings rather than `Option`s (askama's `if` is
+/// happier with `!x.is_empty()`, which is how the rest of this template reads).
+struct OpfCreator {
+    id: String,
+    name: String,
+    file_as: String,
+    role: String,
+}
+
+/// A secondary `dc:identifier` plus the id its `identifier-type` refines.
+struct OpfIdentifier {
+    id: String,
+    value: String,
+    scheme: String,
 }
 
 /// One `<item>` in the OPF manifest.
@@ -505,7 +568,7 @@ fn synth_identifier(metadata: &Metadata) -> String {
     let mut data = metadata.title.clone();
     for author in &metadata.authors {
         data.push('\u{0}');
-        data.push_str(author);
+        data.push_str(&author.name);
     }
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
     for byte in data.as_bytes() {
@@ -604,9 +667,9 @@ mod tests {
     fn synth_identifier_is_deterministic() {
         let meta = Metadata {
             title: "Book".to_string(),
-            authors: vec!["Author".to_string()],
+            authors: vec![Creator::new("Author")],
             language: "en".to_string(),
-            identifier: None,
+            ..Metadata::default()
         };
         assert_eq!(synth_identifier(&meta), synth_identifier(&meta));
         assert!(synth_identifier(&meta).starts_with("urn:epub-tailor:"));
@@ -632,9 +695,8 @@ mod tests {
         let book = Book {
             metadata: Metadata {
                 title: "T".to_string(),
-                authors: vec![],
                 language: language.to_string(),
-                identifier: None,
+                ..Metadata::default()
             },
             resources,
             spine: vec![],

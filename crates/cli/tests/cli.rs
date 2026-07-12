@@ -15,12 +15,282 @@ fn help_exits_zero_and_mentions_all_subcommands() {
     let output = bin().arg("--help").output().expect("failed to run binary");
     assert!(output.status.success(), "--help should exit 0");
     let stdout = String::from_utf8_lossy(&output.stdout);
-    for subcommand in ["fit", "md", "check", "profiles"] {
+    for subcommand in ["fit", "md", "check", "profiles", "metadata"] {
         assert!(
             stdout.contains(subcommand),
             "--help output should mention `{subcommand}`, got:\n{stdout}"
         );
     }
+}
+
+/// Build a one-chapter EPUB by running `md`, the way the other tests do.
+fn book_in(dir: &std::path::Path, name: &str) -> std::path::PathBuf {
+    let md = dir.join(format!("{name}.md"));
+    std::fs::write(
+        &md,
+        "---\ntitle: A Book\nauthor: Jane Author\n---\n\n# One\n\nHello.\n",
+    )
+    .expect("write markdown");
+    let out = dir.join(format!("{name}.epub"));
+    let status = bin()
+        .args(["md", md.to_str().unwrap(), "-o", out.to_str().unwrap()])
+        .output()
+        .expect("failed to run binary");
+    assert!(status.status.success(), "md should build a book");
+    out
+}
+
+#[test]
+fn metadata_show_reports_what_the_book_lacks() {
+    let dir = temp_dir("meta-show");
+    let book = book_in(&dir, "show");
+
+    let output = bin()
+        .args([
+            "metadata",
+            "show",
+            book.to_str().unwrap(),
+            "--report",
+            "json",
+        ])
+        .output()
+        .expect("failed to run binary");
+    assert!(output.status.success());
+
+    let json: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&output.stdout)).expect("valid JSON");
+    assert_eq!(json["schema"], 1, "every payload carries a schema version");
+    assert_eq!(json["metadata"]["title"], "A Book");
+    let missing: Vec<String> = json["missing"]
+        .as_array()
+        .expect("missing is a list")
+        .iter()
+        .map(|v| v.as_str().unwrap().to_string())
+        .collect();
+    assert!(missing.contains(&"description".to_string()));
+    assert!(missing.contains(&"publisher".to_string()));
+    assert!(!missing.contains(&"title".to_string()), "it has a title");
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn metadata_flags_land_in_the_book() {
+    let dir = temp_dir("meta-flags");
+    let book = book_in(&dir, "flags");
+    let out = dir.join("out.epub");
+
+    let output = bin()
+        .args([
+            "fit",
+            book.to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+            "--publisher",
+            "Acme Press",
+            "--description",
+            "A blurb.",
+            "--subject",
+            "Fantasy",
+            "--isbn",
+            "9780261102217",
+        ])
+        .output()
+        .expect("failed to run binary");
+    assert!(
+        output.status.success(),
+        "fit failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // Read it back through `metadata show` - the tool's own view of the book.
+    let shown = bin()
+        .args([
+            "metadata",
+            "show",
+            out.to_str().unwrap(),
+            "--report",
+            "json",
+        ])
+        .output()
+        .expect("failed to run binary");
+    let json: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&shown.stdout)).expect("valid JSON");
+    assert_eq!(json["metadata"]["publisher"], "Acme Press");
+    assert_eq!(json["metadata"]["description"], "A blurb.");
+    assert_eq!(json["metadata"]["subjects"][0], "Fantasy");
+    // The ISBN is a *secondary* identifier; the book's own id is untouched.
+    assert_eq!(json["metadata"]["identifiers"][0]["value"], "9780261102217");
+    assert!(
+        json["metadata"]["identifier"]
+            .as_str()
+            .unwrap()
+            .starts_with("urn:epub-tailor:"),
+        "the unique identifier must not be replaced by the ISBN"
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn a_metadata_document_can_arrive_on_stdin() {
+    // This is the pipe the whole design rests on:
+    //   metadata fetch REF | fit book.epub --metadata -
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let dir = temp_dir("meta-stdin");
+    let book = book_in(&dir, "stdin");
+    let out = dir.join("out.epub");
+
+    let mut child = bin()
+        .args([
+            "fit",
+            book.to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+            "--metadata",
+            "-",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("spawn");
+    child
+        .stdin
+        .as_mut()
+        .expect("stdin")
+        .write_all(br#"{"publisher": "Piped Press"}"#)
+        .expect("write stdin");
+    let status = child.wait().expect("wait");
+    assert!(status.success(), "fit --metadata - should succeed");
+
+    let shown = bin()
+        .args([
+            "metadata",
+            "show",
+            out.to_str().unwrap(),
+            "--report",
+            "json",
+        ])
+        .output()
+        .expect("failed to run binary");
+    let json: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&shown.stdout)).expect("valid JSON");
+    assert_eq!(json["metadata"]["publisher"], "Piped Press");
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn metadata_pick_refuses_to_prompt_when_stdin_is_not_a_terminal() {
+    // The quarantine that makes every other command safe for a GUI: the one
+    // interactive command must fail fast rather than hang waiting for an answer
+    // nobody is there to give.
+    use std::process::Stdio;
+
+    let dir = temp_dir("meta-pick");
+    let book = book_in(&dir, "pick");
+
+    let output = bin()
+        .args(["metadata", "pick", book.to_str().unwrap()])
+        .stdin(Stdio::null())
+        .output()
+        .expect("failed to run binary");
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "pick must refuse, not hang or succeed"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("not a terminal"),
+        "it should say why, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("metadata search"),
+        "and point at the non-interactive route, got: {stderr}"
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn a_failure_is_machine_readable_under_report_json() {
+    // Without this a GUI's only way to tell "the book has DRM" from "the file is
+    // missing" is to grep English prose off stderr.
+    let dir = temp_dir("meta-err");
+    let junk = dir.join("junk.epub");
+    std::fs::write(&junk, b"not an epub at all").expect("write junk");
+
+    let output = bin()
+        .args(["fit", junk.to_str().unwrap(), "--report", "json"])
+        .output()
+        .expect("failed to run binary");
+    assert_eq!(output.status.code(), Some(1));
+
+    let json: serde_json::Value = serde_json::from_str(&String::from_utf8_lossy(&output.stdout))
+        .expect("a failure must still emit valid JSON on stdout");
+    assert_eq!(json["schema"], 1);
+    assert!(
+        json["error"]["code"].is_string(),
+        "the error must carry a stable code, got: {json}"
+    );
+    assert!(json["error"]["message"].is_string());
+    // ...and the prose still goes to stderr for a human.
+    assert!(String::from_utf8_lossy(&output.stderr).starts_with("error:"));
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn the_json_report_says_where_the_book_landed() {
+    // A GUI cannot otherwise learn the output path without reimplementing the
+    // naming rule.
+    let dir = temp_dir("meta-out");
+    let book = book_in(&dir, "outpath");
+    let out = dir.join("named.epub");
+
+    let output = bin()
+        .args([
+            "fit",
+            book.to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+            "--report",
+            "json",
+        ])
+        .output()
+        .expect("failed to run binary");
+    assert!(output.status.success());
+
+    let json: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&output.stdout)).expect("valid JSON");
+    assert_eq!(json["schema"], 1);
+    assert_eq!(json["output"], out.to_str().unwrap());
+    assert_eq!(json["dry_run"], false);
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn the_builtin_profile_list_is_available_as_json() {
+    let output = bin()
+        .args(["profiles", "--report", "json"])
+        .output()
+        .expect("failed to run binary");
+    assert!(output.status.success());
+
+    let json: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&output.stdout)).expect("valid JSON");
+    assert_eq!(json["schema"], 1);
+    let profiles = json["profiles"].as_array().expect("a list of profiles");
+    assert!(profiles.len() >= 13, "got {} profiles", profiles.len());
+    assert!(
+        profiles.iter().any(|p| p["name"] == "kobo-clara-bw"),
+        "the list should carry every built-in"
+    );
 }
 
 #[test]
@@ -57,10 +327,14 @@ fn profiles_with_specs_prints_the_resolved_composition_as_json() {
     assert!(output.status.success(), "profiles x4 should exit 0");
     let stdout = String::from_utf8_lossy(&output.stdout);
     let json: serde_json::Value = serde_json::from_str(&stdout).expect("valid JSON");
-    assert_eq!(json["name"], "x4");
-    assert_eq!(json["appendix"], "x4");
-    assert_eq!(json["features"]["strip_fonts"], true);
-    assert_eq!(json["caps"]["screen_w"], 480);
+    // The payload is versioned now, like every other JSON this tool emits, so a
+    // GUI can pin the shape instead of the binary's release number.
+    assert_eq!(json["schema"], 1);
+    let profile = &json["profile"];
+    assert_eq!(profile["name"], "x4");
+    assert_eq!(profile["appendix"], "x4");
+    assert_eq!(profile["features"]["strip_fonts"], true);
+    assert_eq!(profile["caps"]["screen_w"], 480);
 }
 
 #[test]

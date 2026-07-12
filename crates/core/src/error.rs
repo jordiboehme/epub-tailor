@@ -47,3 +47,23 @@ pub enum ConvertError {
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
 }
+
+impl ConvertError {
+    /// A stable, machine-matchable code for this failure.
+    ///
+    /// The message is written for a person and may be reworded at any time; this
+    /// is what a GUI or a script should branch on. Same contract as
+    /// [`crate::validate::LintFinding::code`].
+    pub fn code(&self) -> &'static str {
+        match self {
+            ConvertError::DrmProtected => "drm-protected",
+            ConvertError::Zip64Unsupported => "zip64-unsupported",
+            ConvertError::InvalidEpub(_) => "invalid-epub",
+            ConvertError::EmptySpine => "empty-spine",
+            ConvertError::InvalidMarkdown(_) => "invalid-markdown",
+            ConvertError::UnsupportedInput(_) => "unsupported-input",
+            ConvertError::Image(_) => "image-failed",
+            ConvertError::Io(_) => "io-error",
+        }
+    }
+}

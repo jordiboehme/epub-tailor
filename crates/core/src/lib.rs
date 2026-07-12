@@ -22,6 +22,7 @@ pub mod filter;
 pub mod html;
 pub mod image;
 pub mod markdown;
+pub mod metadata;
 pub mod options;
 pub mod profile;
 pub mod report;
@@ -34,7 +35,8 @@ use kuchikiki::{NodeData, NodeRef};
 pub use crate::image::{ImageOutcome, ImageRole, OutFormat, process_image};
 pub use css::{FilteredCss, filter_css, filter_inline_style};
 pub use epub::{
-    Book, Metadata, ReadEpub, Resource, TocEntry, read_epub, relative_href, write_epub,
+    Book, Creator, Identifier, Metadata, ReadEpub, Resource, Series, TocEntry, read_epub,
+    relative_href, write_epub,
 };
 pub use error::ConvertError;
 pub use filter::{FilterAction, FilterRule, FilterTarget};
@@ -43,7 +45,8 @@ pub use html::{
     serialize_xhtml, transform_chapter,
 };
 pub use markdown::{AssetResolver, FsResolver};
-pub use options::{ConvertOptions, TableMode};
+pub use metadata::{MergeMode, MetadataDoc};
+pub use options::{ConvertOptions, CoverImage, TableMode};
 pub use profile::{DeviceCaps, Features, Profile, ProfileError};
 pub use report::{ConvertReport, ConvertStats, Transformation, Warning};
 pub use validate::{LintFinding, Severity, lint_epub};
@@ -135,6 +138,26 @@ pub fn convert(input: Input, opts: &ConvertOptions) -> Result<Converted, Convert
     }
 
     let mut transformations = Vec::new();
+
+    // User-supplied metadata lands first, so the filters below see the finished
+    // article: a watermark in a description we just filled is still a watermark.
+    // Nothing here reaches the network - the document was already fetched, by a
+    // separate command, before this one ever ran.
+    if !opts.metadata.is_empty() {
+        metadata::apply(
+            &opts.metadata,
+            &mut book.metadata,
+            opts.metadata_merge,
+            &mut transformations,
+            &mut warnings,
+        );
+    }
+    // A supplied cover arrives as bytes, not a path: this crate never touches
+    // the filesystem (the same reason the Markdown frontend takes an
+    // `AssetResolver`), so the caller has already read it.
+    if let Some(cover) = &opts.cover_image {
+        set_cover(&mut book, cover, &mut transformations);
+    }
 
     // Content filters see the metadata and every chapter before any device
     // transform reshapes them.
@@ -574,6 +597,51 @@ fn is_xhtml(media_type: &str) -> bool {
 /// Remove every embedded font resource from `book`, returning the set of
 /// stripped zip paths. The device never loads embedded fonts, and `@font-face`
 /// is already dropped by the CSS filter, so the bytes are pure waste.
+/// Embed a supplied cover image and point the book at it.
+///
+/// Placed next to the package document so it lands inside the content
+/// directory, and given a name that cannot collide with an existing resource.
+/// The image itself then flows through the normal pipeline: under a device
+/// profile it is fitted to the panel and re-encoded like any other cover.
+fn set_cover(book: &mut Book, cover: &CoverImage, transformations: &mut Vec<Transformation>) {
+    let dir = parent_dir(&book.opf_path);
+    let mut path = join_dir(&dir, &cover.file_name);
+    // Never clobber a resource that is already there.
+    let mut n = 2;
+    while book.resources.contains_key(&path) && book.cover.as_deref() != Some(path.as_str()) {
+        let (stem, ext) = cover
+            .file_name
+            .rsplit_once('.')
+            .unwrap_or((cover.file_name.as_str(), ""));
+        let name = if ext.is_empty() {
+            format!("{stem}-{n}")
+        } else {
+            format!("{stem}-{n}.{ext}")
+        };
+        path = join_dir(&dir, &name);
+        n += 1;
+    }
+
+    book.resources.insert(
+        path.clone(),
+        Resource {
+            data: cover.data.clone(),
+            media_type: cover.media_type.clone(),
+        },
+    );
+    let replaced = book.cover.is_some();
+    book.cover = Some(path.clone());
+    transformations.push(Transformation {
+        kind: "cover-set".to_string(),
+        detail: if replaced {
+            "replaced the cover with the supplied image".to_string()
+        } else {
+            "added the supplied cover image".to_string()
+        },
+        file: Some(path),
+    });
+}
+
 fn strip_fonts(
     book: &mut Book,
     transformations: &mut Vec<Transformation>,

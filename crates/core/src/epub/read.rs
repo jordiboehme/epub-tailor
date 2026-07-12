@@ -7,7 +7,8 @@ use roxmltree::{Document, Node};
 use zip::ZipArchive;
 
 use crate::epub::model::{
-    Book, Metadata, Resource, TocEntry, normalize_entry_name, normalize_href,
+    Book, Creator, Identifier, Metadata, Resource, Series, TocEntry, normalize_entry_name,
+    normalize_href,
 };
 use crate::error::ConvertError;
 use crate::report::Warning;
@@ -476,17 +477,119 @@ fn parse_opf(
     })
 }
 
+/// The text of the first `<dc:NAME>` element, or `None` when it is absent or
+/// blank.
+fn first_dc(metadata_node: Node, name: &str) -> Option<String> {
+    metadata_node
+        .descendants()
+        .find(|n| n.is_element() && n.tag_name().name() == name)
+        .map(|n| collapse_whitespace(&collect_text(n)))
+        .filter(|s| !s.is_empty())
+}
+
+/// Every `<dc:NAME>` element's text, in document order, blanks skipped.
+fn all_dc(metadata_node: Node, name: &str) -> Vec<String> {
+    metadata_node
+        .descendants()
+        .filter(|n| n.is_element() && n.tag_name().name() == name)
+        .map(|n| collapse_whitespace(&collect_text(n)))
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
+/// The value of an EPUB3 refinement: `<meta refines="#id" property="P">value</meta>`.
+///
+/// EPUB3 moved what EPUB2 put in attributes (`opf:file-as`, `opf:role`,
+/// `opf:scheme`) into these standoff elements, so a reader that ignores them -
+/// as this one did until 0.2 - loses author sort keys, roles and ISBN schemes
+/// on every modern book.
+fn refinement(metadata_node: Node, id: &str, property: &str) -> Option<String> {
+    let target = format!("#{id}");
+    metadata_node
+        .descendants()
+        .filter(|n| n.is_element() && n.tag_name().name() == "meta")
+        .find(|n| {
+            n.attribute("refines") == Some(target.as_str())
+                && n.attribute("property") == Some(property)
+        })
+        .map(|n| collapse_whitespace(&collect_text(n)))
+        .filter(|s| !s.is_empty())
+}
+
+/// Read a `dc:creator` / `dc:contributor`, taking its sort key and role from
+/// either the EPUB2 attributes or the EPUB3 refinements.
+fn parse_creator(metadata_node: Node, node: Node) -> Option<Creator> {
+    let name = collapse_whitespace(&collect_text(node));
+    if name.is_empty() {
+        return None;
+    }
+    // `opf:file-as` is namespaced, but roxmltree's `attribute()` matches on the
+    // local name only when given a plain string, so try both spellings.
+    let attr = |names: [&str; 2]| {
+        names
+            .iter()
+            .find_map(|n| node.attribute(*n))
+            .map(collapse_whitespace)
+            .filter(|s| !s.is_empty())
+    };
+    let by_id = |property: &str| {
+        node.attribute("id")
+            .and_then(|id| refinement(metadata_node, id, property))
+    };
+    Some(Creator {
+        name,
+        file_as: attr(["file-as", "opf:file-as"]).or_else(|| by_id("file-as")),
+        role: attr(["role", "opf:role"]).or_else(|| by_id("role")),
+    })
+}
+
+/// The series, from the EPUB3 `belongs-to-collection` refinement or Calibre's
+/// `<meta name="calibre:series">`. Calibre's spelling is worth honoring because
+/// a large share of the world's sideloaded EPUBs came out of Calibre.
+fn parse_series(metadata_node: Node) -> Option<Series> {
+    // EPUB3: <meta property="belongs-to-collection" id="c1">Name</meta>
+    //        <meta refines="#c1" property="group-position">2</meta>
+    let epub3 = metadata_node
+        .descendants()
+        .filter(|n| n.is_element() && n.tag_name().name() == "meta")
+        .find(|n| n.attribute("property") == Some("belongs-to-collection"))
+        .and_then(|n| {
+            let name = collapse_whitespace(&collect_text(n));
+            if name.is_empty() {
+                return None;
+            }
+            let index = n
+                .attribute("id")
+                .and_then(|id| refinement(metadata_node, id, "group-position"));
+            Some(Series { name, index })
+        });
+    if epub3.is_some() {
+        return epub3;
+    }
+
+    // Calibre: <meta name="calibre:series" content="Name"/>
+    //          <meta name="calibre:series_index" content="2"/>
+    let named = |want: &str| {
+        metadata_node
+            .descendants()
+            .filter(|n| n.is_element() && n.tag_name().name() == "meta")
+            .find(|n| n.attribute("name") == Some(want))
+            .and_then(|n| n.attribute("content"))
+            .map(collapse_whitespace)
+            .filter(|s| !s.is_empty())
+    };
+    named("calibre:series").map(|name| Series {
+        name,
+        index: named("calibre:series_index"),
+    })
+}
+
 fn parse_metadata(
     metadata_node: Node,
     unique_identifier: Option<&str>,
     warnings: &mut Vec<Warning>,
 ) -> Metadata {
-    let title = metadata_node
-        .descendants()
-        .find(|n| n.is_element() && n.tag_name().name() == "title")
-        .map(|n| collapse_whitespace(&collect_text(n)))
-        .filter(|s| !s.is_empty());
-    let title = title.unwrap_or_else(|| {
+    let title = first_dc(metadata_node, "title").unwrap_or_else(|| {
         warnings.push(Warning {
             message: "OPF has no dc:title; using \"Untitled\"".to_string(),
             file: None,
@@ -494,19 +597,15 @@ fn parse_metadata(
         "Untitled".to_string()
     });
 
-    let authors: Vec<String> = metadata_node
-        .descendants()
-        .filter(|n| n.is_element() && n.tag_name().name() == "creator")
-        .map(|n| collapse_whitespace(&collect_text(n)))
-        .filter(|s| !s.is_empty())
-        .collect();
+    let creators = |name: &str| -> Vec<Creator> {
+        metadata_node
+            .descendants()
+            .filter(|n| n.is_element() && n.tag_name().name() == name)
+            .filter_map(|n| parse_creator(metadata_node, n))
+            .collect()
+    };
 
-    let language = metadata_node
-        .descendants()
-        .find(|n| n.is_element() && n.tag_name().name() == "language")
-        .map(|n| collapse_whitespace(&collect_text(n)))
-        .filter(|s| !s.is_empty());
-    let language = language.unwrap_or_else(|| {
+    let language = first_dc(metadata_node, "language").unwrap_or_else(|| {
         warnings.push(Warning {
             message: "OPF has no dc:language; using \"en\"".to_string(),
             file: None,
@@ -514,21 +613,54 @@ fn parse_metadata(
         "en".to_string()
     });
 
-    let identifiers: Vec<Node> = metadata_node
+    // The unique identifier is the one the package points at; everything else is
+    // a secondary identifier (an ISBN, usually) and is kept as such.
+    let id_nodes: Vec<Node> = metadata_node
         .descendants()
         .filter(|n| n.is_element() && n.tag_name().name() == "identifier")
         .collect();
-    let identifier = unique_identifier
-        .and_then(|uid| identifiers.iter().find(|n| n.attribute("id") == Some(uid)))
-        .or_else(|| identifiers.first())
-        .map(|n| collapse_whitespace(&collect_text(*n)))
+    let unique_node = unique_identifier
+        .and_then(|uid| id_nodes.iter().find(|n| n.attribute("id") == Some(uid)))
+        .or_else(|| id_nodes.first())
+        .copied();
+    let identifier = unique_node
+        .map(|n| collapse_whitespace(&collect_text(n)))
         .filter(|s| !s.is_empty());
+
+    let identifiers: Vec<Identifier> = id_nodes
+        .iter()
+        .filter(|n| Some(**n) != unique_node)
+        .filter_map(|n| {
+            let value = collapse_whitespace(&collect_text(*n));
+            if value.is_empty() {
+                return None;
+            }
+            let scheme = ["scheme", "opf:scheme"]
+                .iter()
+                .find_map(|a| n.attribute(*a))
+                .map(collapse_whitespace)
+                .or_else(|| {
+                    n.attribute("id")
+                        .and_then(|id| refinement(metadata_node, id, "identifier-type"))
+                })
+                .filter(|s| !s.is_empty());
+            Some(Identifier { value, scheme })
+        })
+        .collect();
 
     Metadata {
         title,
-        authors,
+        authors: creators("creator"),
+        contributors: creators("contributor"),
         language,
         identifier,
+        identifiers,
+        description: first_dc(metadata_node, "description"),
+        publisher: first_dc(metadata_node, "publisher"),
+        subjects: all_dc(metadata_node, "subject"),
+        date: first_dc(metadata_node, "date"),
+        rights: first_dc(metadata_node, "rights"),
+        series: parse_series(metadata_node),
     }
 }
 

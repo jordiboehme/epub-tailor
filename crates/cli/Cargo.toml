@@ -5,10 +5,18 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[features]
+# The online metadata lookup. On by default for the shipped binary; turn it off
+# (`--no-default-features`) for a build with no TLS stack and no network code at
+# all. The core library never gets a network dependency either way.
+default = ["online"]
+online = ["dep:ureq"]
+
 [dependencies]
 clap.workspace = true
 serde_json.workspace = true
 epub-tailor-core.workspace = true
+ureq = { workspace = true, optional = true }
 
 [lints]
 workspace = true

@@ -2,11 +2,58 @@
 <package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="pub-id">
   <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
     <dc:identifier id="pub-id">{{ identifier }}</dc:identifier>
+{%- for id in identifiers %}
+    <dc:identifier id="{{ id.id }}">{{ id.value }}</dc:identifier>
+{%- if !id.scheme.is_empty() %}
+    <meta refines="#{{ id.id }}" property="identifier-type">{{ id.scheme }}</meta>
+{%- endif %}
+{%- endfor %}
     <dc:title>{{ title }}</dc:title>
-{%- for author in authors %}
-    <dc:creator>{{ author }}</dc:creator>
+{%- for c in authors %}
+    <dc:creator id="{{ c.id }}">{{ c.name }}</dc:creator>
+{%- if !c.file_as.is_empty() %}
+    <meta refines="#{{ c.id }}" property="file-as">{{ c.file_as }}</meta>
+{%- endif %}
+{%- if !c.role.is_empty() %}
+    <meta refines="#{{ c.id }}" property="role" scheme="marc:relators">{{ c.role }}</meta>
+{%- endif %}
+{%- endfor %}
+{%- for c in contributors %}
+    <dc:contributor id="{{ c.id }}">{{ c.name }}</dc:contributor>
+{%- if !c.file_as.is_empty() %}
+    <meta refines="#{{ c.id }}" property="file-as">{{ c.file_as }}</meta>
+{%- endif %}
+{%- if !c.role.is_empty() %}
+    <meta refines="#{{ c.id }}" property="role" scheme="marc:relators">{{ c.role }}</meta>
+{%- endif %}
 {%- endfor %}
     <dc:language>{{ language }}</dc:language>
+{%- if !publisher.is_empty() %}
+    <dc:publisher>{{ publisher }}</dc:publisher>
+{%- endif %}
+{%- if !description.is_empty() %}
+    <dc:description>{{ description }}</dc:description>
+{%- endif %}
+{%- for subject in subjects %}
+    <dc:subject>{{ subject }}</dc:subject>
+{%- endfor %}
+{%- if !date.is_empty() %}
+    <dc:date>{{ date }}</dc:date>
+{%- endif %}
+{%- if !rights.is_empty() %}
+    <dc:rights>{{ rights }}</dc:rights>
+{%- endif %}
+{%- if !series.is_empty() %}
+    <meta property="belongs-to-collection" id="series">{{ series }}</meta>
+    <meta refines="#series" property="collection-type">series</meta>
+{%- if !series_index.is_empty() %}
+    <meta refines="#series" property="group-position">{{ series_index }}</meta>
+{%- endif %}
+    <meta name="calibre:series" content="{{ series }}"/>
+{%- if !series_index.is_empty() %}
+    <meta name="calibre:series_index" content="{{ series_index }}"/>
+{%- endif %}
+{%- endif %}
     <meta property="dcterms:modified">{{ modified }}</meta>
 {%- if !cover_id.is_empty() %}
     <meta name="cover" content="{{ cover_id }}"/>

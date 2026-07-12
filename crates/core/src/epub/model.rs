@@ -4,12 +4,13 @@
 //! and the EPUB writer).
 
 use indexmap::IndexMap;
+use serde::{Deserialize, Serialize};
 
 /// A book ready for transformation and re-writing as a CrossPoint-optimized
 /// EPUB.
 #[derive(Debug, Clone)]
 pub struct Book {
-    /// Title, authors, language, identifier.
+    /// Everything the OPF `<metadata>` element carries.
     pub metadata: Metadata,
     /// Every retained resource (XHTML, CSS, images, fonts, the OPF/nav/NCX,
     /// ...), keyed by its zip-absolute path, in original zip insertion order.
@@ -29,18 +30,152 @@ pub struct Book {
     pub ncx_path: Option<String>,
 }
 
-/// Book-level metadata (from the OPF `<metadata>` element, or synthesized for
-/// Markdown input in a later milestone).
-#[derive(Debug, Clone, Default)]
+/// Book-level metadata: everything the OPF `<metadata>` element carries, or
+/// what Markdown front-matter and `--metadata` supply.
+///
+/// Until 0.2 this held four fields and the rest of `<metadata>` was not merely
+/// dropped on the rewrite - it was never read at all, silently. A book that
+/// arrived with a publisher, a description and ten subjects went out with none
+/// of them and no warning. Everything here is now read, carried through the
+/// pipeline, and written back.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Metadata {
     /// The book's title (falls back to `"Untitled"` with a warning if absent).
     pub title: String,
     /// Authors, in document order (from all `dc:creator` elements).
-    pub authors: Vec<String>,
+    pub authors: Vec<Creator>,
+    /// Editors, translators, illustrators and the like (`dc:contributor`).
+    pub contributors: Vec<Creator>,
     /// BCP 47-ish language tag (falls back to `"en"` with a warning if absent).
     pub language: String,
-    /// The book's unique identifier, if one was found.
+    /// The book's unique identifier - the `dc:identifier` the package's
+    /// `unique-identifier` points at.
+    ///
+    /// Never overwritten by a lookup or an override: a reading system keys its
+    /// library and its reading position off this, so swapping it silently
+    /// orphans the user's bookmarks. New identifiers are *added* to
+    /// [`Self::identifiers`] instead.
     pub identifier: Option<String>,
+    /// Every *other* `dc:identifier`: ISBNs, DOIs, vendor ids.
+    pub identifiers: Vec<Identifier>,
+    /// `dc:description` - the blurb.
+    pub description: Option<String>,
+    /// `dc:publisher`.
+    pub publisher: Option<String>,
+    /// `dc:subject` - keywords/BISAC categories, in document order.
+    pub subjects: Vec<String>,
+    /// `dc:date` - the publication date.
+    pub date: Option<String>,
+    /// `dc:rights`.
+    pub rights: Option<String>,
+    /// The series this book belongs to, from an EPUB3
+    /// `belongs-to-collection` refinement or Calibre's `calibre:series` meta.
+    pub series: Option<Series>,
+}
+
+/// A person: a `dc:creator` or `dc:contributor`, with the EPUB3 refinements
+/// worth keeping.
+///
+/// Deserializes from a bare string *or* an object, so a hand-written metadata
+/// document can say `author: Jane Author` and only reach for the long form when
+/// it needs to:
+///
+/// ```yaml
+/// authors:
+///   - Jane Author                                  # the common case
+///   - { name: Bill Writer, file_as: "Writer, Bill", role: edt }
+/// ```
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(from = "CreatorField", into = "CreatorField")]
+pub struct Creator {
+    /// The display name, as printed on the cover.
+    pub name: String,
+    /// `opf:file-as` - how a library sorts this person ("Writer, Bill"). Worth
+    /// carrying: it is what a Kobo orders your shelf by.
+    pub file_as: Option<String>,
+    /// A MARC relator code (`aut`, `edt`, `trl`, `ill`, ...).
+    pub role: Option<String>,
+}
+
+impl Creator {
+    /// A creator with just a name, which is the overwhelmingly common case.
+    pub fn new(name: impl Into<String>) -> Self {
+        Creator {
+            name: name.into(),
+            file_as: None,
+            role: None,
+        }
+    }
+}
+
+/// The on-the-wire shape of a [`Creator`]: a bare string, or the full object.
+#[derive(Serialize, Deserialize)]
+#[serde(untagged)]
+enum CreatorField {
+    Name(String),
+    Full {
+        name: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        file_as: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        role: Option<String>,
+    },
+}
+
+impl From<CreatorField> for Creator {
+    fn from(field: CreatorField) -> Self {
+        match field {
+            CreatorField::Name(name) => Creator::new(name),
+            CreatorField::Full {
+                name,
+                file_as,
+                role,
+            } => Creator {
+                name,
+                file_as,
+                role,
+            },
+        }
+    }
+}
+
+impl From<Creator> for CreatorField {
+    fn from(creator: Creator) -> Self {
+        // Round-trip to the short form when there is nothing else to say, so a
+        // fetched document stays readable.
+        if creator.file_as.is_none() && creator.role.is_none() {
+            CreatorField::Name(creator.name)
+        } else {
+            CreatorField::Full {
+                name: creator.name,
+                file_as: creator.file_as,
+                role: creator.role,
+            }
+        }
+    }
+}
+
+/// A `dc:identifier` that is not the book's unique one: an ISBN, a DOI, a
+/// vendor id.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Identifier {
+    /// The identifier itself, e.g. `9780261102217`.
+    pub value: String,
+    /// What kind it is, e.g. `ISBN`, from `opf:scheme` or an EPUB3
+    /// `identifier-type` refinement.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scheme: Option<String>,
+}
+
+/// A series, and this book's place in it.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Series {
+    /// The series name, e.g. `The Lord of the Rings`.
+    pub name: String,
+    /// Position within the series. A string, not a number: real books are
+    /// numbered `2`, `2.5` and `II`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub index: Option<String>,
 }
 
 /// A single retained file: its raw bytes plus a declared or guessed media

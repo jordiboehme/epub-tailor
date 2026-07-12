@@ -253,8 +253,8 @@ pub(crate) fn apply_metadata_filters(
 
         let authors_before = metadata.authors.len();
         for author in &mut metadata.authors {
-            if author.contains(&rule.pattern) {
-                *author = author.replace(&rule.pattern, &replacement);
+            if author.name.contains(&rule.pattern) {
+                author.name = author.name.replace(&rule.pattern, &replacement);
                 transformations.push(Transformation {
                     kind: filter_kind(rule.action),
                     detail: format!("filtered \"{}\" out of an author entry", rule.pattern),
@@ -262,12 +262,58 @@ pub(crate) fn apply_metadata_filters(
                 });
             }
         }
-        metadata.authors.retain(|author| !author.trim().is_empty());
+        metadata
+            .authors
+            .retain(|author| !author.name.trim().is_empty());
         let dropped = authors_before - metadata.authors.len();
         if dropped > 0 {
             transformations.push(Transformation {
                 kind: "filter-removed".to_string(),
                 detail: format!("dropped {dropped} emptied author entr(y/ies)"),
+                file: None,
+            });
+        }
+
+        // The blurb and the publisher are where a vendor watermark most often
+        // hides now that they survive the rewrite, so they get filtered too.
+        // Unlike the title, emptying them is harmless: an absent description is
+        // simply an absent description.
+        for (field, label) in [
+            (&mut metadata.description, "the description"),
+            (&mut metadata.publisher, "the publisher"),
+        ] {
+            let Some(text) = field.as_mut() else { continue };
+            if !text.contains(&rule.pattern) {
+                continue;
+            }
+            *text = text.replace(&rule.pattern, &replacement);
+            transformations.push(Transformation {
+                kind: filter_kind(rule.action),
+                detail: format!("filtered \"{}\" out of {label}", rule.pattern),
+                file: None,
+            });
+            if text.trim().is_empty() {
+                *field = None;
+            }
+        }
+
+        let subjects_before = metadata.subjects.len();
+        for subject in &mut metadata.subjects {
+            if subject.contains(&rule.pattern) {
+                *subject = subject.replace(&rule.pattern, &replacement);
+                transformations.push(Transformation {
+                    kind: filter_kind(rule.action),
+                    detail: format!("filtered \"{}\" out of a subject", rule.pattern),
+                    file: None,
+                });
+            }
+        }
+        metadata.subjects.retain(|s| !s.trim().is_empty());
+        let dropped = subjects_before - metadata.subjects.len();
+        if dropped > 0 {
+            transformations.push(Transformation {
+                kind: "filter-removed".to_string(),
+                detail: format!("dropped {dropped} emptied subject(s)"),
                 file: None,
             });
         }

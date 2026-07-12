@@ -29,10 +29,10 @@ use crate::epub::model::{Book, Metadata, Resource, TocEntry};
 use crate::error::ConvertError;
 use crate::html::dom::{collect_by_name, get_attr, set_attr};
 use crate::html::{parse_xhtml, serialize_xhtml};
+use crate::metadata::{self, MergeMode, MetadataDoc};
 use crate::options::ConvertOptions;
 use crate::report::Warning;
 use assets::ImageRegistry;
-use frontmatter::Frontmatter;
 
 /// Parse `text` as a Markdown book and build the [`Book`] [`crate::convert`]
 /// then runs its shared finalize pipeline over. `assets` resolves every local
@@ -53,7 +53,7 @@ pub fn build_book(
 
     let frontmatter = match leading_front_matter_text(root) {
         Some(raw) => frontmatter::parse_frontmatter(&raw)?,
-        None => Frontmatter::default(),
+        None => MetadataDoc::default(),
     };
 
     let title = resolve_title(&frontmatter, root, &mut warnings);
@@ -148,13 +148,30 @@ pub fn build_book(
         .as_ref()
         .and_then(|href| images.resolve(href, &mut resources, &mut warnings, "frontmatter"));
 
+    // Title and language have already been resolved (frontmatter, else the first
+    // H1, else a fallback). Everything else the block carries - authors,
+    // publisher, description, subjects, series, ISBN - is merged in through the
+    // same path `--metadata` uses, so front-matter and a `--metadata` file
+    // behave identically and there is only one set of rules to learn.
+    let mut meta = Metadata {
+        title,
+        language,
+        identifier: None,
+        ..Metadata::default()
+    };
+    // The cover is resolved separately above (it needs the asset resolver), so
+    // the path this hands back is already dealt with.
+    let mut fm_transformations = Vec::new();
+    metadata::apply(
+        &frontmatter,
+        &mut meta,
+        MergeMode::Fill,
+        &mut fm_transformations,
+        &mut warnings,
+    );
+
     let book = Book {
-        metadata: Metadata {
-            title,
-            authors: frontmatter.authors,
-            language,
-            identifier: None,
-        },
+        metadata: meta,
         resources,
         spine,
         toc,
@@ -182,7 +199,7 @@ fn leading_front_matter_text(root: comrak::Node<'_>) -> Option<String> {
 /// Resolve the book title: the frontmatter's, else the first H1 in the
 /// document, else `"Untitled"` with a warning.
 fn resolve_title(
-    frontmatter: &Frontmatter,
+    frontmatter: &MetadataDoc,
     root: comrak::Node<'_>,
     warnings: &mut Vec<Warning>,
 ) -> String {
@@ -274,10 +291,13 @@ mod tests {
         let (book, warnings) =
             build_book(md, &resolver(&[]), &ConvertOptions::default()).expect("builds");
         assert_eq!(book.metadata.title, "My Book");
-        assert_eq!(
-            book.metadata.authors,
-            vec!["Jane Doe".to_string(), "John Smith".to_string()]
-        );
+        let names: Vec<&str> = book
+            .metadata
+            .authors
+            .iter()
+            .map(|a| a.name.as_str())
+            .collect();
+        assert_eq!(names, vec!["Jane Doe", "John Smith"]);
         assert_eq!(book.metadata.language, "de");
         assert!(
             warnings.iter().all(|w| !w.message.contains("Untitled")),

@@ -163,6 +163,57 @@ Start from a built-in (`epub-tailor profiles x4` prints one) and adjust. Every f
 
 The full schema, every feature switch and the composition rules are documented in [`docs/profiles.md`](docs/profiles.md).
 
+## Metadata
+
+Your book keeps everything it came with: description, publisher, subjects, dates, rights, contributors, ISBNs, series, and the author sort keys your e-reader shelves it by.
+
+If something is *missing*, there are three ways to supply it, and they compose - the book loses to a document, a document loses to a flag.
+
+**See what a book has, and what it lacks:**
+
+```
+epub-tailor metadata show book.epub
+```
+
+**Fill it in by hand:**
+
+```
+epub-tailor fit book.epub --publisher "Allen and Unwin" --description "A blurb." --subject Fantasy
+```
+
+**Or look it up:**
+
+```
+epub-tailor metadata search book.epub          # reads the title and author from the book
+epub-tailor metadata fetch openlibrary:OL27482W > meta.json
+epub-tailor fit book.epub --metadata meta.json
+```
+
+or, in one breath:
+
+```
+epub-tailor metadata fetch openlibrary:OL27482W | epub-tailor fit book.epub --metadata -
+```
+
+There is also `epub-tailor metadata pick book.epub`, which does the search, shows you the candidates and asks which one you meant.
+
+### The two rules it will not break
+
+- **It fills, it does not overwrite.** A lookup never replaces a publisher your book already got right. Pass `--metadata-merge replace` if that is genuinely what you want.
+- **Your book's unique identifier is never changed.** Your reader keys your library and your reading position off it, so a looked-up ISBN is *added* alongside it, never swapped in.
+
+### Where the data comes from, and why only there
+
+**Open Library**, and nothing else. Its data is CC0, which means you may keep what you fetch and write it into a file you own. Google Books' terms forbid making "permanent copies" of their content, which is exactly what writing a description into your EPUB is - so we do not touch it.
+
+Their cover *images* are a different matter: they come from many sources and are **not** CC0. So `metadata fetch --cover-out cover.jpg` is opt-in, and it says so.
+
+### Driving this from a GUI
+
+**`fit`, `md` and `check` never touch the network.** Only `metadata search` and `metadata fetch` do, and neither ever writes a book. Looking up and converting are separate acts with a file in between, so a conversion is always reproducible and you always get to see what was found before anything is written.
+
+Under `--report json`, stdout is exactly one JSON document, every payload carries a `schema` version, and a failure prints `{"error": {"code": "drm-protected", ...}}` rather than making you grep English. `metadata pick` is the only command that ever prompts, and it refuses to run when stdin is not a terminal - so it can never hang something that was not expecting a question.
+
 ## Flags
 
 Available on `fit` and `md` unless noted. Flags override profile values; flags you do not pass leave the profile alone.
@@ -179,6 +230,15 @@ Available on `fit` and `md` unless noted. Flags override profile values; flags y
 | `--report human\|json` | `human` | Use `json` for machine-readable output. |
 | `-o, --output <PATH>` | next to the input | Where to write the result. |
 | `--lets-get-dangerous` | off | `fit` only: replace the original file in place instead of writing a copy. Conflicts with `-o`. Lets. Get. Dangerous. |
+
+### Metadata flags
+
+| Flag | What it does |
+|---|---|
+| `--metadata <FILE\|->` | A metadata document (JSON or YAML) to fill what the book lacks. `-` reads stdin. |
+| `--metadata-merge fill\|replace` | `fill` (the default) only sets what is missing. |
+| `--cover <FILE>` | Embed this image as the cover. |
+| `--title`, `--author`, `--language`, `--publisher`, `--description`, `--subject`, `--date`, `--isbn`, `--series`, `--series-index` | Set one field. `--author` and `--subject` repeat. |
 
 ## FAQ
 
@@ -204,7 +264,9 @@ Encrypted content cannot be read, let alone repaired or tailored. Strip the DRM 
 Not yet, on purpose. Plain substrings cover the real cases we have met and cannot catastrophically backtrack. If a pattern spans styled text (`Some<b>Watermark</b>.example`), match the link target with `"in": ["href"]` instead - that is the robust move anyway.
 
 **What about my book's description and publisher metadata?**
-Known v0.1 limitation: the regenerated OPF currently keeps title, authors, language and identifier. `dc:description`, `dc:publisher`, subjects and dates are dropped in the rewrite. Richer metadata passthrough is planned for 0.2.
+It is all kept now. Description, publisher, subjects, dates, rights, contributors, ISBNs, series and author sort keys survive the rewrite. (In 0.1 they did not - and worse, they were never even read. Fixed in 0.2.)
+
+If the book is *missing* something, you can supply it, or look it up. See [Metadata](#metadata).
 
 **What is Markdown frontmatter?**
 An optional YAML block at the very top of your `.md` that sets the book metadata:
@@ -215,10 +277,14 @@ title: My Book
 author: Jane Author
 language: en
 cover: images/cover.png
+publisher: Acme Press
+description: A book about things.
+subjects: [Fiction, Adventure]
+isbn: 9780261102217
 ---
 ```
 
-`author` takes one name or a list. Omit the block entirely and the first `# H1` becomes the title.
+`author` takes one name or a list. Omit the block entirely and the first `# H1` becomes the title. It accepts the same fields as `--metadata`, because it is the same document.
 
 ## The deep lore
 

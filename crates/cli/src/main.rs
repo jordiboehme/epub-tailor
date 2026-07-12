@@ -1,20 +1,46 @@
 //! `epub-tailor`: a CLI that cleans, fixes and transforms EPUB (and Markdown)
 //! books, cut to measure for a target device by composable JSON profiles.
+//!
+//! ## The offline guarantee
+//!
+//! `fit`, `md` and `check` never open a socket. The only commands that reach the
+//! network are `metadata search` and `metadata fetch`, which read and print and
+//! never write a book. Looking a book up and tailoring it are two separate acts,
+//! with a file or a pipe in between - so a conversion is always reproducible,
+//! and a GUI can show the user what it found before anything is written.
+//!
+//! ## Driving this from a UI
+//!
+//! Under `--report json` stdout carries exactly one JSON document and nothing
+//! else. Every payload has a `schema` version. Failures print a machine-readable
+//! `{"error": {"code": ...}}` on stdout as well as prose on stderr. The one
+//! command that ever prompts is `metadata pick`, and it refuses to run when
+//! stdin is not a terminal, so a UI can never hang on a question it did not
+//! expect.
+
+#[cfg(feature = "online")]
+mod lookup;
+mod lookup_cmd;
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
+use epub_tailor_core::metadata::{MergeMode, MetadataDoc};
 use epub_tailor_core::profile::{self, Profile};
 use epub_tailor_core::{
-    ConvertOptions, Converted, FsResolver, Input, LintFinding, Severity, TableMode, convert,
-    lint_epub,
+    ConvertOptions, Converted, CoverImage, FsResolver, Input, LintFinding, Severity, TableMode,
+    convert, lint_epub,
 };
 
 /// Exit code used when the input cannot be read at all (`check` only).
 const UNREADABLE_EXIT_CODE: u8 = 2;
 /// Exit code used when a conversion fails, or `check` finds an `Error`-severity finding.
 const ERROR_EXIT_CODE: u8 = 1;
+
+/// Version of the JSON output contract. Bumped only on a breaking change to the
+/// shape, so a GUI can pin against it instead of against the binary's version.
+pub const SCHEMA_VERSION: u32 = 1;
 
 /// Clean, fix and tailor EPUB books to fit your e-reader.
 #[derive(Parser)]
@@ -70,6 +96,92 @@ enum Command {
         /// Profile specs to resolve and print as JSON; with none given, the
         /// built-ins are listed.
         specs: Vec<String>,
+        /// Report format. Only affects the built-in listing; a resolved
+        /// composition is always JSON.
+        #[arg(long, value_enum, default_value_t = ReportArg::Human)]
+        report: ReportArg,
+    },
+    /// Inspect, look up and supply book metadata.
+    ///
+    /// `show` is offline. `search` and `fetch` are the only commands in
+    /// `epub-tailor` that touch the network, and neither ever writes a book:
+    /// they print a record, which you then hand to `fit --metadata`.
+    Metadata {
+        #[command(subcommand)]
+        command: MetadataCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum MetadataCommand {
+    /// Show a book's metadata, and what it is missing. Offline.
+    Show {
+        /// Path to the EPUB.
+        input: PathBuf,
+        /// Report format.
+        #[arg(long, value_enum, default_value_t = ReportArg::Human)]
+        report: ReportArg,
+    },
+    /// Search Open Library for a book's metadata. Prints candidates; writes
+    /// nothing.
+    ///
+    /// Given a book, the title and author are read from it, so the common case
+    /// is just `epub-tailor metadata search book.epub`.
+    Search {
+        /// An EPUB to take the title and author from.
+        input: Option<PathBuf>,
+        /// Title to search for (overrides the book's).
+        #[arg(long)]
+        title: Option<String>,
+        /// Author to search for (overrides the book's).
+        #[arg(long)]
+        author: Option<String>,
+        /// ISBN to search for. The most precise thing you can give.
+        #[arg(long)]
+        isbn: Option<String>,
+        /// How many candidates to show.
+        #[arg(long, default_value_t = 5)]
+        limit: usize,
+        /// Report format.
+        #[arg(long, value_enum, default_value_t = ReportArg::Human)]
+        report: ReportArg,
+    },
+    /// Fetch one complete record by reference, as a metadata document.
+    ///
+    /// The output is exactly what `fit --metadata` takes, so the two compose:
+    ///
+    ///   epub-tailor metadata fetch openlibrary:OL262758W > meta.json
+    ///   epub-tailor fit book.epub --metadata meta.json
+    Fetch {
+        /// A reference from `metadata search`, e.g. `openlibrary:OL262758W`.
+        reference: String,
+        /// Also download the cover image to this path, and point the document at
+        /// it.
+        ///
+        /// Off by default on purpose: Open Library's *metadata* is CC0, but the
+        /// cover *images* come from many sources and are not, so embedding one
+        /// is your call to make, not ours.
+        #[arg(long, value_name = "FILE")]
+        cover_out: Option<PathBuf>,
+        /// Report format.
+        #[arg(long, value_enum, default_value_t = ReportArg::Json)]
+        report: ReportArg,
+    },
+    /// Search, show the candidates, and let you choose one - then write the
+    /// document.
+    ///
+    /// The only command in `epub-tailor` that ever asks a question, and it
+    /// refuses to run when stdin is not a terminal, so nothing can be left
+    /// hanging on a prompt it did not expect.
+    Pick {
+        /// The EPUB to look up and write a metadata document for.
+        input: PathBuf,
+        /// Where to write the chosen document. Defaults to `<book>.metadata.json`.
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+        /// How many candidates to offer.
+        #[arg(long, default_value_t = 5)]
+        limit: usize,
     },
 }
 
@@ -113,6 +225,78 @@ struct CommonArgs {
     /// Report format.
     #[arg(long, value_enum, default_value_t = ReportArg::Human)]
     report: ReportArg,
+
+    #[command(flatten)]
+    metadata: MetadataArgs,
+}
+
+/// Metadata the user supplies to fill what the book is missing.
+///
+/// Nothing here touches the network - the document was fetched (if it was
+/// fetched at all) by `metadata fetch`, in a separate command, before this one
+/// ran. Individual flags beat the document; the document beats the book.
+#[derive(Args, Default)]
+struct MetadataArgs {
+    /// A metadata document (JSON or YAML) to fill in what the book is missing.
+    /// `-` reads it from stdin, so `metadata fetch REF | fit book.epub
+    /// --metadata -` works.
+    #[arg(long, value_name = "FILE|-")]
+    metadata: Option<String>,
+
+    /// Overwrite the book's own metadata instead of only filling the gaps.
+    ///
+    /// The default is to fill: a looked-up record should not quietly replace a
+    /// publisher the book already got right. The book's unique identifier is
+    /// never overwritten, whatever this says.
+    #[arg(long, value_enum, default_value_t = MergeArg::Fill)]
+    metadata_merge: MergeArg,
+
+    /// A cover image to embed.
+    #[arg(long, value_name = "FILE")]
+    cover: Option<PathBuf>,
+
+    #[arg(long, help_heading = "Metadata")]
+    title: Option<String>,
+    /// Repeatable.
+    #[arg(long = "author", help_heading = "Metadata")]
+    authors: Vec<String>,
+    #[arg(long, help_heading = "Metadata")]
+    language: Option<String>,
+    #[arg(long, help_heading = "Metadata")]
+    publisher: Option<String>,
+    #[arg(long, help_heading = "Metadata")]
+    description: Option<String>,
+    /// Repeatable.
+    #[arg(long = "subject", help_heading = "Metadata")]
+    subjects: Vec<String>,
+    /// Publication date, e.g. 1937-09-21.
+    #[arg(long, help_heading = "Metadata")]
+    date: Option<String>,
+    /// Added alongside the book's identifier, never in place of it.
+    #[arg(long, help_heading = "Metadata")]
+    isbn: Option<String>,
+    #[arg(long, help_heading = "Metadata")]
+    series: Option<String>,
+    #[arg(long, help_heading = "Metadata")]
+    series_index: Option<String>,
+}
+
+#[derive(Clone, Copy, Default, ValueEnum)]
+enum MergeArg {
+    /// Only set fields the book does not already have. The default.
+    #[default]
+    Fill,
+    /// Overwrite whatever the document mentions.
+    Replace,
+}
+
+impl From<MergeArg> for MergeMode {
+    fn from(arg: MergeArg) -> Self {
+        match arg {
+            MergeArg::Fill => MergeMode::Fill,
+            MergeArg::Replace => MergeMode::Replace,
+        }
+    }
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -160,6 +344,107 @@ impl CommonArgs {
     }
 }
 
+impl MetadataArgs {
+    /// Resolve `--metadata` and the per-field flags into one document plus the
+    /// cover bytes, reading from disk (and stdin) so `convert` never has to.
+    ///
+    /// Precedence, lowest to highest: the book, then the document, then the
+    /// individual flags. A flag is the most specific thing the user can say, so
+    /// it wins.
+    fn resolve(&self) -> Result<(MetadataDoc, MergeMode, Option<CoverImage>), String> {
+        let mut doc = match self.metadata.as_deref() {
+            None => MetadataDoc::default(),
+            Some("-") => {
+                let mut text = String::new();
+                std::io::Read::read_to_string(&mut std::io::stdin(), &mut text)
+                    .map_err(|e| format!("cannot read the metadata document from stdin: {e}"))?;
+                MetadataDoc::parse(&text)
+                    .map_err(|e| format!("invalid metadata document on stdin: {e}"))?
+            }
+            Some(path) => {
+                let text = std::fs::read_to_string(path)
+                    .map_err(|e| format!("cannot read {path}: {e}"))?;
+                MetadataDoc::parse(&text).map_err(|e| format!("invalid metadata in {path}: {e}"))?
+            }
+        };
+
+        // The flags win over the document.
+        macro_rules! over {
+            ($($name:ident),* $(,)?) => {
+                $(if let Some(value) = self.$name.clone() { doc.$name = Some(value); })*
+            };
+        }
+        over!(
+            title,
+            language,
+            publisher,
+            description,
+            date,
+            isbn,
+            series,
+            series_index
+        );
+        if !self.authors.is_empty() {
+            doc.authors = Some(epub_tailor_core::metadata::OneOrMany::Many(
+                self.authors
+                    .iter()
+                    .map(epub_tailor_core::Creator::new)
+                    .collect(),
+            ));
+        }
+        if !self.subjects.is_empty() {
+            doc.subjects = Some(epub_tailor_core::metadata::OneOrMany::Many(
+                self.subjects.clone(),
+            ));
+        }
+
+        // `--cover` beats a `cover:` in the document. Read it here: the core
+        // library never opens a file.
+        let cover_path = self
+            .cover
+            .clone()
+            .or_else(|| doc.cover.as_ref().map(PathBuf::from));
+        let cover = match cover_path {
+            None => None,
+            Some(path) => {
+                let data = std::fs::read(&path)
+                    .map_err(|e| format!("cannot read the cover {}: {e}", path.display()))?;
+                let file_name = path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_else(|| "cover.jpg".to_string());
+                Some(CoverImage {
+                    media_type: media_type_for(&file_name),
+                    data,
+                    file_name,
+                })
+            }
+        };
+        // The path has been consumed; the doc must not carry it into the model.
+        doc.cover = None;
+
+        Ok((doc, self.metadata_merge.into(), cover))
+    }
+}
+
+/// Guess an image media type from a filename. The image pipeline re-encodes
+/// covers under a device profile anyway, so this only has to be right enough for
+/// the manifest.
+fn media_type_for(file_name: &str) -> String {
+    let ext = file_name
+        .rsplit_once('.')
+        .map(|(_, e)| e.to_ascii_lowercase())
+        .unwrap_or_default();
+    match ext.as_str() {
+        "png" => "image/png",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "svg" => "image/svg+xml",
+        _ => "image/jpeg",
+    }
+    .to_string()
+}
+
 /// Parse a `--quality` value: `low` (70), `std` (82), `high` (90) or a raw number 1-100.
 fn parse_quality(s: &str) -> Result<u8, String> {
     match s {
@@ -183,7 +468,7 @@ fn main() -> ExitCode {
     let cli = Cli::parse();
 
     match cli.command {
-        Command::Profiles { specs } => run_profiles(&specs),
+        Command::Profiles { specs, report } => run_profiles(&specs, report),
         Command::Fit {
             input,
             lets_get_dangerous,
@@ -199,6 +484,7 @@ fn main() -> ExitCode {
             profiles,
             report,
         } => run_check(&input, &profiles, report),
+        Command::Metadata { command } => lookup_cmd::run(command),
     }
 }
 
@@ -224,13 +510,18 @@ fn run_fit(input: &Path, in_place: bool, common: &CommonArgs) -> ExitCode {
         }
     };
 
-    let opts = common.to_options(&resolved);
+    let mut opts = common.to_options(&resolved);
+    match common.metadata.resolve() {
+        Ok((doc, merge, cover)) => {
+            opts.metadata = doc;
+            opts.metadata_merge = merge;
+            opts.cover_image = cover;
+        }
+        Err(e) => return fail(common.report, "metadata", &e),
+    }
     let converted = match convert(Input::Epub(bytes), &opts) {
         Ok(converted) => converted,
-        Err(e) => {
-            eprintln!("error: {e}");
-            return ExitCode::from(ERROR_EXIT_CODE);
-        }
+        Err(e) => return fail(common.report, e.code(), &e.to_string()),
     };
 
     let output_path = if in_place {
@@ -277,13 +568,18 @@ fn run_md(input: &Path, split_level: u8, common: &CommonArgs) -> ExitCode {
 
     let mut opts = common.to_options(&resolved);
     opts.split_level = split_level;
+    match common.metadata.resolve() {
+        Ok((doc, merge, cover)) => {
+            opts.metadata = doc;
+            opts.metadata_merge = merge;
+            opts.cover_image = cover;
+        }
+        Err(e) => return fail(common.report, "metadata", &e),
+    }
 
     let converted = match convert(Input::Markdown { text, assets }, &opts) {
         Ok(converted) => converted,
-        Err(e) => {
-            eprintln!("error: {e}");
-            return ExitCode::from(ERROR_EXIT_CODE);
-        }
+        Err(e) => return fail(common.report, e.code(), &e.to_string()),
     };
 
     let output_path = common
@@ -304,22 +600,57 @@ fn finish_conversion(
     report_format: ReportArg,
 ) -> ExitCode {
     if !dry_run && let Err(e) = write_output(output_path, &converted.epub, in_place) {
-        eprintln!("error: cannot write {}: {e}", output_path.display());
-        return ExitCode::from(ERROR_EXIT_CODE);
+        return fail(
+            report_format,
+            "write-failed",
+            &format!("cannot write {}: {e}", output_path.display()),
+        );
     }
 
     match report_format {
         ReportArg::Human => print_human_report(&converted, output_path, dry_run),
-        ReportArg::Json => match serde_json::to_string_pretty(&converted.report) {
-            Ok(json) => println!("{json}"),
-            Err(e) => {
-                eprintln!("error: could not serialize report: {e}");
-                return ExitCode::from(ERROR_EXIT_CODE);
+        ReportArg::Json => {
+            // The output path is in the payload deliberately: without it a GUI
+            // has no way to learn where the file it just asked for landed, short
+            // of reimplementing the naming rule.
+            let payload = serde_json::json!({
+                "schema": SCHEMA_VERSION,
+                "output": (!dry_run).then(|| output_path.display().to_string()),
+                "dry_run": dry_run,
+                "transformations": converted.report.transformations,
+                "warnings": converted.report.warnings,
+                "stats": converted.report.stats,
+            });
+            match serde_json::to_string_pretty(&payload) {
+                Ok(json) => println!("{json}"),
+                Err(e) => {
+                    eprintln!("error: could not serialize report: {e}");
+                    return ExitCode::from(ERROR_EXIT_CODE);
+                }
             }
-        },
+        }
     }
 
     ExitCode::SUCCESS
+}
+
+/// Report a failure and exit.
+///
+/// Prose always goes to stderr, where a human reads it. Under `--report json` a
+/// machine-readable twin goes to stdout, because otherwise a GUI's only way to
+/// tell "the book has DRM" from "the file is missing" is to grep English.
+fn fail(report_format: ReportArg, code: &str, message: &str) -> ExitCode {
+    eprintln!("error: {message}");
+    if matches!(report_format, ReportArg::Json) {
+        let payload = serde_json::json!({
+            "schema": SCHEMA_VERSION,
+            "error": { "code": code, "message": message },
+        });
+        if let Ok(json) = serde_json::to_string_pretty(&payload) {
+            println!("{json}");
+        }
+    }
+    ExitCode::from(ERROR_EXIT_CODE)
 }
 
 /// Default output path: `<input stem>.<extension>`, next to the input file.
@@ -440,6 +771,7 @@ fn run_check(input: &Path, profiles: &[String], report_format: ReportArg) -> Exi
         ReportArg::Human => print_check_report(&findings, errors, warnings),
         ReportArg::Json => {
             let payload = serde_json::json!({
+                "schema": SCHEMA_VERSION,
                 "findings": findings,
                 "errors": errors,
                 "warnings": warnings,
@@ -490,13 +822,33 @@ fn severity_label(severity: Severity) -> &'static str {
 
 /// Run the `profiles` subcommand: with no specs, list the built-ins; with
 /// specs, resolve the composition and print it as pretty JSON.
-fn run_profiles(specs: &[String]) -> ExitCode {
+fn run_profiles(specs: &[String], report_format: ReportArg) -> ExitCode {
     if specs.is_empty() {
-        print_builtin_profiles();
+        match report_format {
+            ReportArg::Human => print_builtin_profiles(),
+            // A GUI populating a profile picker needs the list as data, not as a
+            // formatted table it has to scrape.
+            ReportArg::Json => {
+                let payload = serde_json::json!({
+                    "schema": SCHEMA_VERSION,
+                    "profiles": profile::builtins(),
+                });
+                match serde_json::to_string_pretty(&payload) {
+                    Ok(json) => println!("{json}"),
+                    Err(e) => {
+                        eprintln!("error: could not serialize profiles: {e}");
+                        return ExitCode::from(ERROR_EXIT_CODE);
+                    }
+                }
+            }
+        }
         return ExitCode::SUCCESS;
     }
     match profile::resolve(specs) {
-        Ok(resolved) => match serde_json::to_string_pretty(&resolved) {
+        Ok(resolved) => match serde_json::to_string_pretty(&serde_json::json!({
+            "schema": SCHEMA_VERSION,
+            "profile": resolved,
+        })) {
             Ok(json) => {
                 println!("{json}");
                 ExitCode::SUCCESS

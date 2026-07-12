@@ -5,6 +5,6 @@ pub mod model;
 pub mod read;
 pub mod write;
 
-pub use model::{Book, Metadata, Resource, TocEntry};
+pub use model::{Book, Creator, Identifier, Metadata, Resource, Series, TocEntry};
 pub use read::{ReadEpub, read_epub};
 pub use write::{relative_href, write_epub};

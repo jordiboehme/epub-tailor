@@ -56,7 +56,7 @@ fn epub3_parses_metadata_spine_toc_cover_and_resources() {
 
     let book = result.book;
     assert_eq!(book.metadata.title, "Sample Book");
-    assert_eq!(book.metadata.authors, vec!["Jane Author".to_string()]);
+    assert_eq!(book.metadata.authors[0].name, "Jane Author");
     assert_eq!(book.metadata.language, "en");
     assert_eq!(
         book.metadata.identifier.as_deref(),
