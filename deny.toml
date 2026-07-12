@@ -35,6 +35,12 @@ ignore = [
     # in our tree lets us swap it out. Flagged for review rather than added
     # silently.
     "RUSTSEC-2026-0192",
+    # rustybuzz is unmaintained (superseded by harfrust upstream). Same story
+    # as ttf-parser above: it reaches us only through resvg -> usvg ->
+    # rustybuzz, the text-shaping half of the SVG rasterizer. Unmaintained-only
+    # advisory, no vulnerability, no safe upgrade until resvg itself moves to
+    # harfrust. Flagged for review rather than added silently.
+    "RUSTSEC-2026-0206",
 ]
 
 [bans]
