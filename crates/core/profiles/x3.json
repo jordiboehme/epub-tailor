@@ -3,7 +3,7 @@
   "description": "Xteink X3 running CrossPoint firmware",
   "device": {
     "screen": { "width": 528, "height": 792, "ppi": 220 },
-    "gray_levels": 4,
+    "panel": "gray4",
     "images": {
       "max_source_px": [2048, 1536],
       "inline_max": [528, 722],

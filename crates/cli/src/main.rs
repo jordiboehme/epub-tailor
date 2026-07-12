@@ -517,18 +517,31 @@ fn run_profiles(specs: &[String]) -> ExitCode {
 /// (or "-" for the device-neutral epub profile), output appendix and
 /// description.
 fn print_builtin_profiles() {
+    let profiles = profile::builtins();
+    let name_w = profiles
+        .iter()
+        .map(|p| p.name.len())
+        .max()
+        .unwrap_or(4)
+        .max(4);
+    let out_w = profiles
+        .iter()
+        .map(|p| p.appendix_or_default().len() + 6)
+        .max()
+        .unwrap_or(6)
+        .max(6);
     println!(
-        "{:<6} {:<11} {:<16} DESCRIPTION",
+        "{:<name_w$} {:<11} {:<out_w$} DESCRIPTION",
         "NAME", "SCREEN", "OUTPUT"
     );
-    for profile in profile::builtins() {
+    for profile in &profiles {
         let screen = if profile.caps.screen_w == u32::MAX {
             "-".to_string()
         } else {
             format!("{}x{}", profile.caps.screen_w, profile.caps.screen_h)
         };
         println!(
-            "{:<6} {:<11} {:<16} {}",
+            "{:<name_w$} {:<11} {:<out_w$} {}",
             profile.name,
             screen,
             format!(".{}.epub", profile.appendix_or_default()),

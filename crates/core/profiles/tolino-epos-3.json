@@ -1,0 +1,36 @@
+{
+  "name": "tolino-epos-3",
+  "description": "tolino epos 3, 8in Carta 1200 mono (older Android firmware)",
+  "device": {
+    "screen": { "width": 1440, "height": 1920, "ppi": 300 },
+    "panel": "gray16",
+    "images": {
+      "max_source_px": [2000, 2000],
+      "inline_max": [1440, 1920],
+      "cover_max": [1440, 1920],
+      "inline_budget_kb": 500,
+      "cover_budget_kb": 1000
+    }
+  },
+  "features": {
+    "strip_fonts": false,
+    "filter_css": false,
+    "relocate_styles": false,
+    "transcode_images": true,
+    "rasterize_svg": true,
+    "linearize_tables": false,
+    "degrade_boxes": false,
+    "bake_ordered_lists": false,
+    "preserve_code_blocks": false,
+    "normalize_footnotes": false,
+    "relocate_anchors": false,
+    "dedupe_ids": true,
+    "unicode_hygiene": true,
+    "chapter_split": true
+  },
+  "options": {
+    "jpeg_quality": 85,
+    "max_chapter_kb": 500
+  },
+  "output": { "appendix": "tolino-epos-3" }
+}

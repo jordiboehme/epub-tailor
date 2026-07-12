@@ -1,42 +1,55 @@
-//! Encoding a grayscale image the device can decode: a baseline JPEG (photos)
-//! or an 8-bit grayscale PNG (line art), plus the byte-budget loop that steps
-//! quality and then dimensions down until an image fits its budget.
+//! Encoding an image the device can decode: a baseline JPEG (photos) or an
+//! 8-bit PNG (line art), plus the byte-budget loop that steps quality and then
+//! dimensions down until an image fits its budget.
 //!
-//! The device only decodes baseline JPEG (progressive JPEG degrades to a
-//! 1/8-resolution blur) and 8-bit PNG, so JPEGs go through `jpeg-encoder`,
-//! which only ever emits baseline (SOF0) data.
+//! Both formats are emitted in the canvas's own color space - luma for a
+//! grayscale panel, RGB for a color one - so a color device never has its color
+//! silently encoded away. The device only decodes baseline JPEG (progressive
+//! JPEG degrades to a 1/8-resolution blur) and 8-bit PNG, so JPEGs go through
+//! `jpeg-encoder`, which only ever emits baseline (SOF0) data.
 
 use image::codecs::png::{CompressionType, FilterType, PngEncoder};
 use image::imageops::FilterType as ResizeFilter;
-use image::{ExtendedColorType, GrayImage, ImageEncoder};
+use image::{ExtendedColorType, ImageEncoder};
 use jpeg_encoder::{ColorType, Encoder};
+
+use super::canvas::Canvas;
 
 /// Lowest JPEG quality the budget loop will drop to.
 const QUALITY_FLOOR: u8 = 40;
 /// Step by which JPEG quality is reduced each budget iteration.
 const QUALITY_STEP: u8 = 6;
 
-/// Encode a grayscale image as a baseline JPEG with a single luma component at
-/// `quality` (1-100). The output always uses the baseline (SOF0) process.
-pub(super) fn encode_jpeg(gray: &GrayImage, quality: u8) -> Vec<u8> {
-    let (w, h) = gray.dimensions();
+/// Encode a canvas as a baseline JPEG at `quality` (1-100), with one luma
+/// component for a gray canvas and three for an RGB one. The output always uses
+/// the baseline (SOF0) process.
+pub(super) fn encode_jpeg(canvas: &Canvas, quality: u8) -> Vec<u8> {
+    let (w, h) = canvas.dimensions();
+    let (raw, color_type) = match canvas {
+        Canvas::Gray(img) => (img.as_raw().as_slice(), ColorType::Luma),
+        Canvas::Rgb(img) => (img.as_raw().as_slice(), ColorType::Rgb),
+    };
     let mut out = Vec::new();
-    // Encoding a fixed-size in-memory grayscale buffer whose dimensions fit the
-    // device screen (well within u16) cannot fail.
+    // Encoding a fixed-size in-memory buffer whose dimensions fit the device
+    // screen (well within u16) cannot fail.
     Encoder::new(&mut out, quality)
-        .encode(gray.as_raw(), w as u16, h as u16, ColorType::Luma)
-        .expect("baseline grayscale JPEG encode of an in-memory buffer cannot fail");
+        .encode(raw, w as u16, h as u16, color_type)
+        .expect("baseline JPEG encode of an in-memory buffer cannot fail");
     out
 }
 
-/// Encode a grayscale image as an 8-bit grayscale PNG at the best (smallest)
-/// DEFLATE setting, for line art the device renders crisply.
-pub(super) fn encode_png(gray: &GrayImage) -> Vec<u8> {
-    let (w, h) = gray.dimensions();
+/// Encode a canvas as an 8-bit PNG (luma or RGB) at the best (smallest) DEFLATE
+/// setting, for line art the device renders crisply.
+pub(super) fn encode_png(canvas: &Canvas) -> Vec<u8> {
+    let (w, h) = canvas.dimensions();
+    let (raw, color_type) = match canvas {
+        Canvas::Gray(img) => (img.as_raw().as_slice(), ExtendedColorType::L8),
+        Canvas::Rgb(img) => (img.as_raw().as_slice(), ExtendedColorType::Rgb8),
+    };
     let mut out = Vec::new();
     PngEncoder::new_with_quality(&mut out, CompressionType::Best, FilterType::Adaptive)
-        .write_image(gray.as_raw(), w, h, ExtendedColorType::L8)
-        .expect("grayscale PNG encode of an in-memory buffer cannot fail");
+        .write_image(raw, w, h, color_type)
+        .expect("PNG encode of an in-memory buffer cannot fail");
     out
 }
 
@@ -51,20 +64,21 @@ pub(super) struct BudgetFit {
     pub over_budget: bool,
 }
 
-/// Encode `gray` as a baseline grayscale JPEG within `budget` bytes.
+/// Encode `canvas` as a baseline JPEG within `budget` bytes, in its own color
+/// space.
 ///
 /// Steps quality down by [`QUALITY_STEP`] to a floor of [`QUALITY_FLOOR`],
 /// then, still at the floor, steps the dimensions down 10% at a time to a floor
 /// of 50% of the input size. Returns the highest-quality attempt that fits; if
 /// none fit, returns the smallest attempt with `over_budget` set.
-pub(super) fn fit_to_budget(gray: GrayImage, start_quality: u8, budget: usize) -> BudgetFit {
-    let (w0, h0) = gray.dimensions();
+pub(super) fn fit_to_budget(canvas: Canvas, start_quality: u8, budget: usize) -> BudgetFit {
+    let (w0, h0) = canvas.dimensions();
     let mut smallest: Option<BudgetFit> = None;
 
     // Phase 1: drop quality at the full (fitted) size.
     let mut quality = start_quality.max(QUALITY_FLOOR);
     loop {
-        let data = encode_jpeg(&gray, quality);
+        let data = encode_jpeg(&canvas, quality);
         if data.len() <= budget {
             return BudgetFit {
                 data,
@@ -88,7 +102,7 @@ pub(super) fn fit_to_budget(gray: GrayImage, start_quality: u8, budget: usize) -
     while percent >= 50 {
         let nw = (w0 * percent / 100).max(min_w);
         let nh = (h0 * percent / 100).max(min_h);
-        let small = image::imageops::resize(&gray, nw, nh, ResizeFilter::Lanczos3);
+        let small = canvas.resize(nw, nh, ResizeFilter::Lanczos3);
         let data = encode_jpeg(&small, QUALITY_FLOOR);
         if data.len() <= budget {
             return BudgetFit {
@@ -133,26 +147,40 @@ fn keep_smallest(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use image::{Luma, Rgb};
+    use image::{GrayImage, Luma, Rgb, RgbImage};
 
     /// A deterministic high-entropy grayscale image, so JPEG cannot compress it
     /// to nothing (useful for exercising the budget loop).
-    fn noise(w: u32, h: u32) -> GrayImage {
+    fn noise(w: u32, h: u32) -> Canvas {
         let mut img = GrayImage::new(w, h);
         let mut state = 0x1234_5678u32;
         for px in img.pixels_mut() {
             state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
             px.0[0] = (state >> 24) as u8;
         }
-        img
+        Canvas::Gray(img)
     }
 
-    fn gradient(w: u32, h: u32) -> GrayImage {
+    fn gradient(w: u32, h: u32) -> Canvas {
         let mut img = GrayImage::new(w, h);
         for (x, _y, px) in img.enumerate_pixels_mut() {
             *px = Luma([((x * 255) / w.max(1)) as u8]);
         }
-        img
+        Canvas::Gray(img)
+    }
+
+    /// A deterministic RGB image with a different value in every channel, so a
+    /// grayscale encode would be detectable.
+    fn color_noise(w: u32, h: u32) -> Canvas {
+        let mut img = RgbImage::new(w, h);
+        let mut state = 0x9E37_79B9u32;
+        for px in img.pixels_mut() {
+            for channel in &mut px.0 {
+                state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                *channel = (state >> 24) as u8;
+            }
+        }
+        Canvas::Rgb(img)
     }
 
     #[test]
@@ -180,6 +208,24 @@ mod tests {
     }
 
     #[test]
+    fn a_color_canvas_encodes_a_three_component_jpeg() {
+        let jpeg = encode_jpeg(&color_noise(32, 24), 82);
+        assert!(
+            jpeg.windows(2).any(|w| w == [0xFF, 0xC0]),
+            "baseline SOF0 marker must be present"
+        );
+        let sof0 = jpeg
+            .windows(2)
+            .position(|w| w == [0xFF, 0xC0])
+            .expect("SOF0 present");
+        assert_eq!(
+            jpeg[sof0 + 9],
+            3,
+            "a color panel must get a three-component JPEG, not a grayscaled one"
+        );
+    }
+
+    #[test]
     fn png_round_trips_grayscale_losslessly() {
         let src = gradient(20, 10);
         let png = encode_png(&src);
@@ -187,17 +233,35 @@ mod tests {
             .expect("valid PNG")
             .into_luma8();
         assert_eq!(decoded.dimensions(), (20, 10));
-        assert_eq!(decoded.as_raw(), src.as_raw(), "PNG must be lossless");
+        let Canvas::Gray(raw) = &src else {
+            panic!("gradient builds a gray canvas")
+        };
+        assert_eq!(decoded.as_raw(), raw.as_raw(), "PNG must be lossless");
     }
 
     #[test]
-    fn png_of_rgb_input_would_not_be_grayscale_but_luma_encoder_forces_l8() {
-        // Sanity: ExtendedColorType::L8 output decodes as single-channel luma.
+    fn png_round_trips_color_losslessly() {
+        let src = color_noise(20, 10);
+        let png = encode_png(&src);
+        let decoded = image::load_from_memory(&png).expect("valid PNG");
+        assert!(decoded.color().has_color(), "color PNG must stay color");
+        let Canvas::Rgb(raw) = &src else {
+            panic!("color_noise builds an rgb canvas")
+        };
+        assert_eq!(
+            decoded.into_rgb8().as_raw(),
+            raw.as_raw(),
+            "PNG must be lossless"
+        );
+    }
+
+    #[test]
+    fn a_gray_canvas_encodes_a_single_channel_png() {
         let mut g = GrayImage::new(4, 4);
         for (i, px) in g.pixels_mut().enumerate() {
             px.0[0] = (i * 16) as u8;
         }
-        let png = encode_png(&g);
+        let png = encode_png(&Canvas::Gray(g));
         let color = image::load_from_memory(&png).expect("valid PNG").color();
         assert!(!color.has_color(), "PNG must be grayscale");
         let _ = Rgb([0u8, 0, 0]);
@@ -243,5 +307,17 @@ mod tests {
         // Smallest attempt is at the quality floor and the 50% size floor.
         assert_eq!(fit.quality, QUALITY_FLOOR);
         assert!(fit.width <= 200 && fit.height <= 200);
+    }
+
+    #[test]
+    fn a_color_image_stays_color_all_the_way_through_the_budget_loop() {
+        // Squeeze hard enough to drive both phases (quality, then dimensions):
+        // the output must still be a color JPEG, never a grayscaled one.
+        let fit = fit_to_budget(color_noise(400, 400), 82, 2_000);
+        let decoded = image::load_from_memory(&fit.data).expect("valid JPEG");
+        assert!(
+            decoded.color().has_color(),
+            "the budget loop must not grayscale a color panel's image"
+        );
     }
 }

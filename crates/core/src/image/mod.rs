@@ -17,6 +17,7 @@
 //! [`encode_rendered`], reusing the same classify/encode/budget path.
 
 mod autocontrast;
+mod canvas;
 mod classify;
 mod encode;
 mod resize;
@@ -27,7 +28,7 @@ use std::collections::HashMap;
 use std::io::Cursor;
 
 use image::metadata::Orientation;
-use image::{AnimationDecoder, DynamicImage, GrayImage, ImageDecoder, ImageFormat, ImageReader};
+use image::{AnimationDecoder, DynamicImage, ImageDecoder, ImageFormat, ImageReader};
 use kuchikiki::{NodeData, NodeRef};
 
 use crate::epub::model::normalize_href;
@@ -35,8 +36,10 @@ use crate::epub::relative_href;
 use crate::html::dom::{
     collect_by_name, element, get_attr, is_named, remove_attr, replace_with, set_attr,
 };
-use crate::profile::DeviceCaps;
+use crate::profile::{DeviceCaps, Panel};
 use crate::report::Warning;
+
+use canvas::Canvas;
 
 /// Whether an image is laid out inline (in the reading flow) or is the cover.
 /// The two get different fit targets and byte budgets.
@@ -198,7 +201,7 @@ pub fn process_image(
     warnings: &mut Vec<Warning>,
     path: &str,
 ) -> ImageOutcome {
-    let Some(prepared) = sniff_and_prepare(data, warnings, path) else {
+    let Some(prepared) = sniff_and_prepare(data, profile.panel, warnings, path) else {
         return ImageOutcome::Unchanged {
             reason: "unsupported or undecodable image".to_string(),
         };
@@ -217,7 +220,7 @@ pub(crate) fn process_for_convert(
     warnings: &mut Vec<Warning>,
     path: &str,
 ) -> PipelineResult {
-    let Some(prepared) = sniff_and_prepare(data, warnings, path) else {
+    let Some(prepared) = sniff_and_prepare(data, profile.panel, warnings, path) else {
         return PipelineResult::Single(ImageOutcome::Unchanged {
             reason: "unsupported or undecodable image".to_string(),
         });
@@ -257,9 +260,9 @@ pub(crate) enum PipelineResult {
     Split(Vec<split::Tile>),
 }
 
-/// A decoded, normalized grayscale image plus what we learned about it.
+/// A decoded, normalized image plus what we learned about it.
 struct Prepared {
-    gray: GrayImage,
+    canvas: Canvas,
     line_art: bool,
     in_w: u32,
     in_h: u32,
@@ -268,7 +271,12 @@ struct Prepared {
 
 /// Sniff, decode and normalize `data`, recording a warning and returning `None`
 /// if the format is unrecognized or the bytes cannot be decoded.
-fn sniff_and_prepare(data: &[u8], warnings: &mut Vec<Warning>, path: &str) -> Option<Prepared> {
+fn sniff_and_prepare(
+    data: &[u8],
+    panel: Panel,
+    warnings: &mut Vec<Warning>,
+    path: &str,
+) -> Option<Prepared> {
     let Some(format) = sniff(data) else {
         warnings.push(Warning {
             message: format!("could not identify {path} as a supported image; left it unchanged"),
@@ -286,7 +294,7 @@ fn sniff_and_prepare(data: &[u8], warnings: &mut Vec<Warning>, path: &str) -> Op
         });
     }
     match decode(format, data) {
-        Ok(img) => Some(prepare(img, format)),
+        Ok(img) => Some(prepare(img, format, panel)),
         Err(reason) => {
             warnings.push(Warning {
                 message: format!(
@@ -351,13 +359,13 @@ fn decode(format: InFormat, data: &[u8]) -> Result<DynamicImage, String> {
     Ok(img)
 }
 
-/// Flatten alpha onto white, convert to grayscale, classify, and (for photos)
-/// autocontrast.
-fn prepare(img: DynamicImage, format: InFormat) -> Prepared {
+/// Flatten alpha onto white, reduce to the panel's color space, classify, and
+/// (for photos on a grayscale panel) autocontrast.
+fn prepare(img: DynamicImage, format: InFormat, panel: Panel) -> Prepared {
     let (in_w, in_h) = (img.width(), img.height());
-    let (gray, line_art) = to_device_gray(img);
+    let (canvas, line_art) = to_device_canvas(img, panel);
     Prepared {
-        gray,
+        canvas,
         line_art,
         in_w,
         in_h,
@@ -365,23 +373,33 @@ fn prepare(img: DynamicImage, format: InFormat) -> Prepared {
     }
 }
 
-/// Composite alpha onto white, convert to grayscale, classify line-art-vs-photo,
-/// and contrast-stretch photos: the device-normalization every raster shares,
-/// whether decoded from a file or rendered from an SVG.
-fn to_device_gray(img: DynamicImage) -> (GrayImage, bool) {
-    let mut gray = to_gray_on_white(img);
-    let line_art = classify::classify(&gray) == classify::Kind::LineArt;
+/// Composite alpha onto white, reduce to the panel's color space, classify
+/// line-art-vs-photo, and contrast-stretch photos: the device-normalization
+/// every raster shares, whether decoded from a file or rendered from an SVG.
+///
+/// Classification always reasons about luminance, so a color image is
+/// classified through a gray view of itself and keeps its RGB pixels either
+/// way. The contrast stretch is grayscale-only: on a 4-level panel a flat
+/// mid-tone photo turns to mush without it, but stretching a color photo would
+/// shift its hues, and a color panel has the tonal range to not need it.
+fn to_device_canvas(img: DynamicImage, panel: Panel) -> (Canvas, bool) {
+    let flattened = flatten_alpha_onto_white(img);
+    let mut canvas = Canvas::from_flattened(flattened, panel.is_color());
+    let line_art = classify::classify(&canvas.to_luma()) == classify::Kind::LineArt;
     if !line_art {
-        autocontrast::autocontrast(&mut gray);
+        if let Canvas::Gray(gray) = &mut canvas {
+            autocontrast::autocontrast(gray);
+        }
     }
-    (gray, line_art)
+    (canvas, line_art)
 }
 
-/// Convert a decoded image to grayscale, compositing any alpha channel onto a
-/// white background first (matching how the device flattens PNG alpha).
-fn to_gray_on_white(img: DynamicImage) -> GrayImage {
+/// Composite any alpha channel onto a white background, matching how every
+/// target device flattens PNG alpha (Amazon states outright that Kindle does
+/// not support transparency at all).
+fn flatten_alpha_onto_white(img: DynamicImage) -> DynamicImage {
     if !img.color().has_alpha() {
-        return img.into_luma8();
+        return img;
     }
     let mut rgba = img.into_rgba8();
     for px in rgba.pixels_mut() {
@@ -392,7 +410,7 @@ fn to_gray_on_white(img: DynamicImage) -> GrayImage {
         }
         px.0[3] = 255;
     }
-    DynamicImage::ImageRgba8(rgba).into_luma8()
+    DynamicImage::ImageRgba8(rgba)
 }
 
 /// Fit, encode and budget-check a prepared image for its role, producing the
@@ -407,7 +425,7 @@ fn finish(
     path: &str,
 ) -> ImageOutcome {
     let enc = encode_prepared(
-        &prepared.gray,
+        &prepared.canvas,
         prepared.line_art,
         role,
         profile,
@@ -443,11 +461,12 @@ pub(crate) struct Encoded {
     pub quality: Option<u8>,
 }
 
-/// Fit a grayscale image to its role's target, then encode it within the byte
-/// budget: a lossless PNG for line art (falling back to a higher-quality JPEG
-/// only if the PNG blows the budget), a baseline grayscale JPEG for photos.
+/// Fit an image to its role's target, then encode it within the byte budget: a
+/// lossless PNG for line art (falling back to a higher-quality JPEG only if the
+/// PNG blows the budget), a baseline JPEG for photos. The canvas's color space
+/// carries through: a color panel gets RGB out, a grayscale panel gets luma.
 fn encode_prepared(
-    gray: &GrayImage,
+    canvas: &Canvas,
     line_art: bool,
     role: ImageRole,
     profile: &DeviceCaps,
@@ -464,7 +483,7 @@ fn encode_prepared(
         ImageRole::Inline => (profile.inline_max, profile.inline_budget_bytes, quality),
     };
 
-    let fitted = resize::fit(gray, target.0, target.1);
+    let fitted = resize::fit(canvas, target.0, target.1);
     let (fw, fh) = fitted.dimensions();
 
     if line_art {
@@ -533,11 +552,14 @@ pub(crate) fn encode_rendered(
     warnings: &mut Vec<Warning>,
     path: &str,
 ) -> Encoded {
-    let (gray, line_art) = match hint {
-        RenderHint::Auto => to_device_gray(img),
-        RenderHint::LineArt => (to_gray_on_white(img), true),
+    let (canvas, line_art) = match hint {
+        RenderHint::Auto => to_device_canvas(img, profile.panel),
+        RenderHint::LineArt => (
+            Canvas::from_flattened(flatten_alpha_onto_white(img), profile.panel.is_color()),
+            true,
+        ),
     };
-    encode_prepared(&gray, line_art, role, profile, quality, warnings, path)
+    encode_prepared(&canvas, line_art, role, profile, quality, warnings, path)
 }
 
 fn warn_if_over_budget(

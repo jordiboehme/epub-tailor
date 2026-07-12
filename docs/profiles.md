@@ -13,8 +13,11 @@ baseline (the built-in `epub` profile):
 - **`features`**: merged per key. A layer that sets `"strip_fonts": false` changes only that switch.
 - **`filters`**: concatenated in composition order and applied in that order.
 
-Built-in names (`epub`, `default`, `x4`, `x3`) are case-insensitive. Anything
-containing a path separator or ending in `.json` is loaded from disk.
+Built-in names are case-insensitive: `epub` (alias `default`), `x4`, `x3`,
+`nomad`, `kindle`, `kindle-paperwhite`, `kindle-colorsoft`, `kindle-scribe`,
+`kindle-scribe-colorsoft`, `tolino-shine`, `tolino-shine-color`,
+`tolino-vision-color` and `tolino-epos-3`. Anything containing a path separator
+or ending in `.json` is loaded from disk. `epub-tailor profiles` lists them;
 `epub-tailor profiles <spec>...` prints the resolved composition.
 
 CLI flags (`--quality`, `--tables`, `--split-tall-images`,
@@ -30,7 +33,7 @@ leave the profile values untouched.
 
   "device": {
     "screen": { "width": 480, "height": 800, "ppi": 220 },
-    "gray_levels": 4,
+    "panel": "gray4",
     "images": {
       "max_source_px": [2048, 1536],
       "inline_max": [480, 730],
@@ -83,7 +86,7 @@ feature switched off never reads the cap.
 |---|---|
 | `screen.width` / `screen.height` | Screen geometry in pixels. |
 | `screen.ppi` | Pixel density, informational. |
-| `gray_levels` | Grayscale levels the panel shows; drives contrast stretching. |
+| `panel` | What the panel paints: `"gray4"`, `"gray16"` or `"color"`. See below. |
 | `images.max_source_px` | `[w, h]` decode hard cap; larger source images abort decoding on device. |
 | `images.inline_max` | `[w, h]` box an inline image is fitted into (no upscaling). |
 | `images.cover_max` | `[w, h]` box the cover is fitted into. |
@@ -92,6 +95,26 @@ feature switched off never reads the cap.
 | `css.max_file_kb` | Cap on bytes the device reads from a single CSS file; larger sheets split. |
 | `css.max_rules` | Book-wide CSS rule cap; exceeding it warns. |
 
+### `panel`
+
+One value carries both facts the image pipeline needs, because they are not
+independent - a Kaleido panel renders 4096 colors *and* 16 grays, so a single
+attribute keeps a profile from claiming a combination no panel has.
+
+| Value | Panel | Images become |
+|---|---|---|
+| `"gray4"` | 2-bit grayscale (Xteink/CrossPoint, Bayer-dithered) | 8-bit luma |
+| `"gray16"` | 4-bit grayscale (E Ink Carta and friends) | 8-bit luma |
+| `"color"` | Color (E Ink Kaleido 3) | RGB, kept through fitting, budgeting and encoding |
+
+This is the one cap that destroys content when it is wrong: mark a color device
+grayscale and `transcode_images` will grayscale its images with no warning.
+Alpha is composited onto white for every panel - no target device renders
+transparency, and Amazon says so outright.
+
+The baseline is `"color"`, so a profile that never mentions `panel` never loses
+color. A grayscale device opts in.
+
 ## `features` - the transform switches
 
 Every switch maps to exactly one pipeline step. The `epub` profile has only
@@ -99,6 +122,18 @@ Every switch maps to exactly one pipeline step. The `epub` profile has only
 `x4`/`x3` have everything on. Archive repair - META-INF cleanup, OPF/nav/NCX
 regeneration, strict XHTML re-serialization - is unconditional and has no
 switch.
+
+**Most of these switches exist to work around CrossPoint firmware defects, and
+turning them on for a capable reader damages the book.** `filter_css` reduces a
+stylesheet to CrossPoint's ~12-property grammar; a Kindle honors `@font-face`,
+floats, borders and positioning, and a Kobo-based tolino honors the publisher
+stylesheet too. `linearize_tables` flattens a table into labelled paragraphs;
+Kindle and Kobo render real tables. `preserve_code_blocks` rebuilds code with
+`<br/>` and `&nbsp;`; Kindle has a real monospaced font for `<pre>`/`<code>`.
+So the `nomad`, `kindle-*` and `tolino-*` profiles keep only what genuinely
+helps on a capable device: repair, image fitting to the panel, and SVG
+rasterization. See `docs/device-constraints.md` and `research/` for the
+per-device evidence behind each switch.
 
 | Switch | What it enables |
 |---|---|

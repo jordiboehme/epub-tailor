@@ -1,0 +1,36 @@
+{
+  "name": "tolino-shine",
+  "description": "tolino shine 5th gen, 6in Carta 1300 mono (Kobo-based firmware)",
+  "device": {
+    "screen": { "width": 1072, "height": 1448, "ppi": 300 },
+    "panel": "gray16",
+    "images": {
+      "max_source_px": [2000, 2000],
+      "inline_max": [1072, 1448],
+      "cover_max": [1072, 1448],
+      "inline_budget_kb": 400,
+      "cover_budget_kb": 800
+    }
+  },
+  "features": {
+    "strip_fonts": false,
+    "filter_css": false,
+    "relocate_styles": false,
+    "transcode_images": true,
+    "rasterize_svg": true,
+    "linearize_tables": false,
+    "degrade_boxes": false,
+    "bake_ordered_lists": false,
+    "preserve_code_blocks": false,
+    "normalize_footnotes": false,
+    "relocate_anchors": false,
+    "dedupe_ids": true,
+    "unicode_hygiene": true,
+    "chapter_split": true
+  },
+  "options": {
+    "jpeg_quality": 85,
+    "max_chapter_kb": 500
+  },
+  "output": { "appendix": "tolino-shine" }
+}

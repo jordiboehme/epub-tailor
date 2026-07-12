@@ -4,12 +4,22 @@
 //! A profile bundles device capability numbers ([`DeviceCaps`]), per-transform
 //! switches ([`Features`]), tunables (JPEG quality, table mode, chapter split
 //! size), an output filename appendix and content filter rules
-//! ([`crate::filter::FilterRule`]). Three built-ins ship embedded: `epub`
-//! (alias `default`, pure repair), `x4` and `x3` (full device conversions for
-//! the Xteink readers running CrossPoint firmware). They live as real JSON
-//! files under `crates/core/profiles/` so the file format and the code can
-//! never drift apart - tests resolve them through the same parser user
-//! profiles go through.
+//! ([`crate::filter::FilterRule`]).
+//!
+//! The built-ins ship embedded: `epub` (alias `default`, pure repair),
+//! `x4`/`x3` (full device conversions for the Xteink readers running CrossPoint
+//! firmware), and one per researched device - `nomad`, the `kindle-*` family
+//! and the `tolino-*` family. They live as real JSON files under
+//! `crates/core/profiles/` so the file format and the code can never drift
+//! apart - tests resolve them through the same parser user profiles go through.
+//!
+//! The CrossPoint transforms are a poor fit for a capable reader: `filter_css`
+//! filters down to CrossPoint's ~12-property grammar, and `linearize_tables`,
+//! `bake_ordered_lists` and `preserve_code_blocks` work around defects a Kindle
+//! or a Kobo-based reader does not have. The newer device profiles therefore
+//! switch those off and keep what genuinely helps: repair, image fitting to the
+//! panel and SVG rasterization. See `docs/device-constraints.md` for the
+//! per-device evidence.
 //!
 //! [`resolve`] composes any number of profile layers left to right: scalar
 //! settings later-wins per leaf, `features` merge per key and `filters`
@@ -18,7 +28,7 @@
 pub mod caps;
 pub mod features;
 
-pub use caps::DeviceCaps;
+pub use caps::{DeviceCaps, Panel};
 pub use features::Features;
 
 use serde::{Deserialize, Serialize};
@@ -34,6 +44,35 @@ pub const DEFAULT_APPENDIX: &str = "tailored";
 const EPUB_JSON: &str = include_str!("../../profiles/epub.json");
 const X4_JSON: &str = include_str!("../../profiles/x4.json");
 const X3_JSON: &str = include_str!("../../profiles/x3.json");
+const NOMAD_JSON: &str = include_str!("../../profiles/nomad.json");
+const KINDLE_JSON: &str = include_str!("../../profiles/kindle.json");
+const KINDLE_PAPERWHITE_JSON: &str = include_str!("../../profiles/kindle-paperwhite.json");
+const KINDLE_COLORSOFT_JSON: &str = include_str!("../../profiles/kindle-colorsoft.json");
+const KINDLE_SCRIBE_JSON: &str = include_str!("../../profiles/kindle-scribe.json");
+const KINDLE_SCRIBE_COLORSOFT_JSON: &str =
+    include_str!("../../profiles/kindle-scribe-colorsoft.json");
+const TOLINO_SHINE_JSON: &str = include_str!("../../profiles/tolino-shine.json");
+const TOLINO_SHINE_COLOR_JSON: &str = include_str!("../../profiles/tolino-shine-color.json");
+const TOLINO_VISION_COLOR_JSON: &str = include_str!("../../profiles/tolino-vision-color.json");
+const TOLINO_EPOS_3_JSON: &str = include_str!("../../profiles/tolino-epos-3.json");
+
+/// Every built-in profile, in listing order: the device-neutral baseline first,
+/// then one entry per device we have researched firmware behavior for.
+const BUILTINS: &[(&str, &str)] = &[
+    ("epub", EPUB_JSON),
+    ("x4", X4_JSON),
+    ("x3", X3_JSON),
+    ("nomad", NOMAD_JSON),
+    ("kindle", KINDLE_JSON),
+    ("kindle-paperwhite", KINDLE_PAPERWHITE_JSON),
+    ("kindle-colorsoft", KINDLE_COLORSOFT_JSON),
+    ("kindle-scribe", KINDLE_SCRIBE_JSON),
+    ("kindle-scribe-colorsoft", KINDLE_SCRIBE_COLORSOFT_JSON),
+    ("tolino-shine", TOLINO_SHINE_JSON),
+    ("tolino-shine-color", TOLINO_SHINE_COLOR_JSON),
+    ("tolino-vision-color", TOLINO_VISION_COLOR_JSON),
+    ("tolino-epos-3", TOLINO_EPOS_3_JSON),
+];
 
 /// A fully resolved profile: the composition of one or more layers over the
 /// repair-only baseline.
@@ -79,8 +118,8 @@ impl Profile {
 #[derive(Debug, thiserror::Error)]
 pub enum ProfileError {
     /// The spec is neither a built-in name nor a readable path.
-    #[error("unknown profile '{0}' (built-ins: epub, x4, x3; or pass a path to a .json file)")]
-    Unknown(String),
+    #[error("unknown profile '{spec}' (built-ins: {}; or pass a path to a .json file)", builtin_names().join(", "))]
+    Unknown { spec: String },
     /// A profile file could not be read from disk.
     #[error("cannot read profile {path}: {source}")]
     Io {
@@ -115,7 +154,7 @@ struct RawProfile {
 #[serde(deny_unknown_fields)]
 struct RawDevice {
     screen: Option<RawScreen>,
-    gray_levels: Option<u8>,
+    panel: Option<Panel>,
     images: Option<RawImages>,
     css: Option<RawCss>,
 }
@@ -176,12 +215,17 @@ pub fn resolve(specs: &[String]) -> Result<Profile, ProfileError> {
     Ok(profile)
 }
 
-/// The three built-in profiles, fully resolved: `epub`, `x4`, `x3`.
+/// Every built-in profile, fully resolved, in listing order.
 pub fn builtins() -> Vec<Profile> {
-    ["epub", "x4", "x3"]
+    BUILTINS
         .iter()
-        .map(|name| resolve(&[name.to_string()]).expect("built-in profiles must resolve"))
+        .map(|(name, _)| resolve(&[name.to_string()]).expect("built-in profiles must resolve"))
         .collect()
+}
+
+/// The built-in profile names, in listing order.
+pub fn builtin_names() -> Vec<&'static str> {
+    BUILTINS.iter().map(|(name, _)| *name).collect()
 }
 
 /// The repair-only baseline every resolution starts from: the built-in `epub`
@@ -208,19 +252,21 @@ fn base_profile() -> Profile {
 /// file. Anything containing a path separator or ending in `.json` is treated
 /// as a path.
 fn load_raw(spec: &str) -> Result<RawProfile, ProfileError> {
-    let builtin = match spec.to_ascii_lowercase().as_str() {
-        "epub" | "default" => Some(EPUB_JSON),
-        "x4" => Some(X4_JSON),
-        "x3" => Some(X3_JSON),
-        _ => None,
-    };
+    let lower = spec.to_ascii_lowercase();
+    let name = if lower == "default" { "epub" } else { &lower };
+    let builtin = BUILTINS
+        .iter()
+        .find(|(builtin, _)| *builtin == name)
+        .map(|(_, json)| *json);
     if let Some(json) = builtin {
         return parse_raw(json, spec);
     }
     let looks_like_path =
         spec.contains('/') || spec.contains('\\') || spec.to_ascii_lowercase().ends_with(".json");
     if !looks_like_path {
-        return Err(ProfileError::Unknown(spec.to_string()));
+        return Err(ProfileError::Unknown {
+            spec: spec.to_string(),
+        });
     }
     let text = std::fs::read_to_string(spec).map_err(|source| ProfileError::Io {
         path: spec.to_string(),
@@ -257,8 +303,8 @@ fn apply_layer(profile: &mut Profile, raw: RawProfile) {
                 profile.caps.ppi = ppi;
             }
         }
-        if let Some(gray_levels) = device.gray_levels {
-            profile.caps.gray_levels = gray_levels;
+        if let Some(panel) = device.panel {
+            profile.caps.panel = panel;
         }
         if let Some(images) = device.images {
             if let Some(max_source_px) = images.max_source_px {

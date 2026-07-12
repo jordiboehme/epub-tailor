@@ -1,0 +1,35 @@
+{
+  "name": "nomad",
+  "description": "Supernote A6X2 Nomad running Chauvet (Ratta)",
+  "device": {
+    "screen": { "width": 1404, "height": 1872, "ppi": 300 },
+    "panel": "gray16",
+    "images": {
+      "max_source_px": [4096, 4096],
+      "inline_max": [1404, 1872],
+      "cover_max": [1404, 1872],
+      "inline_budget_kb": 400,
+      "cover_budget_kb": 600
+    }
+  },
+  "features": {
+    "strip_fonts": false,
+    "filter_css": false,
+    "relocate_styles": false,
+    "transcode_images": true,
+    "rasterize_svg": true,
+    "linearize_tables": false,
+    "degrade_boxes": false,
+    "bake_ordered_lists": false,
+    "preserve_code_blocks": false,
+    "normalize_footnotes": false,
+    "relocate_anchors": false,
+    "dedupe_ids": true,
+    "unicode_hygiene": true,
+    "chapter_split": false
+  },
+  "options": {
+    "jpeg_quality": 85
+  },
+  "output": { "appendix": "nomad" }
+}

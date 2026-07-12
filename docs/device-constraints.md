@@ -1,6 +1,14 @@
 # Device Constraints - Ground Truth
 
-This is the spec `crosspoint-core` targets. Every transform in the pipeline exists because of a line in this file. Sources: CrossPoint firmware source (develop @ `4b34a576eb`, 2026-07-10) - full citations in [`research/crosspoint-reader-epub-support.md`](../research/crosspoint-reader-epub-support.md).
+Every transform in the pipeline exists because of a line in this file.
+
+**The bulk of this document describes the Xteink readers running CrossPoint firmware**, whose renderer is a microcontroller-class HTML/CSS subset engine. That is what `x4` and `x3` target, and it is why the pipeline has transforms as aggressive as table linearization and CSS subsetting. Sources: CrossPoint firmware source (develop @ `4b34a576eb`, 2026-07-10) - full citations in [`research/crosspoint-reader-epub-support.md`](../research/crosspoint-reader-epub-support.md).
+
+**Every other device we ship a profile for is far more capable**, and turning the CrossPoint transforms on for them would damage the book. Their constraints, and the evidence behind each profile's switches, live in:
+
+- [`research/supernote-a6x2-nomad.md`](../research/supernote-a6x2-nomad.md) - Supernote Nomad (`nomad`)
+- [`research/kindle-epub-ingestion.md`](../research/kindle-epub-ingestion.md) - the Kindle family (`kindle*`); note a Kindle cannot open an EPUB at all, so the profile targets Amazon's Send-to-Kindle converter
+- [`research/tolino-readers.md`](../research/tolino-readers.md) - the tolino family (`tolino-*`); the current models run Kobo firmware, the epos 3 does not
 
 ## Device profiles
 
@@ -8,7 +16,7 @@ This is the spec `crosspoint-core` targets. Every transform in the pipeline exis
 |---|---|---|
 | Screen (portrait) | 480×800 | 528×792 |
 | PPI | ~220 | ~220 |
-| Gray levels (images) | 4 (2-bit, Bayer-dithered) | 4 |
+| Panel | `gray4` (2-bit, Bayer-dithered) | `gray4` |
 | CPU / RAM | ESP32-C3, ~380-400KB usable SRAM | same |
 
 Inline image target: fit 480×730 (X4 usable reading area), never upscale. Cover: 480×800. Community size budgets: inline <100KB, cover <127KB.

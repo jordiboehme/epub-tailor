@@ -1,0 +1,36 @@
+{
+  "name": "kindle-colorsoft",
+  "description": "Kindle Colorsoft / Signature, 7in Kaleido 3 - via Send to Kindle",
+  "device": {
+    "screen": { "width": 1264, "height": 1680, "ppi": 300 },
+    "panel": "color",
+    "images": {
+      "max_source_px": [4096, 4096],
+      "inline_max": [1264, 1680],
+      "cover_max": [1264, 1680],
+      "inline_budget_kb": 700,
+      "cover_budget_kb": 1400
+    }
+  },
+  "features": {
+    "strip_fonts": false,
+    "filter_css": false,
+    "relocate_styles": false,
+    "transcode_images": true,
+    "rasterize_svg": true,
+    "linearize_tables": false,
+    "degrade_boxes": false,
+    "bake_ordered_lists": false,
+    "preserve_code_blocks": false,
+    "normalize_footnotes": false,
+    "relocate_anchors": false,
+    "dedupe_ids": true,
+    "unicode_hygiene": true,
+    "chapter_split": true
+  },
+  "options": {
+    "jpeg_quality": 85,
+    "max_chapter_kb": 20480
+  },
+  "output": { "appendix": "kindle-colorsoft" }
+}

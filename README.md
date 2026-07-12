@@ -81,13 +81,28 @@ epub-tailor check book.epub --profile x4
 
 ## Profiles
 
-A profile is a JSON file bundling device capabilities, feature switches, tunables, an output filename appendix and content filter rules. Three ship built in:
+A profile is a JSON file bundling device capabilities, feature switches, tunables, an output filename appendix and content filter rules. Thirteen ship built in:
 
-| Name   | Screen  | Output           | What it is |
-|--------|---------|------------------|------------|
-| `epub` | -       | `.tailored.epub` | The default: repair and cleanup only, everything the EPUB standard allows stays. |
-| `x4`   | 480x800 | `.x4.epub`       | Xteink X4 running CrossPoint firmware, the full conversion. |
-| `x3`   | 528x792 | `.x3.epub`       | Xteink X3, same treatment with its own geometry. |
+| Name   | Screen  | Panel | What it is |
+|--------|---------|-------|------------|
+| `epub` | -       | -      | The default: repair and cleanup only, everything the EPUB standard allows stays. |
+| `x4`   | 480x800 | gray4  | Xteink X4 running CrossPoint firmware, the full conversion. |
+| `x3`   | 528x792 | gray4  | Xteink X3, same treatment with its own geometry. |
+| `nomad` | 1404x1872 | gray16 | Supernote A6X2 Nomad running Chauvet. |
+| `kindle` | 1072x1448 | gray16 | Kindle 11th gen (2024). |
+| `kindle-paperwhite` | 1264x1680 | gray16 | Kindle Paperwhite 12th gen / Signature. |
+| `kindle-colorsoft` | 1264x1680 | color | Kindle Colorsoft / Signature, Kaleido 3. |
+| `kindle-scribe` | 1980x2640 | gray16 | Kindle Scribe 3rd gen (2025), 11in. |
+| `kindle-scribe-colorsoft` | 1980x2640 | color | Kindle Scribe Colorsoft (2025), Kaleido 3. |
+| `tolino-shine` | 1072x1448 | gray16 | tolino shine 5th gen. |
+| `tolino-shine-color` | 1072x1448 | color | tolino shine color, Kaleido 3. |
+| `tolino-vision-color` | 1264x1680 | color | tolino vision color, Kaleido 3. |
+| `tolino-epos-3` | 1440x1920 | gray16 | tolino epos 3 (the older Android platform). |
+
+Each output lands as `book.<profile>.epub`. Two things worth knowing about the device profiles:
+
+- **A Kindle cannot open an EPUB at all.** It ingests one through Send to Kindle, which converts it server side. So the `kindle-*` profiles tailor a book to survive Amazon's converter, not to drive a renderer.
+- **Only the Xteink readers get the full conversion.** Every other device here has a real HTML renderer, so the aggressive transforms (CSS subsetting, table linearization, code-block rebuilding) stay off - they would damage the book. What those profiles do is repair it, fit its images to the panel and rasterize its SVG. The reasoning, device by device, is in [`research/`](research/).
 
 `--profile` repeats and composes left to right: scalar settings later-wins, feature switches merge per key and filter rules concatenate. `epub-tailor profiles` lists the built-ins; `epub-tailor profiles x4 ./mine.json` prints the fully resolved composition as JSON, which is the fastest way to see what a stack actually does.
 
@@ -115,7 +130,7 @@ Start from a built-in (`epub-tailor profiles x4` prints one) and adjust. Every f
   "name": "my-reader",
   "device": {
     "screen": { "width": 600, "height": 800, "ppi": 213 },
-    "gray_levels": 16,
+    "panel": "gray16",
     "images": { "inline_max": [600, 730], "cover_max": [600, 800], "inline_budget_kb": 150, "cover_budget_kb": 200 },
     "css": { "max_file_kb": 256, "max_rules": 4000 }
   },
@@ -123,6 +138,8 @@ Start from a built-in (`epub-tailor profiles x4` prints one) and adjust. Every f
   "output": { "appendix": "my-reader" }
 }
 ```
+
+`panel` is the one to get right: `"gray4"`, `"gray16"` or `"color"`. It says what the screen can actually paint, and it is what stops a color e-reader having its images quietly grayscaled. Leave it out and color is kept.
 
 The full schema, every feature switch and the composition rules are documented in [`docs/profiles.md`](docs/profiles.md).
 

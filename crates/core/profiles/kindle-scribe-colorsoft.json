@@ -1,0 +1,36 @@
+{
+  "name": "kindle-scribe-colorsoft",
+  "description": "Kindle Scribe Colorsoft (2025), 11in Kaleido 3 - via Send to Kindle",
+  "device": {
+    "screen": { "width": 1980, "height": 2640, "ppi": 300 },
+    "panel": "color",
+    "images": {
+      "max_source_px": [4096, 4096],
+      "inline_max": [1980, 2640],
+      "cover_max": [1980, 2640],
+      "inline_budget_kb": 1000,
+      "cover_budget_kb": 2000
+    }
+  },
+  "features": {
+    "strip_fonts": false,
+    "filter_css": false,
+    "relocate_styles": false,
+    "transcode_images": true,
+    "rasterize_svg": true,
+    "linearize_tables": false,
+    "degrade_boxes": false,
+    "bake_ordered_lists": false,
+    "preserve_code_blocks": false,
+    "normalize_footnotes": false,
+    "relocate_anchors": false,
+    "dedupe_ids": true,
+    "unicode_hygiene": true,
+    "chapter_split": true
+  },
+  "options": {
+    "jpeg_quality": 85,
+    "max_chapter_kb": 20480
+  },
+  "output": { "appendix": "kindle-scribe-colorsoft" }
+}

@@ -3,7 +3,7 @@
 
 use epub_tailor_core::TableMode;
 use epub_tailor_core::filter::{FilterAction, FilterRule};
-use epub_tailor_core::profile::{DeviceCaps, Features, Profile, builtins, resolve};
+use epub_tailor_core::profile::{DeviceCaps, Features, Panel, Profile, builtins, resolve};
 
 fn temp_profile(name: &str, json: &str) -> std::path::PathBuf {
     let dir = std::env::temp_dir().join(format!("epub-tailor-profiles-{}", std::process::id()));
@@ -38,7 +38,7 @@ fn x4_caps_pin_the_documented_firmware_limits() {
     assert_eq!(caps.screen_w, 480);
     assert_eq!(caps.screen_h, 800);
     assert_eq!(caps.ppi, 220);
-    assert_eq!(caps.gray_levels, 4);
+    assert_eq!(caps.panel, Panel::Gray4);
     assert_eq!(caps.max_src_px, (2048, 1536));
     assert_eq!(caps.inline_max, (480, 730));
     assert_eq!(caps.cover_max, (480, 800));
@@ -106,9 +106,112 @@ fn unknown_builtin_name_errors_listing_builtins() {
 }
 
 #[test]
-fn builtins_lists_the_three_shipped_profiles() {
+fn builtins_lists_every_shipped_profile() {
     let names: Vec<String> = builtins().into_iter().map(|p| p.name).collect();
-    assert_eq!(names, vec!["epub", "x4", "x3"]);
+    assert_eq!(
+        names,
+        vec![
+            "epub",
+            "x4",
+            "x3",
+            "nomad",
+            "kindle",
+            "kindle-paperwhite",
+            "kindle-colorsoft",
+            "kindle-scribe",
+            "kindle-scribe-colorsoft",
+            "tolino-shine",
+            "tolino-shine-color",
+            "tolino-vision-color",
+            "tolino-epos-3",
+        ]
+    );
+}
+
+#[test]
+fn every_builtin_names_itself_and_its_own_appendix() {
+    // A copy-paste slip between the ten device profiles would otherwise write
+    // the wrong filename or resolve under the wrong name, silently.
+    for profile in builtins() {
+        let resolved = resolve_specs(&[&profile.name]).expect("built-in resolves by its own name");
+        assert_eq!(resolved.name, profile.name);
+        if profile.name != "epub" {
+            assert_eq!(
+                resolved.appendix.as_deref(),
+                Some(profile.name.as_str()),
+                "{} should write .{}.epub",
+                profile.name,
+                profile.name
+            );
+        }
+    }
+}
+
+#[test]
+fn the_color_devices_keep_their_color_and_the_rest_do_not() {
+    // The one cap that silently destroys content if it is wrong: a color panel
+    // marked grayscale gets its images grayscaled, with no warning.
+    for name in [
+        "kindle-colorsoft",
+        "kindle-scribe-colorsoft",
+        "tolino-shine-color",
+        "tolino-vision-color",
+    ] {
+        let p = resolve_specs(&[name]).expect("resolves");
+        assert_eq!(p.caps.panel, Panel::Color, "{name} is a Kaleido 3 device");
+        assert!(p.features.transcode_images, "{name} should tailor images");
+    }
+    for name in [
+        "x4",
+        "x3",
+        "nomad",
+        "kindle",
+        "kindle-paperwhite",
+        "kindle-scribe",
+        "tolino-shine",
+        "tolino-epos-3",
+    ] {
+        let p = resolve_specs(&[name]).expect("resolves");
+        assert!(!p.caps.panel.is_color(), "{name} has a grayscale panel");
+    }
+}
+
+#[test]
+fn a_capable_reader_never_gets_the_crosspoint_downgrades() {
+    // These transforms exist to work around CrossPoint firmware defects. On a
+    // Kindle (real tables, real monospace, a large CSS subset) or a Kobo-based
+    // tolino they would damage the book, so every non-Xteink profile must have
+    // them off.
+    for name in [
+        "nomad",
+        "kindle",
+        "kindle-paperwhite",
+        "kindle-colorsoft",
+        "kindle-scribe",
+        "kindle-scribe-colorsoft",
+        "tolino-shine",
+        "tolino-shine-color",
+        "tolino-vision-color",
+        "tolino-epos-3",
+    ] {
+        let f = resolve_specs(&[name]).expect("resolves").features;
+        assert!(!f.filter_css, "{name}: CrossPoint's CSS grammar is not its");
+        assert!(!f.linearize_tables, "{name} renders real tables");
+        assert!(!f.bake_ordered_lists, "{name} numbers its own lists");
+        assert!(!f.preserve_code_blocks, "{name} has real <pre> handling");
+        assert!(!f.degrade_boxes, "{name} handles figures and asides");
+        assert!(
+            !f.relocate_anchors,
+            "{name} resolves ids on inline elements"
+        );
+        // What every device profile does want.
+        assert!(f.transcode_images, "{name} should fit images to its panel");
+        assert!(f.rasterize_svg, "{name} should not gamble on SVG support");
+        assert!(
+            f.dedupe_ids && f.unicode_hygiene,
+            "{name} still gets repair"
+        );
+    }
 }
 
 #[test]

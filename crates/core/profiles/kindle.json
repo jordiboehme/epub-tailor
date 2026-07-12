@@ -1,0 +1,36 @@
+{
+  "name": "kindle",
+  "description": "Kindle 11th gen (2024), 6in - via Send to Kindle",
+  "device": {
+    "screen": { "width": 1072, "height": 1448, "ppi": 300 },
+    "panel": "gray16",
+    "images": {
+      "max_source_px": [4096, 4096],
+      "inline_max": [1072, 1448],
+      "cover_max": [1072, 1448],
+      "inline_budget_kb": 500,
+      "cover_budget_kb": 1000
+    }
+  },
+  "features": {
+    "strip_fonts": false,
+    "filter_css": false,
+    "relocate_styles": false,
+    "transcode_images": true,
+    "rasterize_svg": true,
+    "linearize_tables": false,
+    "degrade_boxes": false,
+    "bake_ordered_lists": false,
+    "preserve_code_blocks": false,
+    "normalize_footnotes": false,
+    "relocate_anchors": false,
+    "dedupe_ids": true,
+    "unicode_hygiene": true,
+    "chapter_split": true
+  },
+  "options": {
+    "jpeg_quality": 85,
+    "max_chapter_kb": 20480
+  },
+  "output": { "appendix": "kindle" }
+}

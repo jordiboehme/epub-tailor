@@ -4,7 +4,7 @@
 //! width and it becomes taller than the device can show at a usable size, so we
 //! slice it into page-height tiles with a 10% overlap between consecutive tiles
 //! (so a line split across a boundary is readable on both pages). Each tile is
-//! encoded as its own baseline grayscale JPEG.
+//! encoded as its own baseline JPEG, in the panel's own color space.
 
 use image::imageops::FilterType;
 
@@ -12,7 +12,8 @@ use super::{Prepared, encode};
 use crate::profile::DeviceCaps;
 use crate::report::Warning;
 
-/// One page tile of a split image: its encoded baseline-grayscale-JPEG bytes.
+/// One page tile of a split image: its encoded baseline-JPEG bytes, in the
+/// panel's own color space.
 pub(crate) struct Tile {
     pub data: Vec<u8>,
 }
@@ -39,7 +40,7 @@ pub(super) fn run(
     warnings: &mut Vec<Warning>,
     path: &str,
 ) -> Outcome {
-    let (w0, h0) = prepared.gray.dimensions();
+    let (w0, h0) = prepared.canvas.dimensions();
     let max_w = profile.inline_max.0;
     let tile_h = profile.screen_h;
 
@@ -55,9 +56,11 @@ pub(super) fn run(
 
     // Now actually fit to width (downscale only).
     let fitted = if w0 > max_w {
-        image::imageops::resize(&prepared.gray, max_w, fitted_h, FilterType::Lanczos3)
+        prepared
+            .canvas
+            .resize(max_w, fitted_h, FilterType::Lanczos3)
     } else {
-        prepared.gray
+        prepared.canvas
     };
     let (fw, fh) = fitted.dimensions();
 
@@ -69,7 +72,7 @@ pub(super) fn run(
     let mut top = 0u32;
     loop {
         let bottom = (top + tile_h).min(fh);
-        let tile = image::imageops::crop_imm(&fitted, 0, top, fw, bottom - top).to_image();
+        let tile = fitted.crop(0, top, fw, bottom - top);
         let fit = encode::fit_to_budget(tile, quality, budget);
         if fit.over_budget {
             warnings.push(Warning {
@@ -92,6 +95,7 @@ pub(super) fn run(
 
 #[cfg(test)]
 mod tests {
+    use super::super::canvas::Canvas;
     use super::*;
     use image::GrayImage;
 
@@ -101,8 +105,12 @@ mod tests {
         for (_x, y, px) in gray.enumerate_pixels_mut() {
             px.0[0] = ((y * 255) / h.max(1)) as u8;
         }
+        prepared_from(Canvas::Gray(gray), w, h)
+    }
+
+    fn prepared_from(canvas: Canvas, w: u32, h: u32) -> Prepared {
         Prepared {
-            gray,
+            canvas,
             line_art: false,
             in_w: w,
             in_h: h,
@@ -169,5 +177,34 @@ mod tests {
                 .iter()
                 .all(|t| image::load_from_memory(&t.data).unwrap().width() == 480)
         );
+    }
+
+    #[test]
+    fn tiles_of_a_color_image_stay_color() {
+        // A color panel splitting a tall comic strip must not get gray tiles.
+        let mut rgb = image::RgbImage::new(600, 4000);
+        for (_x, y, px) in rgb.enumerate_pixels_mut() {
+            *px = image::Rgb([200, ((y * 255) / 4000) as u8, 40]);
+        }
+        let profile = DeviceCaps {
+            panel: crate::profile::Panel::Color,
+            ..DeviceCaps::x4()
+        };
+        let mut warnings = Vec::new();
+        let outcome = run(
+            prepared_from(Canvas::Rgb(rgb), 600, 4000),
+            &profile,
+            82,
+            &mut warnings,
+            "c.png",
+        );
+        let Outcome::Tiles(tiles) = outcome else {
+            panic!("a 600x4000 image should split");
+        };
+        assert!(!tiles.is_empty());
+        for tile in &tiles {
+            let decoded = image::load_from_memory(&tile.data).expect("valid JPEG");
+            assert!(decoded.color().has_color(), "tiles must stay color");
+        }
     }
 }
