@@ -35,6 +35,10 @@ enum Command {
     Fit {
         /// Path to the source EPUB.
         input: PathBuf,
+        /// Replace the original file in place instead of writing a copy.
+        /// Lets. Get. Dangerous.
+        #[arg(long, conflicts_with = "output")]
+        lets_get_dangerous: bool,
         #[command(flatten)]
         common: CommonArgs,
     },
@@ -80,7 +84,7 @@ struct CommonArgs {
     #[arg(long = "profile", value_name = "NAME|PATH")]
     profiles: Vec<String>,
 
-    /// JPEG quality: `low` (70), `std` (82), `high` (90), or a raw number
+    /// JPEG quality: `low` (70), `std` (82), `high` (90) or a raw number
     /// 1-100. Overrides the profile value.
     #[arg(long, value_parser = parse_quality)]
     quality: Option<u8>,
@@ -156,7 +160,7 @@ impl CommonArgs {
     }
 }
 
-/// Parse a `--quality` value: `low` (70), `std` (82), `high` (90), or a raw number 1-100.
+/// Parse a `--quality` value: `low` (70), `std` (82), `high` (90) or a raw number 1-100.
 fn parse_quality(s: &str) -> Result<u8, String> {
     match s {
         "low" => Ok(70),
@@ -164,7 +168,7 @@ fn parse_quality(s: &str) -> Result<u8, String> {
         "high" => Ok(90),
         _ => {
             let n: u8 = s.parse().map_err(|_| {
-                format!("invalid quality `{s}` (expected `low`, `std`, `high`, or a number 1-100)")
+                format!("invalid quality `{s}` (expected `low`, `std`, `high` or a number 1-100)")
             })?;
             if (1..=100).contains(&n) {
                 Ok(n)
@@ -180,7 +184,11 @@ fn main() -> ExitCode {
 
     match cli.command {
         Command::Profiles { specs } => run_profiles(&specs),
-        Command::Fit { input, common } => run_fit(&input, &common),
+        Command::Fit {
+            input,
+            lets_get_dangerous,
+            common,
+        } => run_fit(&input, lets_get_dangerous, &common),
         Command::Md {
             input,
             common,
@@ -196,8 +204,10 @@ fn main() -> ExitCode {
 
 /// Run the `fit` subcommand: read the input EPUB, convert it according to the
 /// resolved profiles, write the output (unless `--dry-run`), and print a
-/// human or JSON report.
-fn run_fit(input: &Path, common: &CommonArgs) -> ExitCode {
+/// human or JSON report. With `--lets-get-dangerous` the original file is
+/// replaced in place (written via a sibling temp file and renamed, so a
+/// failed write never leaves a half-book behind).
+fn run_fit(input: &Path, in_place: bool, common: &CommonArgs) -> ExitCode {
     let resolved = match common.resolve_profile() {
         Ok(resolved) => resolved,
         Err(e) => {
@@ -223,10 +233,20 @@ fn run_fit(input: &Path, common: &CommonArgs) -> ExitCode {
         }
     };
 
-    let output_path = common.output.clone().unwrap_or_else(|| {
-        default_output_path(input, &format!("{}.epub", resolved.appendix_or_default()))
-    });
-    finish_conversion(converted, &output_path, opts.dry_run, common.report)
+    let output_path = if in_place {
+        input.to_path_buf()
+    } else {
+        common.output.clone().unwrap_or_else(|| {
+            default_output_path(input, &format!("{}.epub", resolved.appendix_or_default()))
+        })
+    };
+    finish_conversion(
+        converted,
+        &output_path,
+        opts.dry_run,
+        in_place,
+        common.report,
+    )
 }
 
 /// Run the `md` subcommand: read the Markdown source, resolve its local
@@ -270,18 +290,20 @@ fn run_md(input: &Path, split_level: u8, common: &CommonArgs) -> ExitCode {
         .output
         .clone()
         .unwrap_or_else(|| default_output_path(input, "epub"));
-    finish_conversion(converted, &output_path, opts.dry_run, common.report)
+    finish_conversion(converted, &output_path, opts.dry_run, false, common.report)
 }
 
 /// Write the converted EPUB (unless `--dry-run`) and print the report, shared
-/// by every conversion subcommand.
+/// by every conversion subcommand. An in-place write goes through a sibling
+/// temp file plus rename so the original survives any write failure.
 fn finish_conversion(
     converted: Converted,
     output_path: &Path,
     dry_run: bool,
+    in_place: bool,
     report_format: ReportArg,
 ) -> ExitCode {
-    if !dry_run && let Err(e) = std::fs::write(output_path, &converted.epub) {
+    if !dry_run && let Err(e) = write_output(output_path, &converted.epub, in_place) {
         eprintln!("error: cannot write {}: {e}", output_path.display());
         return ExitCode::from(ERROR_EXIT_CODE);
     }
@@ -303,6 +325,24 @@ fn finish_conversion(
 /// Default output path: `<input stem>.<extension>`, next to the input file.
 fn default_output_path(input: &Path, extension: &str) -> PathBuf {
     input.with_extension(extension)
+}
+
+/// Write `data` to `path`. An in-place replacement is staged in a sibling
+/// temp file and renamed over the original, so a failed or interrupted write
+/// never truncates the book being replaced.
+fn write_output(path: &Path, data: &[u8], in_place: bool) -> std::io::Result<()> {
+    if !in_place {
+        return std::fs::write(path, data);
+    }
+    let mut temp = path.as_os_str().to_owned();
+    temp.push(format!(".tmp-{}", std::process::id()));
+    let temp = PathBuf::from(temp);
+    std::fs::write(&temp, data)?;
+    if let Err(e) = std::fs::rename(&temp, path) {
+        let _ = std::fs::remove_file(&temp);
+        return Err(e);
+    }
+    Ok(())
 }
 
 /// Human report for a conversion, in three sections: "Transformed" (counts

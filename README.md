@@ -2,7 +2,9 @@
 
 Books, made to measure. `epub-tailor` cleans, fixes and transforms EPUB files, driven by composable JSON profiles: a device profile carries your e-reader's actual measurements (screen, image budgets, CSS limits, which HTML it can render) and the book gets cut to fit them exactly. No profile at all and it simply repairs the book - regenerated packaging, junk files gone, epubcheck-clean output - without touching a hair on its typography.
 
-EPUBs accumulate grime. Vendors leave marker files and watermark blocks in every chapter while conversion tools scatter `META-INF` droppings and duplicate ids, and e-ink firmware quietly bins your fonts, mashes your tables into rubble and draws your crisp SVG diagram as the literal word `[Image]`. This tool deals with all of it, and never touches your original file.
+EPUBs accumulate grime. Vendors leave marker files and watermark blocks in every chapter while conversion tools scatter `META-INF` droppings and duplicate ids, and e-ink firmware quietly bins your fonts, mashes your tables into rubble and draws your crisp SVG diagram as the literal word `[Image]`. This tool deals with all of it, and never touches your original file.\*
+
+\* Unless you pass `--lets-get-dangerous`, which replaces the original in place. The write is staged in a temp file and renamed at the end, so even a failed run cannot eat your book - but you did ask for it by name.
 
 ## What it does
 
@@ -139,6 +141,7 @@ Available on `fit` and `md` unless noted. Flags override profile values; flags y
 | `--dry-run` | off | Report what would change and write nothing. |
 | `--report human\|json` | `human` | Use `json` for machine-readable output. |
 | `-o, --output <PATH>` | next to the input | Where to write the result. |
+| `--lets-get-dangerous` | off | `fit` only: replace the original file in place instead of writing a copy. Conflicts with `-o`. Lets. Get. Dangerous. |
 
 ## FAQ
 

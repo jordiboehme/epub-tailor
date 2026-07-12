@@ -140,7 +140,7 @@ search; no regex.
 
 | Field | Values | Meaning |
 |---|---|---|
-| `action` | `"remove"`, `"replace"` | Delete matches, or substitute them. |
+| `action` | `"remove"`, `"replace"` | Delete matches or substitute them. |
 | `match` | string | The substring to search for. |
 | `with` | string | Replacement text (`replace` only). |
 | `in` | array of `"text"`, `"href"`, `"file"` | Where to look. Defaults to `["text"]`. |

@@ -39,7 +39,7 @@ pub enum ConvertError {
     #[error("unsupported input: {0}")]
     UnsupportedInput(String),
 
-    /// An image could not be decoded, transcoded, or resized.
+    /// An image could not be decoded, transcoded or resized.
     #[error("image processing failed: {0}")]
     Image(String),
 

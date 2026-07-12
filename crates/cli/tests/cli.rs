@@ -377,3 +377,75 @@ fn check_human_report_has_a_one_line_summary() {
 
     std::fs::remove_dir_all(&dir).ok();
 }
+
+#[test]
+fn lets_get_dangerous_replaces_the_original_in_place() {
+    let dir = temp_dir("dangerous");
+    let md = dir.join("book.md");
+    // The ordered list survives the default (repair) md conversion but is
+    // baked to text by the x4 profile, so the in-place fit provably rewrites.
+    std::fs::write(&md, "# Hello World\n\n1. first\n2. second\n").expect("write fixture");
+    let md_out = bin()
+        .args(["md", md.to_str().unwrap()])
+        .output()
+        .expect("failed to run binary");
+    assert!(md_out.status.success(), "md conversion should succeed");
+    let epub = dir.join("book.epub");
+    let original = std::fs::read(&epub).expect("read original");
+
+    let output = bin()
+        .args([
+            "fit",
+            epub.to_str().unwrap(),
+            "--profile",
+            "x4",
+            "--lets-get-dangerous",
+        ])
+        .output()
+        .expect("failed to run binary");
+    assert!(
+        output.status.success(),
+        "fit --lets-get-dangerous should succeed, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let replaced = std::fs::read(&epub).expect("read replaced");
+    assert_ne!(replaced, original, "the original file must be rewritten");
+    assert!(
+        replaced.starts_with(b"PK"),
+        "the replacement must still be a zip archive"
+    );
+    assert!(
+        !dir.join("book.tailored.epub").exists() && !dir.join("book.x4.epub").exists(),
+        "no separate output file may be written"
+    );
+    assert!(
+        !std::fs::read_dir(&dir).expect("list dir").any(|e| e
+            .expect("entry")
+            .file_name()
+            .to_string_lossy()
+            .contains(".tmp-")),
+        "the staging temp file must not linger"
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn lets_get_dangerous_conflicts_with_output() {
+    let output = bin()
+        .args([
+            "fit",
+            "book.epub",
+            "--lets-get-dangerous",
+            "--output",
+            "elsewhere.epub",
+        ])
+        .output()
+        .expect("failed to run binary");
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "combining in-place replacement with -o is a usage error"
+    );
+}
