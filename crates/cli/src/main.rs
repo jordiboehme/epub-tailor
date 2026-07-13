@@ -13,11 +13,16 @@
 //!
 //! Under `--report json` stdout carries exactly one JSON document and nothing
 //! else. Every payload has a `schema` version. Failures print a machine-readable
-//! `{"error": {"code": ...}}` on stdout as well as prose on stderr. The one
+//! `{"error": {"code": ...}}` on stdout as well as prose on stderr. A batch run
+//! (a folder or several inputs) aggregates instead: one document with a
+//! `results` array (per-file statuses) and a `summary`, in which per-file
+//! failures are entries rather than separate error payloads. The one
 //! command that ever prompts is `metadata pick`, and it refuses to run when
 //! stdin is not a terminal, so a UI can never hang on a question it did not
 //! expect.
 
+mod batch;
+mod discover;
 #[cfg(feature = "online")]
 mod lookup;
 mod lookup_cmd;
@@ -28,10 +33,7 @@ use std::process::ExitCode;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use epub_tailor_core::metadata::{MergeMode, MetadataDoc};
 use epub_tailor_core::profile::{self, Profile};
-use epub_tailor_core::{
-    ConvertOptions, Converted, CoverImage, FsResolver, Input, LintFinding, Severity, TableMode,
-    convert, lint_epub,
-};
+use epub_tailor_core::{ConvertOptions, Converted, CoverImage, LintFinding, Severity, TableMode};
 
 /// Exit code used when the input cannot be read at all (`check` only).
 const UNREADABLE_EXIT_CODE: u8 = 2;
@@ -59,19 +61,25 @@ enum Command {
     /// Clean, fix and transform an EPUB according to the selected profiles.
     #[command(aliases = ["optimize", "clean"])]
     Fit {
-        /// Path to the source EPUB.
-        input: PathBuf,
+        /// EPUB files or folders to scan for .epub files.
+        #[arg(required = true, value_name = "INPUT")]
+        inputs: Vec<PathBuf>,
         /// Replace the original file in place instead of writing a copy.
         /// Lets. Get. Dangerous.
         #[arg(long, conflicts_with = "output")]
         lets_get_dangerous: bool,
         #[command(flatten)]
+        batch: BatchArgs,
+        #[command(flatten)]
         common: CommonArgs,
     },
     /// Convert a Markdown file into an EPUB.
     Md {
-        /// Path to the source Markdown file.
-        input: PathBuf,
+        /// Markdown files or folders to scan for .md files.
+        #[arg(required = true, value_name = "INPUT")]
+        inputs: Vec<PathBuf>,
+        #[command(flatten)]
+        batch: BatchArgs,
         #[command(flatten)]
         common: CommonArgs,
         /// Heading level to split chapters on (Markdown input only).
@@ -80,8 +88,11 @@ enum Command {
     },
     /// Validate an EPUB against the selected profiles without converting it.
     Check {
-        /// Path to the EPUB to check.
-        input: PathBuf,
+        /// EPUB files or folders to scan for .epub files.
+        #[arg(required = true, value_name = "INPUT")]
+        inputs: Vec<PathBuf>,
+        #[command(flatten)]
+        batch: BatchArgs,
         /// Profiles to check against, composed left to right (a built-in name
         /// or a path to a .json file). Defaults to `epub`, structural checks
         /// only.
@@ -185,9 +196,22 @@ enum MetadataCommand {
     },
 }
 
+/// Flags that shape a folder scan. Single-file runs ignore them.
+#[derive(Args)]
+struct BatchArgs {
+    /// Walk subfolders when an input is a folder.
+    #[arg(short, long)]
+    recursive: bool,
+
+    /// Process files that a previous run already produced or covered.
+    #[arg(long)]
+    force: bool,
+}
+
 #[derive(Args)]
 struct CommonArgs {
-    /// Where to write the converted EPUB.
+    /// Where to write the converted EPUB. With folder input this must be a
+    /// folder, and outputs mirror the input tree inside it.
     #[arg(short, long)]
     output: Option<PathBuf>,
 
@@ -470,30 +494,57 @@ fn main() -> ExitCode {
     match cli.command {
         Command::Profiles { specs, report } => run_profiles(&specs, report),
         Command::Fit {
-            input,
+            inputs,
             lets_get_dangerous,
+            batch,
             common,
-        } => run_fit(&input, lets_get_dangerous, &common),
+        } => run_fit(&inputs, lets_get_dangerous, &batch, &common),
         Command::Md {
-            input,
+            inputs,
+            batch,
             common,
             split_level,
-        } => run_md(&input, split_level, &common),
+        } => run_md(&inputs, split_level, &batch, &common),
         Command::Check {
-            input,
+            inputs,
+            batch,
             profiles,
             report,
-        } => run_check(&input, &profiles, report),
+        } => run_check(&inputs, &batch, &profiles, report),
         Command::Metadata { command } => lookup_cmd::run(command),
     }
 }
 
-/// Run the `fit` subcommand: read the input EPUB, convert it according to the
-/// resolved profiles, write the output (unless `--dry-run`), and print a
-/// human or JSON report. With `--lets-get-dangerous` the original file is
-/// replaced in place (written via a sibling temp file and renamed, so a
-/// failed write never leaves a half-book behind).
-fn run_fit(input: &Path, in_place: bool, common: &CommonArgs) -> ExitCode {
+/// One named file is a single-file run, byte-compatible with 0.2.0; a folder
+/// or several inputs is a batch run.
+fn single_file_mode(inputs: &[PathBuf]) -> bool {
+    inputs.len() == 1 && !inputs[0].is_dir()
+}
+
+/// Run the `fit` subcommand: route a single file through the classic path,
+/// anything else through the batch loop.
+fn run_fit(
+    inputs: &[PathBuf],
+    in_place: bool,
+    batch_args: &BatchArgs,
+    common: &CommonArgs,
+) -> ExitCode {
+    if single_file_mode(inputs) {
+        return run_fit_single(&inputs[0], in_place, common);
+    }
+    if in_place {
+        eprintln!(
+            "error: --lets-get-dangerous needs a single file input, not a folder or a list of files"
+        );
+        return ExitCode::from(ERROR_EXIT_CODE);
+    }
+    run_fit_batch(inputs, batch_args, common)
+}
+
+/// Run `fit` over folders and several files: resolve the profile and
+/// metadata once (a `--metadata -` document arrives on stdin exactly once),
+/// then hand the loop to the batch module.
+fn run_fit_batch(inputs: &[PathBuf], batch_args: &BatchArgs, common: &CommonArgs) -> ExitCode {
     let resolved = match common.resolve_profile() {
         Ok(resolved) => resolved,
         Err(e) => {
@@ -501,11 +552,37 @@ fn run_fit(input: &Path, in_place: bool, common: &CommonArgs) -> ExitCode {
             return ExitCode::from(ERROR_EXIT_CODE);
         }
     };
+    let mut opts = common.to_options(&resolved);
+    match common.metadata.resolve() {
+        Ok((doc, merge, cover)) => {
+            opts.metadata = doc;
+            opts.metadata_merge = merge;
+            opts.cover_image = cover;
+        }
+        Err(e) => return fail(common.report, "metadata", &e),
+    }
+    let cfg = batch::ConvertBatch {
+        kind: batch::JobKind::Fit,
+        input_extension: "epub",
+        output_extension: format!("{}.epub", resolved.appendix_or_default()),
+        prior_output_suffixes: batch::output_suffixes(&resolved),
+        recursive: batch_args.recursive,
+        force: batch_args.force,
+        output_dir: common.output.clone(),
+    };
+    batch::run_convert_batch(inputs, &cfg, &opts, common.report)
+}
 
-    let bytes = match std::fs::read(input) {
-        Ok(bytes) => bytes,
+/// Run `fit` on one EPUB: read it, convert it according to the resolved
+/// profiles, write the output (unless `--dry-run`), and print a human or
+/// JSON report. With `--lets-get-dangerous` the original file is replaced in
+/// place (written via a sibling temp file and renamed, so a failed write
+/// never leaves a half-book behind).
+fn run_fit_single(input: &Path, in_place: bool, common: &CommonArgs) -> ExitCode {
+    let resolved = match common.resolve_profile() {
+        Ok(resolved) => resolved,
         Err(e) => {
-            eprintln!("error: cannot read {}: {e}", input.display());
+            eprintln!("error: {e}");
             return ExitCode::from(ERROR_EXIT_CODE);
         }
     };
@@ -519,9 +596,9 @@ fn run_fit(input: &Path, in_place: bool, common: &CommonArgs) -> ExitCode {
         }
         Err(e) => return fail(common.report, "metadata", &e),
     }
-    let converted = match convert(Input::Epub(bytes), &opts) {
+    let converted = match batch::convert_file(input, batch::JobKind::Fit, &opts) {
         Ok(converted) => converted,
-        Err(e) => return fail(common.report, e.code(), &e.to_string()),
+        Err(e) => return fail(common.report, &e.code, &e.message),
     };
 
     let output_path = if in_place {
@@ -540,10 +617,28 @@ fn run_fit(input: &Path, in_place: bool, common: &CommonArgs) -> ExitCode {
     )
 }
 
-/// Run the `md` subcommand: read the Markdown source, resolve its local
-/// images relative to its own directory, convert it according to the resolved
-/// profiles, write the output (unless `--dry-run`), and print a report.
-fn run_md(input: &Path, split_level: u8, common: &CommonArgs) -> ExitCode {
+/// Run the `md` subcommand: route a single file through the classic path,
+/// anything else through the batch loop.
+fn run_md(
+    inputs: &[PathBuf],
+    split_level: u8,
+    batch_args: &BatchArgs,
+    common: &CommonArgs,
+) -> ExitCode {
+    if single_file_mode(inputs) {
+        return run_md_single(&inputs[0], split_level, common);
+    }
+    run_md_batch(inputs, split_level, batch_args, common)
+}
+
+/// Run `md` over folders and several files. Outputs are plain `.epub`, so
+/// only the output-exists skip applies; there is no appendix to recognize.
+fn run_md_batch(
+    inputs: &[PathBuf],
+    split_level: u8,
+    batch_args: &BatchArgs,
+    common: &CommonArgs,
+) -> ExitCode {
     let resolved = match common.resolve_profile() {
         Ok(resolved) => resolved,
         Err(e) => {
@@ -551,20 +646,39 @@ fn run_md(input: &Path, split_level: u8, common: &CommonArgs) -> ExitCode {
             return ExitCode::from(ERROR_EXIT_CODE);
         }
     };
+    let mut opts = common.to_options(&resolved);
+    opts.split_level = split_level;
+    match common.metadata.resolve() {
+        Ok((doc, merge, cover)) => {
+            opts.metadata = doc;
+            opts.metadata_merge = merge;
+            opts.cover_image = cover;
+        }
+        Err(e) => return fail(common.report, "metadata", &e),
+    }
+    let cfg = batch::ConvertBatch {
+        kind: batch::JobKind::Md,
+        input_extension: "md",
+        output_extension: "epub".to_string(),
+        prior_output_suffixes: Vec::new(),
+        recursive: batch_args.recursive,
+        force: batch_args.force,
+        output_dir: common.output.clone(),
+    };
+    batch::run_convert_batch(inputs, &cfg, &opts, common.report)
+}
 
-    let text = match std::fs::read_to_string(input) {
-        Ok(text) => text,
+/// Run `md` on one file: read the Markdown source, resolve its local images
+/// relative to its own directory, convert it according to the resolved
+/// profiles, write the output (unless `--dry-run`), and print a report.
+fn run_md_single(input: &Path, split_level: u8, common: &CommonArgs) -> ExitCode {
+    let resolved = match common.resolve_profile() {
+        Ok(resolved) => resolved,
         Err(e) => {
-            eprintln!("error: cannot read {}: {e}", input.display());
+            eprintln!("error: {e}");
             return ExitCode::from(ERROR_EXIT_CODE);
         }
     };
-
-    let root = match input.parent() {
-        Some(dir) if !dir.as_os_str().is_empty() => dir.to_path_buf(),
-        _ => PathBuf::from("."),
-    };
-    let assets = Box::new(FsResolver::new(root));
 
     let mut opts = common.to_options(&resolved);
     opts.split_level = split_level;
@@ -577,9 +691,9 @@ fn run_md(input: &Path, split_level: u8, common: &CommonArgs) -> ExitCode {
         Err(e) => return fail(common.report, "metadata", &e),
     }
 
-    let converted = match convert(Input::Markdown { text, assets }, &opts) {
+    let converted = match batch::convert_file(input, batch::JobKind::Md, &opts) {
         Ok(converted) => converted,
-        Err(e) => return fail(common.report, e.code(), &e.to_string()),
+        Err(e) => return fail(common.report, &e.code, &e.message),
     };
 
     let output_path = common
@@ -736,11 +850,48 @@ fn print_human_report(converted: &Converted, output_path: &Path, dry_run: bool) 
     }
 }
 
-/// Run the `check` subcommand: lint an EPUB against the resolved profiles
-/// without converting it. Structural checks always run; device checks run
-/// only for features the profile enables. Exits 0 with no `Error`-severity
-/// findings, 1 otherwise, 2 if the input cannot even be read from disk.
-fn run_check(input: &Path, profiles: &[String], report_format: ReportArg) -> ExitCode {
+/// Run the `check` subcommand: route a single file through the classic path,
+/// anything else through the batch loop.
+fn run_check(
+    inputs: &[PathBuf],
+    batch_args: &BatchArgs,
+    profiles: &[String],
+    report_format: ReportArg,
+) -> ExitCode {
+    if single_file_mode(inputs) {
+        return run_check_single(&inputs[0], profiles, report_format);
+    }
+    run_check_batch(inputs, batch_args, profiles, report_format)
+}
+
+/// Run `check` over folders and several files, skipping prior outputs the
+/// same way a batch `fit` would.
+fn run_check_batch(
+    inputs: &[PathBuf],
+    batch_args: &BatchArgs,
+    profiles: &[String],
+    report_format: ReportArg,
+) -> ExitCode {
+    let resolved = match profile::resolve(profiles) {
+        Ok(resolved) => resolved,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::from(ERROR_EXIT_CODE);
+        }
+    };
+    let cfg = batch::CheckBatch {
+        prior_output_suffixes: batch::output_suffixes(&resolved),
+        recursive: batch_args.recursive,
+        force: batch_args.force,
+    };
+    batch::run_check_batch(inputs, &cfg, &resolved, report_format)
+}
+
+/// Run `check` on one EPUB: lint it against the resolved profiles without
+/// converting it. Structural checks always run; device checks run only for
+/// features the profile enables. Exits 0 with no `Error`-severity findings,
+/// 1 otherwise, 2 if the input cannot even be read from disk.
+fn run_check_single(input: &Path, profiles: &[String], report_format: ReportArg) -> ExitCode {
     let resolved = match profile::resolve(profiles) {
         Ok(resolved) => resolved,
         Err(e) => {
@@ -749,15 +900,13 @@ fn run_check(input: &Path, profiles: &[String], report_format: ReportArg) -> Exi
         }
     };
 
-    let bytes = match std::fs::read(input) {
-        Ok(bytes) => bytes,
-        Err(e) => {
-            eprintln!("error: cannot read {}: {e}", input.display());
+    let findings = match batch::lint_file(input, &resolved) {
+        Ok(findings) => findings,
+        Err(message) => {
+            eprintln!("error: {message}");
             return ExitCode::from(UNREADABLE_EXIT_CODE);
         }
     };
-
-    let findings = lint_epub(&bytes, &resolved.caps, &resolved.features);
     let errors = findings
         .iter()
         .filter(|f| f.severity == Severity::Error)

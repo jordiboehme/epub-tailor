@@ -1,14 +1,6 @@
-use std::process::Command;
+mod common;
 
-fn bin() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_epub-tailor"))
-}
-
-fn temp_dir(name: &str) -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!("epub-tailor-cli-{name}-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).expect("create temp dir");
-    dir
-}
+use common::{bin, book_in, temp_dir};
 
 #[test]
 fn help_exits_zero_and_mentions_all_subcommands() {
@@ -21,23 +13,6 @@ fn help_exits_zero_and_mentions_all_subcommands() {
             "--help output should mention `{subcommand}`, got:\n{stdout}"
         );
     }
-}
-
-/// Build a one-chapter EPUB by running `md`, the way the other tests do.
-fn book_in(dir: &std::path::Path, name: &str) -> std::path::PathBuf {
-    let md = dir.join(format!("{name}.md"));
-    std::fs::write(
-        &md,
-        "---\ntitle: A Book\nauthor: Jane Author\n---\n\n# One\n\nHello.\n",
-    )
-    .expect("write markdown");
-    let out = dir.join(format!("{name}.epub"));
-    let status = bin()
-        .args(["md", md.to_str().unwrap(), "-o", out.to_str().unwrap()])
-        .output()
-        .expect("failed to run binary");
-    assert!(status.status.success(), "md should build a book");
-    out
 }
 
 #[test]

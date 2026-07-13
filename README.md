@@ -79,6 +79,14 @@ Diagnose a book without converting it (structural checks by default, device chec
 epub-tailor check book.epub --profile x4
 ```
 
+Or point any of them at a folder - your whole library, with `-r`:
+
+```sh
+epub-tailor fit books/ --profile x4 -r
+```
+
+Every `.epub` under `books/` gets fitted (`.md` files for `md`), one line per file plus a summary, and one bad book never stops the rest. Reruns are idempotent: a file ending in a known profile appendix (`.x4.epub`, `.kindle.epub`, `.tailored.epub`) is recognized as a previous run's output and skipped, and so is any book whose output already exists - so after adding books, a rerun only does the new ones. The flip side: a book legitimately *named* `travel.kindle.epub` gets skipped too, which is what `--force` is for. `--dry-run` shows the whole plan without writing a byte.
+
 ## Profiles
 
 A profile is a JSON file bundling device capabilities, feature switches, tunables, an output filename appendix and content filter rules. Twenty-seven ship built in, one per device we have actually researched. Output lands as `book.<profile>.epub`.
@@ -214,6 +222,8 @@ Their cover *images* are a different matter: they come from many sources and are
 
 Under `--report json`, stdout is exactly one JSON document, every payload carries a `schema` version, and a failure prints `{"error": {"code": "drm-protected", ...}}` rather than making you grep English. `metadata pick` is the only command that ever prompts, and it refuses to run when stdin is not a terminal - so it can never hang something that was not expecting a question.
 
+A batch run (a folder or several inputs) keeps that promise by aggregating: one document with a `results` array - each entry a per-file status of `converted`, `skipped` or `failed` (`checked`, `skipped` or `unreadable` under `check`) - and a `summary` with the counts. Per-file failures are entries in `results`, never separate error payloads. Single-file output is unchanged.
+
 ## Flags
 
 Available on `fit` and `md` unless noted. Flags override profile values; flags you do not pass leave the profile alone.
@@ -227,8 +237,10 @@ Available on `fit` and `md` unless noted. Flags override profile values; flags y
 | `--split-level 1\|2` | `1` | `md` only: heading level that starts a new chapter. |
 | `--max-chapter-kb <N>` | from profile | Split a chapter larger than this at a heading boundary. |
 | `--dry-run` | off | Report what would change and write nothing. |
+| `-r, --recursive` | off | Walk subfolders when an input is a folder. Also on `check`. |
+| `--force` | off | Process files a previous run already produced or covered. Also on `check`. |
 | `--report human\|json` | `human` | Use `json` for machine-readable output. |
-| `-o, --output <PATH>` | next to the input | Where to write the result. |
+| `-o, --output <PATH>` | next to the input | Where to write the result. With folder input this must be a folder, and outputs mirror the input tree inside it. |
 | `--lets-get-dangerous` | off | `fit` only: replace the original file in place instead of writing a copy. Conflicts with `-o`. Lets. Get. Dangerous. |
 
 ### Metadata flags
