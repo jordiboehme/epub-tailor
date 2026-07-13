@@ -5,6 +5,8 @@
 //! epubcheck rejects for `application/xhtml+xml` content documents. This
 //! serializer instead emits strict, XML-well-formed XHTML.
 
+use std::borrow::Cow;
+
 use kuchikiki::{NodeData, NodeRef};
 
 use crate::html::escape::escape_into;
@@ -14,6 +16,20 @@ const XHTML_NS: &str = "http://www.w3.org/1999/xhtml";
 /// The EPUB Structural Semantics namespace, declared on the root iff any
 /// element carries an `epub:`-prefixed attribute.
 const EPUB_NS: &str = "http://www.idpf.org/2007/ops";
+/// The XLink namespace, declared on the root iff any element carries an
+/// `xlink:`-prefixed attribute (inline SVG image/anchor references).
+const XLINK_NS: &str = "http://www.w3.org/1999/xlink";
+/// The SVG and MathML namespaces, pinned onto inline foreign roots so the
+/// subtree keeps its meaning when the output is parsed as strict XML.
+const SVG_NS: &str = "http://www.w3.org/2000/svg";
+const MATHML_NS: &str = "http://www.w3.org/1998/Math/MathML";
+
+/// Attribute prefixes with a guaranteed namespace declaration in the output:
+/// `xml` and `xmlns` are built into XML itself, `epub` and `xlink` are
+/// declared on the root when used. An attribute with any other prefix
+/// (Calibre leftovers, Vue-style `:class`) cannot be represented in
+/// namespace-valid XML and is dropped.
+const DECLARED_PREFIXES: [&str; 4] = ["xml", "xmlns", "xlink", "epub"];
 
 /// HTML void elements: serialized self-closing (`<br/>`), never with a
 /// separate end tag.
@@ -34,8 +50,8 @@ pub fn serialize_xhtml(doc: &NodeRef) -> Vec<u8> {
     let mut out = String::new();
     out.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE html>\n");
     if let Some(html) = find_root_html(doc) {
-        let needs_epub = subtree_has_epub_attr(&html);
-        write_element(&html, true, needs_epub, &mut out);
+        let needs = subtree_ns_needs(&html);
+        write_element(&html, Some(&needs), &mut out);
     }
     out.into_bytes()
 }
@@ -65,55 +81,119 @@ fn is_element_named(node: &NodeRef, name: &str) -> bool {
     matches!(node.data(), NodeData::Element(e) if e.name.local.as_ref() == name)
 }
 
-/// Whether any element in `root`'s subtree (inclusive) carries an
-/// `epub:`-prefixed attribute, which requires declaring `xmlns:epub`.
-fn subtree_has_epub_attr(root: &NodeRef) -> bool {
-    std::iter::once(root.clone())
-        .chain(root.descendants())
-        .any(|n| match n.data() {
-            NodeData::Element(e) => e
-                .attributes
-                .borrow()
-                .map
-                .keys()
-                .any(|k| k.local.as_ref().starts_with("epub:")),
-            _ => false,
-        })
+/// Which optional namespaces the root must declare, found by scanning the
+/// subtree for `epub:`- and `xlink:`-prefixed attribute names (as they will
+/// be emitted).
+struct RootNs {
+    epub: bool,
+    xlink: bool,
 }
 
-/// Serialize an element and its subtree. `is_root` forces the XHTML namespace
-/// (and `xmlns:epub` when `needs_epub`) onto the opening tag.
-fn write_element(node: &NodeRef, is_root: bool, needs_epub: bool, out: &mut String) {
+fn subtree_ns_needs(root: &NodeRef) -> RootNs {
+    let mut needs = RootNs {
+        epub: false,
+        xlink: false,
+    };
+    for node in std::iter::once(root.clone()).chain(root.descendants()) {
+        let NodeData::Element(e) = node.data() else {
+            continue;
+        };
+        let elem_name = e.name.local.as_ref();
+        if is_emittable_name(elem_name) {
+            needs.epub |= elem_name.starts_with("epub:");
+            needs.xlink |= elem_name.starts_with("xlink:");
+        }
+        for (key, attr) in &e.attributes.borrow().map {
+            let Some(name) = emittable_attr_name(key.local.as_ref(), attr) else {
+                continue;
+            };
+            needs.epub |= name.starts_with("epub:");
+            needs.xlink |= name.starts_with("xlink:");
+        }
+    }
+    needs
+}
+
+/// The element's own `xmlns="..."` value, whichever representation the parse
+/// produced (a foreign-content parse namespaces the attribute, a plain HTML
+/// parse leaves it a literal local name).
+fn source_xmlns(attributes: &kuchikiki::Attributes) -> Option<&str> {
+    attributes.map.iter().find_map(|(key, attr)| {
+        (emittable_attr_name(key.local.as_ref(), attr).as_deref() == Some("xmlns"))
+            .then_some(attr.value.as_str())
+    })
+}
+
+/// Serialize an element and its subtree. `root` is `Some` on the document's
+/// `<html>` element, which gets the XHTML namespace (plus `xmlns:epub` and
+/// `xmlns:xlink` as needed) forced onto its opening tag.
+fn write_element(node: &NodeRef, root: Option<&RootNs>, out: &mut String) {
     let NodeData::Element(elem) = node.data() else {
         return;
     };
     let name = elem.name.local.as_ref();
+    if !is_emittable_name(name) {
+        // A tag name no XML reader accepts (a tokenizer artifact of broken
+        // markup, e.g. `<a\u{FFFD}-->`, or an undeclarable prefix): emit the
+        // children without the unrepresentable wrapper.
+        for child in node.children() {
+            write_node(&child, out);
+        }
+        return;
+    }
     out.push('<');
     out.push_str(name);
 
     let attributes = elem.attributes.borrow();
-    if is_root {
+    // The namespace declaration this opening tag must carry: XHTML on the
+    // document root, SVG/MathML on inline foreign roots (falling back to the
+    // canonical namespace when the source declared none). Pinning it right
+    // after the tag name keeps parse∘serialize a fixed point no matter where
+    // the parsed declaration sat in the attribute map.
+    let pinned_ns: Option<String> = if root.is_some() {
+        Some(XHTML_NS.to_string())
+    } else {
+        match name {
+            "svg" => Some(SVG_NS),
+            "math" => Some(MATHML_NS),
+            _ => None,
+        }
+        .map(|canonical| source_xmlns(&attributes).unwrap_or(canonical).to_string())
+    };
+    if let Some(ns) = &pinned_ns {
         out.push_str(" xmlns=\"");
-        out.push_str(XHTML_NS);
+        escape_into(ns, true, out);
         out.push('"');
-        if needs_epub {
+    }
+    if let Some(needs) = root {
+        if needs.epub {
             out.push_str(" xmlns:epub=\"");
             out.push_str(EPUB_NS);
             out.push('"');
         }
-        // Emit the remaining attributes, skipping any parsed namespace
-        // declarations so we never duplicate the ones forced above.
-        for (key, attr) in &attributes.map {
-            let local = key.local.as_ref();
-            if local == "xmlns" || local == "xmlns:epub" {
-                continue;
-            }
-            write_attribute(local, attr, out);
+        if needs.xlink {
+            out.push_str(" xmlns:xlink=\"");
+            out.push_str(XLINK_NS);
+            out.push('"');
         }
-    } else {
-        for (key, attr) in &attributes.map {
-            write_attribute(key.local.as_ref(), attr, out);
+    }
+    for (key, attr) in &attributes.map {
+        let Some(attr_name) = emittable_attr_name(key.local.as_ref(), attr) else {
+            continue;
+        };
+        // Skip declarations already pinned or forced above so none is ever
+        // duplicated (a duplicate attribute is malformed XML).
+        if pinned_ns.is_some() && attr_name == "xmlns" {
+            continue;
         }
+        if root.is_some() && matches!(attr_name.as_ref(), "xmlns:epub" | "xmlns:xlink") {
+            continue;
+        }
+        out.push(' ');
+        out.push_str(&attr_name);
+        out.push_str("=\"");
+        escape_into(&attr.value, true, out);
+        out.push('"');
     }
     drop(attributes);
 
@@ -131,21 +211,43 @@ fn write_element(node: &NodeRef, is_root: bool, needs_epub: bool, out: &mut Stri
     out.push('>');
 }
 
-fn write_attribute(local: &str, attr: &kuchikiki::Attribute, out: &mut String) {
-    out.push(' ');
-    if let Some(prefix) = &attr.prefix {
-        out.push_str(prefix.as_ref());
-        out.push(':');
+/// The attribute's name as written to the output, or `None` when it cannot be
+/// represented in well-formed, namespace-valid XML and must be dropped.
+///
+/// html5ever's foreign-content adjustment hands a bare `xmlns` on `<svg>` or
+/// `<math>` to the serializer with an *empty* prefix; emitting the colon for
+/// it anyway is what 0.4.0/0.4.1 did, corrupting books with the malformed
+/// attribute name `:xmlns`.
+fn emittable_attr_name<'a>(local: &'a str, attr: &kuchikiki::Attribute) -> Option<Cow<'a, str>> {
+    let name: Cow<'a, str> = match &attr.prefix {
+        Some(prefix) if !prefix.is_empty() => Cow::Owned(format!("{}:{local}", prefix.as_ref())),
+        _ => Cow::Borrowed(local),
+    };
+    is_emittable_name(&name).then_some(name)
+}
+
+/// Whether an element or attribute name can be written into namespace-valid
+/// XML: an `NCName`, or `prefix:NCName` with a prefix this serializer
+/// guarantees is declared.
+fn is_emittable_name(name: &str) -> bool {
+    match name.split_once(':') {
+        None => is_ncname(name),
+        Some((prefix, rest)) => DECLARED_PREFIXES.contains(&prefix) && is_ncname(rest),
     }
-    out.push_str(local);
-    out.push_str("=\"");
-    escape_into(&attr.value, true, out);
-    out.push('"');
+}
+
+/// Pragmatic `NCName` check (an XML name, no colon): enough to guarantee the
+/// name parses as one QName part in every strict XML reader. Also used by
+/// [`crate::validate`]'s QName scan.
+pub(crate) fn is_ncname(s: &str) -> bool {
+    let mut chars = s.chars();
+    chars.next().is_some_and(|c| c.is_alphabetic() || c == '_')
+        && chars.all(|c| c.is_alphanumeric() || matches!(c, '-' | '.' | '_'))
 }
 
 fn write_node(node: &NodeRef, out: &mut String) {
     match node.data() {
-        NodeData::Element(_) => write_element(node, false, false, out),
+        NodeData::Element(_) => write_element(node, None, out),
         NodeData::Text(text) => escape_into(&text.borrow(), false, out),
         NodeData::Comment(comment) => write_comment(&comment.borrow(), out),
         // Our own XML declaration and doctype are emitted at the top; any
@@ -279,6 +381,173 @@ mod tests {
             "got: {out}"
         );
         assert!(!out.contains("xmlns:epub"), "got: {out}");
+    }
+
+    /// Strict-XML gate for the foreign-content tests: the exact bug this
+    /// guards against (`:xmlns`, undeclared prefixes, duplicate attributes)
+    /// parses fine with the lenient HTML parser, so only a strict XML parse
+    /// proves well-formedness.
+    fn assert_strict_xml(out: &str) {
+        let opts = roxmltree::ParsingOptions {
+            allow_dtd: true,
+            ..Default::default()
+        };
+        if let Err(e) = roxmltree::Document::parse_with_options(out, opts) {
+            panic!("output is not well-formed XML: {e}\n{out}");
+        }
+    }
+
+    fn assert_fixed_point(out: &str) {
+        let again = round(out.as_bytes());
+        assert_eq!(out, again, "parse∘serialize must be a fixed point");
+    }
+
+    #[test]
+    fn inline_svg_xmlns_is_preserved() {
+        let out = round(
+            br#"<html><body><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><circle r="4"></circle></svg></body></html>"#,
+        );
+        assert!(
+            out.contains(r#"<svg xmlns="http://www.w3.org/2000/svg""#),
+            "got: {out}"
+        );
+        assert!(!out.contains(":xmlns"), "got: {out}");
+        assert_strict_xml(&out);
+        assert_fixed_point(&out);
+    }
+
+    #[test]
+    fn inline_math_xmlns_is_preserved() {
+        let out = round(
+            br#"<html><body><math xmlns="http://www.w3.org/1998/Math/MathML"><mi>x</mi></math></body></html>"#,
+        );
+        assert!(
+            out.contains(r#"<math xmlns="http://www.w3.org/1998/Math/MathML""#),
+            "got: {out}"
+        );
+        assert!(!out.contains(":xmlns"), "got: {out}");
+        assert_strict_xml(&out);
+        assert_fixed_point(&out);
+    }
+
+    #[test]
+    fn inline_svg_without_xmlns_gains_canonical_namespace() {
+        let out = round(
+            br#"<html><body><svg viewBox="0 0 10 10"><circle r="4"></circle></svg></body></html>"#,
+        );
+        assert!(
+            out.contains(r#"<svg xmlns="http://www.w3.org/2000/svg""#),
+            "got: {out}"
+        );
+        assert_strict_xml(&out);
+        assert_fixed_point(&out);
+    }
+
+    #[test]
+    fn xlink_href_forces_root_declaration() {
+        let out = round(
+            br#"<html><body><svg viewBox="0 0 4 4"><a xlink:href="c.xhtml"><circle r="1"></circle></a></svg></body></html>"#,
+        );
+        assert!(out.contains(r#"xlink:href="c.xhtml""#), "got: {out}");
+        assert!(
+            out.contains(r#"xmlns:xlink="http://www.w3.org/1999/xlink""#),
+            "got: {out}"
+        );
+        assert_strict_xml(&out);
+        assert_fixed_point(&out);
+    }
+
+    #[test]
+    fn existing_xlink_declaration_is_not_duplicated() {
+        let out = round(
+            br#"<html><body><svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"><a xlink:href="c.xhtml"><circle r="1"></circle></a></svg></body></html>"#,
+        );
+        // A duplicated attribute name on one element is malformed XML, so the
+        // strict parse is the real assertion here.
+        assert_strict_xml(&out);
+        assert_fixed_point(&out);
+    }
+
+    #[test]
+    fn corrupted_colon_xmlns_heals_to_a_declaration() {
+        // The exact malformation epub-tailor 0.4.0/0.4.1 wrote into books.
+        let out = round(
+            br#"<html><body><svg :xmlns="http://www.w3.org/2000/svg" height="100%" viewBox="0 0 671 1024" xmlns:xlink="http://www.w3.org/1999/xlink"><image xlink:href="cover.jpg" width="671"></image></svg></body></html>"#,
+        );
+        assert!(
+            out.contains(r#"<svg xmlns="http://www.w3.org/2000/svg""#),
+            "got: {out}"
+        );
+        assert!(!out.contains(":xmlns"), "got: {out}");
+        assert_strict_xml(&out);
+        assert_fixed_point(&out);
+    }
+
+    #[test]
+    fn colon_xmlns_beside_real_xmlns_drops_the_corrupt_twin() {
+        let out = round(
+            br#"<html><body><svg :xmlns="http://bogus.example/ns" xmlns="http://www.w3.org/2000/svg"><circle r="1"></circle></svg></body></html>"#,
+        );
+        assert!(
+            out.contains(r#"<svg xmlns="http://www.w3.org/2000/svg""#),
+            "got: {out}"
+        );
+        assert!(!out.contains("bogus.example"), "got: {out}");
+        assert!(!out.contains(":xmlns"), "got: {out}");
+        assert_strict_xml(&out);
+        assert_fixed_point(&out);
+    }
+
+    #[test]
+    fn unknown_prefix_attributes_are_dropped() {
+        let out = round(
+            br#"<html><body><p calibre:timestamp="2024" :class="x" @click="go()" class="ok">t</p></body></html>"#,
+        );
+        assert!(out.contains(r#"<p class="ok">"#), "got: {out}");
+        assert!(!out.contains("calibre:"), "got: {out}");
+        assert!(!out.contains(":class"), "got: {out}");
+        assert!(!out.contains("@click"), "got: {out}");
+        assert_strict_xml(&out);
+        assert_fixed_point(&out);
+    }
+
+    #[test]
+    fn garbage_element_name_is_unwrapped() {
+        // Found by the serialize_roundtrip proptest: an abruptly closed
+        // comment followed by a control character makes html5ever produce an
+        // element literally named `a\u{FFFD}--`, which no XML reader accepts
+        // as a tag name. The children survive; the unrepresentable wrapper
+        // does not.
+        let out = round(b"<html><body><!--><a\x00-->text</body></html>");
+        assert!(!out.contains('\u{FFFD}'), "got: {out}");
+        assert!(out.contains("text"), "got: {out}");
+        assert_strict_xml(&out);
+        assert_fixed_point(&out);
+    }
+
+    #[test]
+    fn epub_prefixed_element_declares_the_namespace() {
+        let out = round(
+            b"<html><body><epub:switch><epub:default><p>x</p></epub:default></epub:switch></body></html>",
+        );
+        assert!(out.contains("<epub:switch>"), "got: {out}");
+        assert!(
+            out.contains(r#"xmlns:epub="http://www.idpf.org/2007/ops""#),
+            "got: {out}"
+        );
+        assert_strict_xml(&out);
+        assert_fixed_point(&out);
+    }
+
+    #[test]
+    fn xml_and_epub_prefixes_survive_hardening() {
+        let out = round(
+            br#"<html><body><p xml:lang="de" epub:type="pagebreak">x</p></body></html>"#,
+        );
+        assert!(out.contains(r#"xml:lang="de""#), "got: {out}");
+        assert!(out.contains(r#"epub:type="pagebreak""#), "got: {out}");
+        assert_strict_xml(&out);
+        assert_fixed_point(&out);
     }
 
     #[test]

@@ -49,7 +49,7 @@ pub use metadata::{MergeMode, MetadataDoc};
 pub use options::{ConvertOptions, CoverImage, TableMode};
 pub use profile::{DeviceCaps, Features, Profile, ProfileError};
 pub use report::{ConvertReport, ConvertStats, Transformation, Warning};
-pub use validate::{LintFinding, Severity, lint_epub};
+pub use validate::{LintFinding, Severity, find_invalid_qname, lint_epub};
 
 use crate::image::svg::{Rasterized, WrapperTarget};
 use crate::image::{
@@ -531,6 +531,7 @@ pub fn convert(input: Input, opts: &ConvertOptions) -> Result<Converted, Convert
     }
 
     let chapter_count = book.spine.len() as u32;
+    ensure_output_wellformed(&book)?;
     let epub = write_epub(&book, opts.output_stamp.as_deref())?;
     let bytes_out = epub.len() as u64;
 
@@ -592,6 +593,44 @@ pub fn convert(input: Input, opts: &ConvertOptions) -> Result<Converted, Convert
 /// Whether a media type is an (X)HTML content document.
 fn is_xhtml(media_type: &str) -> bool {
     media_type == "application/xhtml+xml" || media_type == "text/html"
+}
+
+/// Refuse to ship a content document that is not well-formed XML.
+///
+/// The serializer guarantees well-formedness by construction; this gate turns
+/// any future serializer bug into a hard conversion error instead of a
+/// corrupted book. It runs in release builds too: 0.4.0/0.4.1 wrote malformed
+/// `:xmlns` attributes into whole libraries precisely because the only output
+/// check stood behind `#[cfg(debug_assertions)]`. One strict parse per
+/// content document is trivial next to the parsing and image work already
+/// done, and because every write path (single file, batch, in-place) only
+/// touches disk on `Ok`, a failure here can never overwrite an original.
+fn ensure_output_wellformed(book: &Book) -> Result<(), ConvertError> {
+    for (path, resource) in &book.resources {
+        if !is_xhtml(&resource.media_type) {
+            continue;
+        }
+        let text = String::from_utf8_lossy(&resource.data);
+        let options = roxmltree::ParsingOptions {
+            allow_dtd: true,
+            ..Default::default()
+        };
+        // roxmltree checks XML 1.0 well-formedness; the QName scan catches
+        // what it tolerates but namespace-aware reader parsers reject (the
+        // 0.4.0/0.4.1 bug wrote `:xmlns`, which roxmltree swallows whole).
+        let detail = match roxmltree::Document::parse_with_options(&text, options) {
+            Err(e) => Some(e.to_string()),
+            Ok(_) => validate::find_invalid_qname(&text)
+                .map(|(name, line)| format!("name '{name}' on line {line} is not a valid QName")),
+        };
+        if let Some(detail) = detail {
+            return Err(ConvertError::MalformedOutput {
+                path: path.clone(),
+                detail,
+            });
+        }
+    }
+    Ok(())
 }
 
 /// Remove every embedded font resource from `book`, returning the set of
@@ -1468,6 +1507,55 @@ fn join_dir(dir: &str, name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A one-resource book for exercising the output well-formedness gate.
+    fn gate_book(data: &[u8], media_type: &str) -> crate::epub::model::Book {
+        use crate::epub::model::{Book, Metadata, Resource};
+        let mut resources = indexmap::IndexMap::new();
+        resources.insert(
+            "OEBPS/text/chapter1.xhtml".to_string(),
+            Resource {
+                data: data.to_vec(),
+                media_type: media_type.to_string(),
+            },
+        );
+        Book {
+            metadata: Metadata::default(),
+            resources,
+            spine: vec!["OEBPS/text/chapter1.xhtml".to_string()],
+            toc: Vec::new(),
+            cover: None,
+            opf_path: "OEBPS/content.opf".to_string(),
+            nav_path: None,
+            ncx_path: None,
+        }
+    }
+
+    #[test]
+    fn malformed_content_doc_fails_the_output_gate() {
+        let book = gate_book(
+            br#"<?xml version="1.0"?><html><body><svg :xmlns="x"></svg></body></html>"#,
+            "application/xhtml+xml",
+        );
+        let err = ensure_output_wellformed(&book).expect_err("malformed output must be refused");
+        assert_eq!(err.code(), "malformed-output");
+        assert!(err.to_string().contains("chapter1.xhtml"), "got: {err}");
+    }
+
+    #[test]
+    fn wellformed_content_doc_passes_the_output_gate() {
+        let book = gate_book(
+            br#"<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml"><body><p>ok</p></body></html>"#,
+            "application/xhtml+xml",
+        );
+        ensure_output_wellformed(&book).expect("well-formed output must pass");
+    }
+
+    #[test]
+    fn non_xhtml_resources_are_not_gated() {
+        let book = gate_book(b"not xml at all { }", "text/css");
+        ensure_output_wellformed(&book).expect("non-XHTML resources are not XML-checked");
+    }
 
     /// The generated helper stylesheet must already be device-conformant: the
     /// CSS filter is a no-op on it (and idempotent), which is why `convert` does

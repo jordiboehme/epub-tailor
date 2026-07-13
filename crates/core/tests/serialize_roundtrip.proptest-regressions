@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 184aa222b4a23610d76b4c1fbb9cf91fd82937e57561175bdec8ca4367f15cbc # shrinks to nodes = [Comment("><a\0")]

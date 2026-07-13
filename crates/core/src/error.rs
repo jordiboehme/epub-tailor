@@ -43,6 +43,16 @@ pub enum ConvertError {
     #[error("image processing failed: {0}")]
     Image(String),
 
+    /// The converter produced a content document that is not well-formed XML.
+    /// Can only be a bug in epub-tailor itself; the conversion is aborted so
+    /// the broken output never reaches disk (in-place mode included).
+    #[error(
+        "internal error: generated content document '{path}' is not well-formed XML ({detail}); \
+         this is a bug in epub-tailor and no output was written - please report it at \
+         https://github.com/jordiboehme/epub-tailor/issues"
+    )]
+    MalformedOutput { path: String, detail: String },
+
     /// An underlying I/O operation failed.
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
@@ -63,6 +73,7 @@ impl ConvertError {
             ConvertError::InvalidMarkdown(_) => "invalid-markdown",
             ConvertError::UnsupportedInput(_) => "unsupported-input",
             ConvertError::Image(_) => "image-failed",
+            ConvertError::MalformedOutput { .. } => "malformed-output",
             ConvertError::Io(_) => "io-error",
         }
     }

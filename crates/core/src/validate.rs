@@ -31,6 +31,7 @@ use crate::epub::read::{
 };
 use crate::html::dom::get_attr;
 use crate::html::parse_xhtml;
+use crate::html::serialize::is_ncname;
 use crate::image::sniff_raster_kind;
 use crate::is_font;
 use crate::profile::{DeviceCaps, Features};
@@ -160,6 +161,7 @@ pub fn lint_epub(bytes: &[u8], caps: &DeviceCaps, features: &Features) -> Vec<Li
     check_spine_readable(&opf, &opf_path, &mut findings);
     check_manifest_sync(&entries, &opf, &opf_path, &mut findings);
     check_spine_toc_sync(&entries, &opf, &mut findings);
+    check_content_wellformed(&entries, &opf, &mut findings);
     check_duplicate_ids(&entries, &opf, &mut findings);
     if features.transcode_images || features.rasterize_svg {
         check_image_format(&entries, &opf, &opf_path, caps, features, &mut findings);
@@ -173,6 +175,165 @@ pub fn lint_epub(bytes: &[u8], caps: &DeviceCaps, features: &Features) -> Vec<Li
     }
 
     findings
+}
+
+// ---------------------------------------------------------------------
+// content-wellformed
+// ---------------------------------------------------------------------
+
+/// Scan XML `text` for element or attribute names that are not namespace-valid
+/// QNames (`NCName` or `NCName:NCName`), returning the first offender and its
+/// 1-based line.
+///
+/// roxmltree only enforces XML 1.0 well-formedness, where a name may contain
+/// any number of colons - it even swallows `:xmlns` whole, as a namespace
+/// declaration. The namespace-aware parsers inside actual EPUB readers reject
+/// such names outright; libxml2 reports `Failed to parse QName ':xmlns'`,
+/// which is exactly how the 0.4.0/0.4.1 corruption surfaced. This scan closes
+/// that gap. Only call it on text roxmltree has already accepted:
+/// well-formedness (no stray `<` in text or attribute values, quoted values,
+/// terminated comments) is what keeps the scanner this simple.
+pub fn find_invalid_qname(text: &str) -> Option<(String, usize)> {
+    let mut offset = 0;
+    while let Some(lt) = text[offset..].find('<') {
+        offset += lt;
+        let rest = &text[offset..];
+        let skipped = if rest.starts_with("<!--") {
+            rest.find("-->").map_or(rest.len(), |p| p + 3)
+        } else if rest.starts_with("<![CDATA[") {
+            rest.find("]]>").map_or(rest.len(), |p| p + 3)
+        } else if rest.starts_with("<?") {
+            rest.find("?>").map_or(rest.len(), |p| p + 2)
+        } else if rest.starts_with("<!") {
+            skip_doctype(rest)
+        } else {
+            let (len, bad) = scan_tag_names(rest);
+            if let Some(name) = bad {
+                let line = text[..offset].matches('\n').count() + 1;
+                return Some((name, line));
+            }
+            len
+        };
+        offset += skipped.max(1).min(rest.len());
+        if offset >= text.len() {
+            break;
+        }
+    }
+    None
+}
+
+/// Byte length of a `<!DOCTYPE ...>` at the start of `text`, stepping over an
+/// internal subset (`[...]`, which may itself contain `<`/`>` markup).
+fn skip_doctype(text: &str) -> usize {
+    let bytes = text.as_bytes();
+    let mut i = 0;
+    let mut in_subset = false;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'[' => in_subset = true,
+            b']' => in_subset = false,
+            b'>' if !in_subset => return i + 1,
+            _ => {}
+        }
+        i += 1;
+    }
+    text.len()
+}
+
+/// Validate the names inside one start or end tag beginning at `tag` (which
+/// starts with `<`). Returns the tag's byte length (through its closing `>`)
+/// and the first invalid name found in it. Quoted attribute values are
+/// skipped whole, since they may legally contain `>`.
+fn scan_tag_names(tag: &str) -> (usize, Option<String>) {
+    fn is_qname(name: &str) -> bool {
+        match name.split_once(':') {
+            None => is_ncname(name),
+            Some((prefix, local)) => is_ncname(prefix) && is_ncname(local),
+        }
+    }
+    let bytes = tag.as_bytes();
+    let len = bytes.len();
+    let mut i = 1; // past '<'
+    if bytes.get(i) == Some(&b'/') {
+        i += 1;
+    }
+    let name_start = i;
+    while i < len && !matches!(bytes[i], b' ' | b'\t' | b'\n' | b'\r' | b'/' | b'>') {
+        i += 1;
+    }
+    if !is_qname(&tag[name_start..i]) {
+        return (i, Some(tag[name_start..i].to_string()));
+    }
+    loop {
+        while i < len && matches!(bytes[i], b' ' | b'\t' | b'\n' | b'\r' | b'/') {
+            i += 1;
+        }
+        if i >= len || bytes[i] == b'>' {
+            return ((i + 1).min(len), None);
+        }
+        let attr_start = i;
+        while i < len && !matches!(bytes[i], b'=' | b' ' | b'\t' | b'\n' | b'\r' | b'>' | b'/') {
+            i += 1;
+        }
+        if !is_qname(&tag[attr_start..i]) {
+            return (i, Some(tag[attr_start..i].to_string()));
+        }
+        while i < len && !matches!(bytes[i], b'"' | b'\'' | b'>') {
+            i += 1;
+        }
+        if i < len && (bytes[i] == b'"' || bytes[i] == b'\'') {
+            let quote = bytes[i];
+            i += 1;
+            while i < len && bytes[i] != quote {
+                i += 1;
+            }
+            i += 1;
+        }
+    }
+}
+
+/// Every XHTML content document must be well-formed XML: EPUB readers parse
+/// them strictly, so one malformed document breaks the book on the device
+/// even when everything else is fine. This is also the check that spots books
+/// damaged by epub-tailor 0.4.0/0.4.1, whose serializer could write a
+/// malformed `:xmlns` attribute name (readers report it as `Failed to parse
+/// QName ':xmlns'`). Note the deliberate contrast with the rest of this
+/// module: content documents are otherwise inspected with the lenient HTML
+/// parser, which swallows exactly this class of damage.
+fn check_content_wellformed(
+    entries: &IndexMap<String, Vec<u8>>,
+    opf: &OpfLint,
+    findings: &mut Vec<LintFinding>,
+) {
+    let mut seen: HashSet<&str> = HashSet::new();
+    for item in opf.manifest.values() {
+        if item.media_type != "application/xhtml+xml" && item.media_type != "text/html" {
+            continue;
+        }
+        if !seen.insert(item.href.as_str()) {
+            continue;
+        }
+        // A missing entry is check_manifest_sync's finding, not ours.
+        let Some(data) = entries.get(&item.href) else {
+            continue;
+        };
+        let text = String::from_utf8_lossy(data);
+        let detail = match parse_xml(&text) {
+            Err(e) => Some(e.to_string()),
+            Ok(_) => find_invalid_qname(&text)
+                .map(|(name, line)| format!("name '{name}' on line {line} is not a valid QName")),
+        };
+        if let Some(detail) = detail {
+            findings.push(LintFinding::error(
+                "content-wellformed",
+                format!(
+                    "{} is not well-formed XML ({detail}); strict readers cannot open it",
+                    item.href
+                ),
+                Some(item.href.clone()),
+            ));
+        }
+    }
 }
 
 // ---------------------------------------------------------------------
@@ -1191,6 +1352,72 @@ mod tests {
             .iter()
             .filter(|f| f.severity == Severity::Error)
             .collect()
+    }
+
+    #[test]
+    fn qname_scan_finds_corrupt_colon_xmlns_with_its_line() {
+        let text = "<html xmlns=\"http://www.w3.org/1999/xhtml\">\n<body>\n<svg :xmlns=\"http://www.w3.org/2000/svg\"></svg>\n</body></html>";
+        assert_eq!(
+            find_invalid_qname(text),
+            Some((":xmlns".to_string(), 3))
+        );
+    }
+
+    #[test]
+    fn qname_scan_accepts_a_clean_document() {
+        let text = r#"<?xml version="1.0"?><!DOCTYPE html><html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><body><p xml:lang="de" epub:type="pagebreak" data-x="1">a &amp; b</p><!-- a comment --></body></html>"#;
+        assert_eq!(find_invalid_qname(text), None);
+    }
+
+    #[test]
+    fn qname_scan_ignores_lookalikes_in_comments_cdata_and_values() {
+        let text = "<html><body><!-- <svg :xmlns=\"x\"> --><p title=\"a :xmlns= <b\">t</p><script><![CDATA[ <x :xmlns='y'> ]]></script></body></html>";
+        assert_eq!(find_invalid_qname(text), None);
+    }
+
+    #[test]
+    fn qname_scan_flags_a_double_colon_element_name() {
+        assert_eq!(
+            find_invalid_qname("<html><body><a:b:c/></body></html>"),
+            Some(("a:b:c".to_string(), 1))
+        );
+    }
+
+    #[test]
+    fn qname_scan_steps_over_a_doctype_internal_subset() {
+        let text = "<!DOCTYPE html [ <!ENTITY nbsp \"&#160;\"> ]>\n<html><body><p>ok</p></body></html>";
+        assert_eq!(find_invalid_qname(text), None);
+    }
+
+    #[test]
+    fn corrupt_content_doc_yields_content_wellformed_error() {
+        // The `:xmlns` malformation epub-tailor 0.4.0/0.4.1 wrote: lenient
+        // HTML parsing swallows it, so only a strict XML check can flag it.
+        const CORRUPT: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>C</title></head>
+<body><svg :xmlns="http://www.w3.org/2000/svg" viewBox="0 0 4 4"></svg></body></html>"#;
+        let opf = minimal_opf("", "");
+        let entries: Vec<(&str, &[u8])> = vec![
+            ("mimetype", b"application/epub+zip"),
+            ("META-INF/container.xml", CONTAINER_XML),
+            ("OEBPS/content.opf", &opf),
+            ("OEBPS/nav.xhtml", NAV_XHTML),
+            ("OEBPS/text/chapter1.xhtml", CORRUPT),
+            ("OEBPS/styles/main.css", MAIN_CSS),
+        ];
+        let bytes = build_zip(&entries);
+        let findings = lint_epub(&bytes, &DeviceCaps::x4(), &Features::all_on());
+        let finding = findings
+            .iter()
+            .find(|f| f.code == "content-wellformed")
+            .expect("a content-wellformed finding");
+        assert_eq!(finding.severity, Severity::Error);
+        assert_eq!(finding.path.as_deref(), Some("OEBPS/text/chapter1.xhtml"));
+        assert!(
+            finding.message.contains("not well-formed XML"),
+            "got: {}",
+            finding.message
+        );
     }
 
     #[test]

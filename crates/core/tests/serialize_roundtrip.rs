@@ -1,10 +1,14 @@
-//! Property test for the strict-XHTML serializer: for arbitrary trees built
+//! Property tests for the strict-XHTML serializer: for arbitrary trees built
 //! from a small tag/attribute/text alphabet, `serialize_xhtml` is a fixed
 //! point under `parse_xhtml` — that is, re-parsing serialized output and
-//! serializing it again yields byte-identical output. This is the core
-//! guarantee the EPUB round trip relies on.
+//! serializing it again yields byte-identical output — and its output is
+//! well-formed, namespace-valid XML. The alphabet includes inline SVG/MathML
+//! with namespace declarations, `xlink:` attributes and hostile attribute
+//! names (`:xmlns`, `calibre:x`): the fixed-point property alone cannot catch
+//! a serializer writing stable garbage (0.4.0/0.4.1's `:xmlns` corruption was
+//! such a fixed point), which is what the strict-XML property is for.
 
-use epub_tailor_core::{parse_xhtml, serialize_xhtml};
+use epub_tailor_core::{find_invalid_qname, parse_xhtml, serialize_xhtml};
 use proptest::prelude::*;
 
 /// A node in a randomly generated document fragment, drawn from a deliberately
@@ -16,11 +20,43 @@ enum Node {
     Comment(String),
     Void(&'static str, Vec<(&'static str, String)>),
     Elem(&'static str, Vec<(&'static str, String)>, Vec<Node>),
+    Foreign {
+        kind: ForeignKind,
+        declare_ns: bool,
+        declare_xlink: bool,
+        attrs: Vec<(&'static str, String)>,
+        children: Vec<ForeignChild>,
+    },
+}
+
+/// One level-deep foreign child element: (tag, attrs, text content).
+type ForeignChild = (&'static str, Vec<(&'static str, String)>, String);
+
+#[derive(Debug, Clone, Copy)]
+enum ForeignKind {
+    Svg,
+    Math,
 }
 
 const CONTAINER_TAGS: &[&str] = &["div", "p", "span", "em", "strong", "blockquote", "li"];
 const VOID_TAGS: &[&str] = &["br", "hr", "img"];
 const ATTR_NAMES: &[&str] = &["class", "id", "title", "epub:type", "data-x"];
+const SVG_CHILD_TAGS: &[&str] = &["circle", "rect", "g"];
+const MATH_CHILD_TAGS: &[&str] = &["mi", "mrow", "mn"];
+/// Foreign-content attribute names: html5ever's case adjustment (`viewBox`),
+/// namespaced forms (`xlink:href`, `xml:lang`), plus the hostile names the
+/// serializer must drop — `:xmlns` is the exact 0.4.0/0.4.1 corruption fed
+/// back in as input.
+const FOREIGN_ATTR_NAMES: &[&str] = &[
+    "viewBox",
+    "fill",
+    "xlink:href",
+    "xml:lang",
+    "class",
+    ":xmlns",
+    ":class",
+    "calibre:x",
+];
 
 /// Text drawn to include the characters the serializer must escape, plus a
 /// sample of the C0 control characters that are invalid in XML 1.0 and must
@@ -72,12 +108,52 @@ fn attrs_strategy() -> impl Strategy<Value = Vec<(&'static str, String)>> {
     )
 }
 
+fn foreign_attrs_strategy() -> impl Strategy<Value = Vec<(&'static str, String)>> {
+    proptest::collection::vec(
+        (
+            proptest::sample::select(FOREIGN_ATTR_NAMES),
+            attr_value_strategy(),
+        ),
+        0..3,
+    )
+}
+
+fn foreign_strategy() -> impl Strategy<Value = Node> {
+    prop_oneof![Just(ForeignKind::Svg), Just(ForeignKind::Math)].prop_flat_map(|kind| {
+        let child_tags = match kind {
+            ForeignKind::Svg => SVG_CHILD_TAGS,
+            ForeignKind::Math => MATH_CHILD_TAGS,
+        };
+        (
+            any::<bool>(),
+            any::<bool>(),
+            foreign_attrs_strategy(),
+            proptest::collection::vec(
+                (
+                    proptest::sample::select(child_tags),
+                    foreign_attrs_strategy(),
+                    text_strategy(),
+                ),
+                0..3,
+            ),
+        )
+            .prop_map(move |(declare_ns, declare_xlink, attrs, children)| Node::Foreign {
+                kind,
+                declare_ns,
+                declare_xlink,
+                attrs,
+                children,
+            })
+    })
+}
+
 fn node_strategy() -> impl Strategy<Value = Node> {
     let leaf = prop_oneof![
         text_strategy().prop_map(Node::Text),
         comment_strategy().prop_map(Node::Comment),
         (proptest::sample::select(VOID_TAGS), attrs_strategy())
             .prop_map(|(tag, attrs)| Node::Void(tag, attrs)),
+        foreign_strategy(),
     ];
     leaf.prop_recursive(4, 32, 4, |inner| {
         (
@@ -152,6 +228,41 @@ fn render(node: &Node, out: &mut String) {
             out.push_str(tag);
             out.push('>');
         }
+        Node::Foreign {
+            kind,
+            declare_ns,
+            declare_xlink,
+            attrs,
+            children,
+        } => {
+            let (root, ns) = match kind {
+                ForeignKind::Svg => ("svg", "http://www.w3.org/2000/svg"),
+                ForeignKind::Math => ("math", "http://www.w3.org/1998/Math/MathML"),
+            };
+            out.push('<');
+            out.push_str(root);
+            if *declare_ns {
+                out.push_str(&format!(" xmlns=\"{ns}\""));
+            }
+            if *declare_xlink {
+                out.push_str(" xmlns:xlink=\"http://www.w3.org/1999/xlink\"");
+            }
+            render_attrs(attrs, out);
+            out.push('>');
+            for (tag, cattrs, text) in children {
+                out.push('<');
+                out.push_str(tag);
+                render_attrs(cattrs, out);
+                out.push('>');
+                render(&Node::Text(text.clone()), out);
+                out.push_str("</");
+                out.push_str(tag);
+                out.push('>');
+            }
+            out.push_str("</");
+            out.push_str(root);
+            out.push('>');
+        }
     }
 }
 
@@ -177,5 +288,22 @@ proptest! {
             "serialize output must be stable under parse∘serialize\nfirst: {}",
             String::from_utf8_lossy(&first)
         );
+    }
+
+    /// The property the fixed-point test cannot express: output must be
+    /// well-formed, namespace-valid XML. 0.4.0/0.4.1's `:xmlns` corruption
+    /// was a stable fixed point — only this assertion catches that bug class.
+    #[test]
+    fn serialized_output_is_strict_xml(nodes in proptest::collection::vec(node_strategy(), 0..6)) {
+        let src = document_from(&nodes);
+        let first = serialize_xhtml(&parse_xhtml(src.as_bytes()).expect("parse source"));
+        let text = std::str::from_utf8(&first).expect("serializer output is UTF-8");
+        let options = roxmltree::ParsingOptions { allow_dtd: true, ..Default::default() };
+        if let Err(e) = roxmltree::Document::parse_with_options(text, options) {
+            prop_assert!(false, "output is not well-formed XML: {e}\n{text}");
+        }
+        if let Some((name, line)) = find_invalid_qname(text) {
+            prop_assert!(false, "output contains invalid QName '{name}' on line {line}\n{text}");
+        }
     }
 }
