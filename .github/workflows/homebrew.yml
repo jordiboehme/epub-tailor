@@ -33,7 +33,7 @@ jobs:
           sums="/tmp/release/SHA256SUMS"
 
           sha_macos_arm=$(grep "epub-tailor-${TAG}-macos-arm64.tar.gz" "$sums" | awk '{print $1}')
-          sha_macos_intel=$(grep "epub-tailor-${TAG}-macos-amd64.tar.gz" "$sums" | awk '{print $1}')
+          sha_macos_intel=$(grep "epub-tailor-${TAG}-macos-intel.tar.gz" "$sums" | awk '{print $1}')
           sha_linux_arm=$(grep "epub-tailor-${TAG}-linux-arm64.tar.gz" "$sums" | awk '{print $1}')
           sha_linux_intel=$(grep "epub-tailor-${TAG}-linux-amd64.tar.gz" "$sums" | awk '{print $1}')
 
@@ -56,7 +56,7 @@ jobs:
               end
 
               on_intel do
-                url "https://github.com/jordiboehme/epub-tailor/releases/download/v#{version}/epub-tailor-v#{version}-macos-amd64.tar.gz"
+                url "https://github.com/jordiboehme/epub-tailor/releases/download/v#{version}/epub-tailor-v#{version}-macos-intel.tar.gz"
                 sha256 "${sha_macos_intel}"
               end
             end
