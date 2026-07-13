@@ -30,6 +30,11 @@ pub struct ConvertOptions {
     /// A cover image to embed, already read from disk by the caller. This crate
     /// never opens a file (nor a socket), so a cover arrives as bytes.
     pub cover_image: Option<CoverImage>,
+    /// Provenance stamp written into the output OPF as
+    /// `<meta property="tailor:fitted">`, so a later folder scan can tell a
+    /// product from a source. `None` writes nothing. Set by `fit`, never by
+    /// `md` - a Markdown conversion produces a source, not a fitted book.
+    pub output_stamp: Option<String>,
 }
 
 /// A cover image handed to [`crate::convert`] as bytes.
@@ -58,6 +63,7 @@ impl Default for ConvertOptions {
             metadata: MetadataDoc::default(),
             metadata_merge: MergeMode::Fill,
             cover_image: None,
+            output_stamp: None,
         }
     }
 }
@@ -99,6 +105,7 @@ mod tests {
         assert_eq!(opts.max_chapter_bytes, 200 * 1024);
         assert_eq!(opts.split_level, 1);
         assert!(!opts.dry_run);
+        assert!(opts.output_stamp.is_none());
     }
 
     #[test]

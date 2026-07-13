@@ -15,8 +15,9 @@
 //! else. Every payload has a `schema` version. Failures print a machine-readable
 //! `{"error": {"code": ...}}` on stdout as well as prose on stderr. A batch run
 //! (a folder or several inputs) aggregates instead: one document with a
-//! `results` array (per-file statuses) and a `summary`, in which per-file
-//! failures are entries rather than separate error payloads. The one
+//! `results` array (per-file statuses, skips carrying a `reason`), an
+//! `in_place` flag and a `summary`, in which per-file failures are entries
+//! rather than separate error payloads. The one
 //! command that ever prompts is `metadata pick`, and it refuses to run when
 //! stdin is not a terminal, so a UI can never hang on a question it did not
 //! expect.
@@ -521,6 +522,17 @@ fn single_file_mode(inputs: &[PathBuf]) -> bool {
     inputs.len() == 1 && !inputs[0].is_dir()
 }
 
+/// The provenance stamp `fit` writes into its output OPF: the profile
+/// appendix (the hook for a future re-fit-if-different-profile rule) plus
+/// the version that produced it.
+fn stamp_value(resolved: &Profile) -> String {
+    format!(
+        "{} {}",
+        resolved.appendix_or_default(),
+        env!("CARGO_PKG_VERSION")
+    )
+}
+
 /// Run the `fit` subcommand: route a single file through the classic path,
 /// anything else through the batch loop.
 fn run_fit(
@@ -532,19 +544,20 @@ fn run_fit(
     if single_file_mode(inputs) {
         return run_fit_single(&inputs[0], in_place, common);
     }
-    if in_place {
-        eprintln!(
-            "error: --lets-get-dangerous needs a single file input, not a folder or a list of files"
-        );
-        return ExitCode::from(ERROR_EXIT_CODE);
-    }
-    run_fit_batch(inputs, batch_args, common)
+    run_fit_batch(inputs, in_place, batch_args, common)
 }
 
 /// Run `fit` over folders and several files: resolve the profile and
 /// metadata once (a `--metadata -` document arrives on stdin exactly once),
-/// then hand the loop to the batch module.
-fn run_fit_batch(inputs: &[PathBuf], batch_args: &BatchArgs, common: &CommonArgs) -> ExitCode {
+/// then hand the loop to the batch module. With `--lets-get-dangerous` every
+/// book is replaced in place via the same staged write the single-file path
+/// uses; the provenance stamp is what keeps a rerun from re-fitting them.
+fn run_fit_batch(
+    inputs: &[PathBuf],
+    in_place: bool,
+    batch_args: &BatchArgs,
+    common: &CommonArgs,
+) -> ExitCode {
     let resolved = match common.resolve_profile() {
         Ok(resolved) => resolved,
         Err(e) => {
@@ -561,6 +574,7 @@ fn run_fit_batch(inputs: &[PathBuf], batch_args: &BatchArgs, common: &CommonArgs
         }
         Err(e) => return fail(common.report, "metadata", &e),
     }
+    opts.output_stamp = Some(stamp_value(&resolved));
     let cfg = batch::ConvertBatch {
         kind: batch::JobKind::Fit,
         input_extension: "epub",
@@ -569,6 +583,7 @@ fn run_fit_batch(inputs: &[PathBuf], batch_args: &BatchArgs, common: &CommonArgs
         recursive: batch_args.recursive,
         force: batch_args.force,
         output_dir: common.output.clone(),
+        in_place,
     };
     batch::run_convert_batch(inputs, &cfg, &opts, common.report)
 }
@@ -596,6 +611,7 @@ fn run_fit_single(input: &Path, in_place: bool, common: &CommonArgs) -> ExitCode
         }
         Err(e) => return fail(common.report, "metadata", &e),
     }
+    opts.output_stamp = Some(stamp_value(&resolved));
     let converted = match batch::convert_file(input, batch::JobKind::Fit, &opts) {
         Ok(converted) => converted,
         Err(e) => return fail(common.report, &e.code, &e.message),
@@ -664,6 +680,7 @@ fn run_md_batch(
         recursive: batch_args.recursive,
         force: batch_args.force,
         output_dir: common.output.clone(),
+        in_place: false,
     };
     batch::run_convert_batch(inputs, &cfg, &opts, common.report)
 }

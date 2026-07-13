@@ -91,6 +91,17 @@ fn epub3_fixture_roundtrips_clean_through_epubcheck() {
 }
 
 #[test]
+fn stamped_output_roundtrips_clean_through_epubcheck() {
+    // The provenance stamp rides on a custom `tailor:` prefix; epubcheck is
+    // the authority on whether that declaration is well-formed.
+    let opts = ConvertOptions {
+        output_stamp: Some("x4 0.0.0-test".to_string()),
+        ..ConvertOptions::default()
+    };
+    assert_clean_roundtrip_with("epub3-stamped", epub3_minimal(), &opts);
+}
+
+#[test]
 fn epub2_fixture_roundtrips_clean_through_epubcheck() {
     assert_clean_roundtrip("epub2", epub2_minimal());
 }

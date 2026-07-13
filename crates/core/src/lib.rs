@@ -36,7 +36,7 @@ pub use crate::image::{ImageOutcome, ImageRole, OutFormat, process_image};
 pub use css::{FilteredCss, filter_css, filter_inline_style};
 pub use epub::{
     Book, Creator, Identifier, Metadata, ReadEpub, Resource, Series, TocEntry, read_epub,
-    relative_href, write_epub,
+    read_stamp, relative_href, write_epub,
 };
 pub use error::ConvertError;
 pub use filter::{FilterAction, FilterRule, FilterTarget};
@@ -531,7 +531,7 @@ pub fn convert(input: Input, opts: &ConvertOptions) -> Result<Converted, Convert
     }
 
     let chapter_count = book.spine.len() as u32;
-    let epub = write_epub(&book)?;
+    let epub = write_epub(&book, opts.output_stamp.as_deref())?;
     let bytes_out = epub.len() as u64;
 
     // Our own output must never carry a structural error the device would

@@ -25,10 +25,14 @@ use crate::html::escape::{escape_attr, escape_text};
 /// unchanged. A navigation document and/or NCX are synthesized from
 /// `book.toc` if the book lacks them.
 ///
+/// `stamp` is the provenance marker written as
+/// `<meta property="tailor:fitted">` (with its prefix declaration); `None`
+/// leaves the OPF byte-identical to an unstamped write.
+///
 /// # Errors
 /// Returns [`ConvertError::Io`] if a template fails to render or a ZIP entry
 /// cannot be written (neither is expected for well-formed model data).
-pub fn write_epub(book: &Book) -> Result<Vec<u8>, ConvertError> {
+pub fn write_epub(book: &Book, stamp: Option<&str>) -> Result<Vec<u8>, ConvertError> {
     let opf_dir = parent_dir(&book.opf_path);
     let nav_path = book
         .nav_path
@@ -163,6 +167,7 @@ pub fn write_epub(book: &Book) -> Result<Vec<u8>, ConvertError> {
         series: series.name,
         series_index: series.index.unwrap_or_default(),
         modified: now_utc_iso8601(),
+        stamp: stamp.unwrap_or_default().to_string(),
         cover_id,
         ncx_id,
         items,
@@ -265,6 +270,9 @@ struct OpfTemplate {
     series: String,
     series_index: String,
     modified: String,
+    /// The `tailor:fitted` provenance value; empty writes no stamp and no
+    /// prefix declaration, keeping the OPF byte-identical to pre-stamp output.
+    stamp: String,
     cover_id: String,
     ncx_id: String,
     items: Vec<OpfItem>,
@@ -676,8 +684,8 @@ mod tests {
     }
 
     /// Write a hand-built `Book` carrying `language` and return its regenerated
-    /// OPF text, for pinning the last-resort `dc:language` guard.
-    fn opf_for_language(language: &str) -> String {
+    /// OPF text, for pinning the last-resort `dc:language` guard and the stamp.
+    fn opf_for(language: &str, stamp: Option<&str>) -> String {
         use std::io::Read;
 
         let opf_path = "OEBPS/content.opf".to_string();
@@ -706,7 +714,7 @@ mod tests {
             nav_path: None,
             ncx_path: None,
         };
-        let bytes = write_epub(&book).expect("write should succeed");
+        let bytes = write_epub(&book, stamp).expect("write should succeed");
 
         let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).expect("output is a valid zip");
         let mut opf = String::new();
@@ -720,7 +728,7 @@ mod tests {
 
     #[test]
     fn empty_language_defaults_to_en_in_the_opf() {
-        let opf = opf_for_language("");
+        let opf = opf_for("", None);
         assert!(
             opf.contains("<dc:language>en</dc:language>"),
             "an empty language must default to en: {opf}"
@@ -731,11 +739,32 @@ mod tests {
     fn whitespace_only_language_defaults_to_en_in_the_opf() {
         // The guard trims before testing for emptiness, so a whitespace-only
         // language must default to "en" the same as an empty one.
-        let opf = opf_for_language("   ");
+        let opf = opf_for("   ", None);
         assert!(
             opf.contains("<dc:language>en</dc:language>"),
             "a whitespace-only language must default to en: {opf}"
         );
+    }
+
+    #[test]
+    fn stamp_template_matches_the_probe_constants() {
+        // askama templates cannot reference Rust consts, so this pins the
+        // template against `stamp::STAMP_PROPERTY`/`STAMP_PREFIX_IRI` - if
+        // either side drifts, the probe stops finding what the writer wrote.
+        let stamped = opf_for("en", Some("x4 1.2.3"));
+        assert!(
+            stamped.contains(crate::epub::stamp::STAMP_PROPERTY),
+            "got: {stamped}"
+        );
+        assert!(
+            stamped.contains(crate::epub::stamp::STAMP_PREFIX_IRI),
+            "got: {stamped}"
+        );
+        assert!(stamped.contains(">x4 1.2.3</meta>"), "got: {stamped}");
+
+        let unstamped = opf_for("en", None);
+        assert!(!unstamped.contains("prefix="), "got: {unstamped}");
+        assert!(!unstamped.contains("tailor:fitted"), "got: {unstamped}");
     }
 
     #[test]

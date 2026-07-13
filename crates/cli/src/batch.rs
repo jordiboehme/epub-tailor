@@ -78,6 +78,31 @@ pub enum SkipReason {
     PriorOutput,
     /// The output this input maps to already exists on disk.
     OutputExists(PathBuf),
+    /// The file carries the `tailor:fitted` provenance stamp: a previous fit
+    /// produced it, whatever it is named now.
+    AlreadyTailored,
+}
+
+impl SkipReason {
+    /// The stable `reason` string in the JSON report.
+    fn json_reason(&self) -> &'static str {
+        match self {
+            SkipReason::PriorOutput => "prior-output",
+            SkipReason::OutputExists(_) => "output-exists",
+            SkipReason::AlreadyTailored => "already-tailored",
+        }
+    }
+
+    /// The parenthesized explanation on a human skip line.
+    fn describe(&self) -> String {
+        match self {
+            SkipReason::PriorOutput => "output of a previous run".to_string(),
+            SkipReason::OutputExists(output) => {
+                format!("{} already exists, use --force", output.display())
+            }
+            SkipReason::AlreadyTailored => "already tailored, use --force".to_string(),
+        }
+    }
 }
 
 /// What happened to one file of a batch run.
@@ -111,6 +136,10 @@ pub struct ConvertBatch {
     pub recursive: bool,
     pub force: bool,
     pub output_dir: Option<PathBuf>,
+    /// Replace each input via a staged write instead of producing a copy
+    /// (`--lets-get-dangerous`). Output == input, so the output-exists skip
+    /// never applies; the provenance stamp keeps reruns idempotent.
+    pub in_place: bool,
 }
 
 enum Planned {
@@ -159,7 +188,7 @@ pub fn run_convert_batch(
             eprintln!("error: {}: {message}", input.display());
         }
         if matches!(report_format, ReportArg::Human) {
-            print_outcome_line(&outcome, opts.dry_run);
+            print_outcome_line(&outcome, opts.dry_run, cfg.in_place);
         }
         outcomes.push(outcome);
     }
@@ -170,7 +199,7 @@ pub fn run_convert_batch(
             // One aggregate document; per-file failures are results in it,
             // never separate error payloads, or stdout stops being one
             // parseable document.
-            let payload = json_report(&outcomes, opts.dry_run);
+            let payload = json_report(&outcomes, opts.dry_run, cfg.in_place);
             match serde_json::to_string_pretty(&payload) {
                 Ok(json) => println!("{json}"),
                 Err(e) => {
@@ -191,7 +220,7 @@ pub fn run_convert_batch(
     }
 }
 
-fn json_report(outcomes: &[FileOutcome], dry_run: bool) -> serde_json::Value {
+fn json_report(outcomes: &[FileOutcome], dry_run: bool, in_place: bool) -> serde_json::Value {
     let results: Vec<serde_json::Value> = outcomes
         .iter()
         .map(|outcome| match outcome {
@@ -208,23 +237,17 @@ fn json_report(outcomes: &[FileOutcome], dry_run: bool) -> serde_json::Value {
                 "warnings": report.warnings,
                 "stats": report.stats,
             }),
-            FileOutcome::Skipped {
-                input,
-                reason: SkipReason::PriorOutput,
-            } => serde_json::json!({
-                "input": input.display().to_string(),
-                "status": "skipped",
-                "reason": "prior-output",
-            }),
-            FileOutcome::Skipped {
-                input,
-                reason: SkipReason::OutputExists(output),
-            } => serde_json::json!({
-                "input": input.display().to_string(),
-                "status": "skipped",
-                "reason": "output-exists",
-                "output": output.display().to_string(),
-            }),
+            FileOutcome::Skipped { input, reason } => {
+                let mut entry = serde_json::json!({
+                    "input": input.display().to_string(),
+                    "status": "skipped",
+                    "reason": reason.json_reason(),
+                });
+                if let SkipReason::OutputExists(output) = reason {
+                    entry["output"] = serde_json::Value::String(output.display().to_string());
+                }
+                entry
+            }
             FileOutcome::Failed {
                 input,
                 code,
@@ -248,6 +271,7 @@ fn json_report(outcomes: &[FileOutcome], dry_run: bool) -> serde_json::Value {
     serde_json::json!({
         "schema": SCHEMA_VERSION,
         "dry_run": dry_run,
+        "in_place": in_place,
         "results": results,
         "summary": {
             "converted": converted,
@@ -289,8 +313,12 @@ fn plan(inputs: &[PathBuf], cfg: &ConvertBatch) -> Result<Vec<Planned>, String> 
                 planned.push(classify(file, cfg));
             }
         } else {
-            let relative = PathBuf::from(input.file_name().unwrap_or(input.as_os_str()));
-            let output = map_output(input, &relative, cfg);
+            let output = if cfg.in_place {
+                input.clone()
+            } else {
+                let relative = PathBuf::from(input.file_name().unwrap_or(input.as_os_str()));
+                map_output(input, &relative, cfg)
+            };
             planned.push(Planned::Job {
                 input: input.clone(),
                 output,
@@ -301,10 +329,24 @@ fn plan(inputs: &[PathBuf], cfg: &ConvertBatch) -> Result<Vec<Planned>, String> 
 }
 
 fn classify(file: DiscoveredFile, cfg: &ConvertBatch) -> Planned {
+    // Cheapest check first: the name heuristic is free, the stamp probe
+    // opens the file. Both only ever run for scanned folders.
     if !cfg.force && is_prior_output(&file.path, &cfg.prior_output_suffixes) {
         return Planned::Skip {
             input: file.path,
             reason: SkipReason::PriorOutput,
+        };
+    }
+    if !cfg.force && matches!(cfg.kind, JobKind::Fit) && is_stamped(&file.path) {
+        return Planned::Skip {
+            input: file.path,
+            reason: SkipReason::AlreadyTailored,
+        };
+    }
+    if cfg.in_place {
+        return Planned::Job {
+            output: file.path.clone(),
+            input: file.path,
         };
     }
     let output = map_output(&file.path, &file.relative, cfg);
@@ -318,6 +360,15 @@ fn classify(file: DiscoveredFile, cfg: &ConvertBatch) -> Planned {
         input: file.path,
         output,
     }
+}
+
+/// Whether a scanned candidate already carries the fit provenance stamp.
+/// An unreadable or unprobeable file counts as unstamped, so a scan never
+/// dies here - conversion surfaces the real error, where it can be reported.
+fn is_stamped(path: &Path) -> bool {
+    std::fs::read(path)
+        .map(|bytes| epub_tailor_core::read_stamp(&bytes).is_some())
+        .unwrap_or(false)
 }
 
 /// The batch twin of `default_output_path`: same extension swap, but under
@@ -357,7 +408,7 @@ fn run_job(
                 message: format!("cannot create {}: {e}", parent.display()),
             };
         }
-        if let Err(e) = std::fs::write(&output, &converted.epub) {
+        if let Err(e) = crate::write_output(&output, &converted.epub, cfg.in_place) {
             return FileOutcome::Failed {
                 input,
                 code: "write-failed".to_string(),
@@ -400,30 +451,20 @@ fn is_prior_output(path: &Path, suffixes: &[String]) -> bool {
         .any(|suffix| name.ends_with(suffix.as_str()))
 }
 
-fn print_outcome_line(outcome: &FileOutcome, dry_run: bool) {
+fn print_outcome_line(outcome: &FileOutcome, dry_run: bool, in_place: bool) {
     match outcome {
-        FileOutcome::Converted { input, output, .. } => {
-            if dry_run {
-                println!("{} -> {} (dry run)", input.display(), output.display());
-            } else {
-                println!("{} -> {}", input.display(), output.display());
+        FileOutcome::Converted { input, output, .. } => match (in_place, dry_run) {
+            (true, true) => {
+                println!("{}: would replace in place (dry run)", input.display());
             }
-        }
-        FileOutcome::Skipped {
-            input,
-            reason: SkipReason::PriorOutput,
-        } => {
-            println!("{}: skipped (output of a previous run)", input.display());
-        }
-        FileOutcome::Skipped {
-            input,
-            reason: SkipReason::OutputExists(output),
-        } => {
-            println!(
-                "{}: skipped ({} already exists, use --force)",
-                input.display(),
-                output.display()
-            );
+            (true, false) => println!("{}: replaced in place", input.display()),
+            (false, true) => {
+                println!("{} -> {} (dry run)", input.display(), output.display());
+            }
+            (false, false) => println!("{} -> {}", input.display(), output.display()),
+        },
+        FileOutcome::Skipped { input, reason } => {
+            println!("{}: skipped ({})", input.display(), reason.describe());
         }
         FileOutcome::Failed {
             input,
@@ -463,10 +504,11 @@ pub enum CheckOutcome {
         input: PathBuf,
         findings: Vec<LintFinding>,
     },
-    /// The file is a prior run's output; linting it against the profile it
-    /// was cut for tells the user nothing new.
+    /// The file is a previous run's product (by name or by stamp); linting
+    /// it against the profile it was cut for tells the user nothing new.
     Skipped {
         input: PathBuf,
+        reason: SkipReason,
     },
     Unreadable {
         input: PathBuf,
@@ -512,7 +554,15 @@ pub fn run_check_batch(
             for file in found {
                 let outcome =
                     if !cfg.force && is_prior_output(&file.path, &cfg.prior_output_suffixes) {
-                        CheckOutcome::Skipped { input: file.path }
+                        CheckOutcome::Skipped {
+                            input: file.path,
+                            reason: SkipReason::PriorOutput,
+                        }
+                    } else if !cfg.force && is_stamped(&file.path) {
+                        CheckOutcome::Skipped {
+                            input: file.path,
+                            reason: SkipReason::AlreadyTailored,
+                        }
                     } else {
                         check_one(file.path, resolved)
                     };
@@ -603,8 +653,8 @@ fn print_check_outcome_line(outcome: &CheckOutcome) {
                 }
             }
         }
-        CheckOutcome::Skipped { input } => {
-            println!("{}: skipped (output of a previous run)", input.display());
+        CheckOutcome::Skipped { input, reason } => {
+            println!("{}: skipped ({})", input.display(), reason.describe());
         }
         CheckOutcome::Unreadable { input, .. } => {
             println!("{}: unreadable", input.display());
@@ -642,10 +692,10 @@ fn check_json_report(outcomes: &[CheckOutcome]) -> serde_json::Value {
                 "errors": severity_count(findings, Severity::Error),
                 "warnings": severity_count(findings, Severity::Warning),
             }),
-            CheckOutcome::Skipped { input } => serde_json::json!({
+            CheckOutcome::Skipped { input, reason } => serde_json::json!({
                 "input": input.display().to_string(),
                 "status": "skipped",
-                "reason": "prior-output",
+                "reason": reason.json_reason(),
             }),
             CheckOutcome::Unreadable { input, message } => serde_json::json!({
                 "input": input.display().to_string(),
@@ -689,6 +739,7 @@ mod tests {
             recursive: false,
             force: false,
             output_dir,
+            in_place: false,
         }
     }
 

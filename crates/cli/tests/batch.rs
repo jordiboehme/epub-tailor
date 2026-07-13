@@ -726,35 +726,323 @@ fn check_batch_skips_prior_outputs() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
-#[test]
-fn lets_get_dangerous_rejects_folder_and_multiple_inputs() {
-    let dir = temp_dir("dangerous-batch");
-
+/// Fit `name`.epub in place so it keeps its innocent name but carries the
+/// provenance stamp - the situation the filename heuristic cannot see.
+fn stamp_in_place(book: &std::path::Path) {
     let output = bin()
-        .args(["fit", dir.to_str().unwrap(), "--lets-get-dangerous"])
+        .args([
+            "fit",
+            book.to_str().unwrap(),
+            "--profile",
+            "x4",
+            "--lets-get-dangerous",
+        ])
         .output()
         .expect("failed to run binary");
+    assert!(
+        output.status.success(),
+        "in-place fit should succeed, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn copy_mode_scan_skips_stamped_books_with_innocent_names() {
+    let dir = temp_dir("stamped-copy-scan");
+    let lib = dir.join("lib");
+    std::fs::create_dir_all(&lib).expect("create lib");
+    let book = book_in(&lib, "book");
+    stamp_in_place(&book);
+
+    let scan = bin()
+        .args(["fit", lib.to_str().unwrap(), "--profile", "x4"])
+        .output()
+        .expect("failed to run binary");
+    assert_eq!(scan.status.code(), Some(0));
+    let stdout = String::from_utf8_lossy(&scan.stdout);
+    assert!(
+        stdout.contains("skipped (already tailored, use --force)"),
+        "the stamp beats the innocent name, got:\n{stdout}"
+    );
+    assert!(
+        !lib.join("book.x4.epub").exists(),
+        "a stamped book must not be re-fitted"
+    );
+
+    let forced = bin()
+        .args(["fit", lib.to_str().unwrap(), "--profile", "x4", "--force"])
+        .output()
+        .expect("failed to run binary");
+    assert_eq!(forced.status.code(), Some(0));
+    assert!(
+        lib.join("book.x4.epub").exists(),
+        "--force overrides the stamp skip"
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn check_batch_skips_stamped_books() {
+    let dir = temp_dir("stamped-check-scan");
+    let lib = dir.join("lib");
+    std::fs::create_dir_all(&lib).expect("create lib");
+    let stamped = book_in(&lib, "stamped");
+    stamp_in_place(&stamped);
+    book_in(&lib, "fresh");
+
+    let output = bin()
+        .args(["check", lib.to_str().unwrap()])
+        .output()
+        .expect("failed to run binary");
+    assert_eq!(output.status.code(), Some(0));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("skipped (already tailored, use --force)"),
+        "got:\n{stdout}"
+    );
+
+    let json_run = bin()
+        .args(["check", lib.to_str().unwrap(), "--report", "json"])
+        .output()
+        .expect("failed to run binary");
+    let json: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&json_run.stdout)).expect("one document");
+    let results = json["results"].as_array().expect("results");
+    assert!(
+        results
+            .iter()
+            .any(|r| r["status"] == "skipped" && r["reason"] == "already-tailored"),
+        "got: {json}"
+    );
+    assert_eq!(json["summary"]["checked"], 1);
+    assert_eq!(json["summary"]["skipped"], 1);
+
+    let forced = bin()
+        .args([
+            "check",
+            lib.to_str().unwrap(),
+            "--force",
+            "--report",
+            "json",
+        ])
+        .output()
+        .expect("failed to run binary");
+    let json: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&forced.stdout)).expect("one document");
+    assert_eq!(json["summary"]["checked"], 2, "got: {json}");
+    assert_eq!(json["summary"]["skipped"], 0, "got: {json}");
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+fn in_place_fit(lib: &std::path::Path, extra: &[&str]) -> std::process::Output {
+    let mut args = vec!["fit", lib.to_str().unwrap(), "--profile", "x4"];
+    args.push("--lets-get-dangerous");
+    args.extend_from_slice(extra);
+    bin().args(&args).output().expect("failed to run binary")
+}
+
+#[test]
+fn fit_batch_in_place_replaces_every_book_in_a_folder() {
+    let dir = temp_dir("in-place-folder");
+    let lib = dir.join("lib");
+    std::fs::create_dir_all(&lib).expect("create lib");
+    let a = book_in(&lib, "a");
+    let b = book_in(&lib, "b");
+    let a_before = std::fs::read(&a).expect("read a");
+    let b_before = std::fs::read(&b).expect("read b");
+
+    let output = in_place_fit(&lib, &[]);
     assert_eq!(
         output.status.code(),
-        Some(1),
-        "in-place replacement of a whole folder must be refused"
-    );
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains("single file"),
-        "the error should say a single file is needed, got:\n{stderr}"
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
     );
 
-    let output = bin()
-        .args(["fit", "a.epub", "b.epub", "--lets-get-dangerous"])
-        .output()
-        .expect("failed to run binary");
-    assert_eq!(output.status.code(), Some(1));
-    let stderr = String::from_utf8_lossy(&output.stderr);
+    let a_after = std::fs::read(&a).expect("read a");
+    let b_after = std::fs::read(&b).expect("read b");
+    assert_ne!(a_after, a_before, "a.epub must be rewritten in place");
+    assert_ne!(b_after, b_before, "b.epub must be rewritten in place");
+    assert!(a_after.starts_with(b"PK"), "still a zip archive");
     assert!(
-        stderr.contains("single file"),
-        "the error should say a single file is needed, got:\n{stderr}"
+        !lib.join("a.x4.epub").exists() && !lib.join("b.x4.epub").exists(),
+        "no copies may be written"
     );
+    assert!(
+        !std::fs::read_dir(&lib).expect("list lib").any(|e| e
+            .expect("entry")
+            .file_name()
+            .to_string_lossy()
+            .contains(".tmp-")),
+        "no staging temp file may linger"
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("replaced in place"),
+        "in-place lines say so, got:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("2 written, 0 skipped, 0 failed"),
+        "got:\n{stdout}"
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn fit_batch_in_place_rerun_skips_stamped_books() {
+    let dir = temp_dir("in-place-rerun");
+    let lib = dir.join("lib");
+    std::fs::create_dir_all(&lib).expect("create lib");
+    let a = book_in(&lib, "a");
+    book_in(&lib, "b");
+
+    assert_eq!(in_place_fit(&lib, &[]).status.code(), Some(0));
+    let bytes_after_first = std::fs::read(&a).expect("read a");
+
+    let rerun = in_place_fit(&lib, &[]);
+    assert_eq!(rerun.status.code(), Some(0));
+    let stdout = String::from_utf8_lossy(&rerun.stdout);
+    assert!(
+        stdout.contains("skipped (already tailored, use --force)"),
+        "the stamp makes in-place reruns idempotent, got:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("0 written, 2 skipped, 0 failed"),
+        "got:\n{stdout}"
+    );
+    assert_eq!(
+        std::fs::read(&a).expect("read a"),
+        bytes_after_first,
+        "a skipped book must not be rewritten"
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn fit_batch_in_place_force_refits() {
+    let dir = temp_dir("in-place-force");
+    let lib = dir.join("lib");
+    std::fs::create_dir_all(&lib).expect("create lib");
+    book_in(&lib, "a");
+
+    assert_eq!(in_place_fit(&lib, &[]).status.code(), Some(0));
+    let forced = in_place_fit(&lib, &["--force"]);
+    assert_eq!(forced.status.code(), Some(0));
+    let stdout = String::from_utf8_lossy(&forced.stdout);
+    assert!(
+        stdout.contains("1 written, 0 skipped, 0 failed"),
+        "force refits the stamped book, got:\n{stdout}"
+    );
+    assert!(
+        !lib.join("a.x4.epub").exists(),
+        "in place means in place, even under --force"
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn fit_batch_in_place_dry_run_writes_nothing() {
+    let dir = temp_dir("in-place-dry-run");
+    let lib = dir.join("lib");
+    std::fs::create_dir_all(&lib).expect("create lib");
+    book_in(&lib, "a");
+    book_in(&lib, "b");
+    let before = tree_listing(&dir);
+    let bytes_before = std::fs::read(lib.join("a.epub")).expect("read a");
+
+    let dry = in_place_fit(&lib, &["--dry-run"]);
+    assert_eq!(dry.status.code(), Some(0));
+    assert_eq!(tree_listing(&dir), before, "a dry run must not touch files");
+    assert_eq!(
+        std::fs::read(lib.join("a.epub")).expect("read a"),
+        bytes_before,
+        "not even in place"
+    );
+    let stdout = String::from_utf8_lossy(&dry.stdout);
+    assert!(
+        stdout.contains("would replace in place") && stdout.contains("(dry run)"),
+        "got:\n{stdout}"
+    );
+
+    // The dry run stamped nothing, so a real run still converts both.
+    let real = in_place_fit(&lib, &[]);
+    assert!(
+        String::from_utf8_lossy(&real.stdout).contains("2 written, 0 skipped, 0 failed"),
+        "the dry run must not have stamped anything"
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn fit_batch_in_place_json() {
+    let dir = temp_dir("in-place-json");
+    let lib = dir.join("lib");
+    std::fs::create_dir_all(&lib).expect("create lib");
+    let a = book_in(&lib, "a");
+
+    let output = in_place_fit(&lib, &["--report", "json"]);
+    let json: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&output.stdout)).expect("one document");
+    assert_eq!(json["schema"], 1);
+    assert_eq!(json["in_place"], true);
+    let results = json["results"].as_array().expect("results");
+    let converted = results
+        .iter()
+        .find(|r| r["status"] == "converted")
+        .expect("a converted entry");
+    assert_eq!(
+        converted["output"],
+        a.to_str().unwrap(),
+        "in place, the output is the input"
+    );
+
+    let rerun = in_place_fit(&lib, &["--report", "json"]);
+    let json: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&rerun.stdout)).expect("one document");
+    assert!(
+        json["results"]
+            .as_array()
+            .expect("results")
+            .iter()
+            .any(|r| r["reason"] == "already-tailored"),
+        "got: {json}"
+    );
+    assert_eq!(json["summary"]["skipped"], 1);
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn named_files_bypass_the_stamp_skip() {
+    let dir = temp_dir("in-place-named");
+    let a = book_in(&dir, "a");
+    let b = book_in(&dir, "b");
+
+    for _ in 0..2 {
+        let output = bin()
+            .args([
+                "fit",
+                a.to_str().unwrap(),
+                b.to_str().unwrap(),
+                "--profile",
+                "x4",
+                "--lets-get-dangerous",
+            ])
+            .output()
+            .expect("failed to run binary");
+        assert_eq!(output.status.code(), Some(0));
+        assert!(
+            String::from_utf8_lossy(&output.stdout).contains("2 written, 0 skipped, 0 failed"),
+            "named files are always processed, stamped or not"
+        );
+    }
 
     std::fs::remove_dir_all(&dir).ok();
 }

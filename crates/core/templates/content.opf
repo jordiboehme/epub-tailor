@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="pub-id">
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="pub-id"{% if !stamp.is_empty() %} prefix="tailor: https://github.com/jordiboehme/epub-tailor#"{% endif %}>
   <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
     <dc:identifier id="pub-id">{{ identifier }}</dc:identifier>
 {%- for id in identifiers %}
@@ -55,6 +55,9 @@
 {%- endif %}
 {%- endif %}
     <meta property="dcterms:modified">{{ modified }}</meta>
+{%- if !stamp.is_empty() %}
+    <meta property="tailor:fitted">{{ stamp }}</meta>
+{%- endif %}
 {%- if !cover_id.is_empty() %}
     <meta name="cover" content="{{ cover_id }}"/>
 {%- endif %}

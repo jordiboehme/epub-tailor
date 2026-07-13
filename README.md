@@ -24,7 +24,7 @@ Books, made to measure. `epub-tailor` cleans, fixes and transforms EPUB files, d
 
 EPUBs accumulate grime. Vendors leave marker files and watermark blocks in every chapter while conversion tools scatter `META-INF` droppings and duplicate ids, and e-ink firmware quietly bins your fonts, mashes your tables into rubble and draws your crisp SVG diagram as the literal word `[Image]`. This tool deals with all of it, and never touches your original file.\*
 
-\* Unless you pass `--lets-get-dangerous`, which replaces the original in place. The write is staged in a temp file and renamed at the end, so even a failed run cannot eat your book - but you did ask for it by name.
+\* Unless you pass `--lets-get-dangerous`, which replaces the original in place - and now works on folders and several files too, each book staged in a temp file and renamed at the end, so even a failed run cannot eat your book. But you did ask for it by name.
 
 ## What it does
 
@@ -105,7 +105,9 @@ Or point any of them at a folder - your whole library, with `-r`:
 epub-tailor fit books/ --profile x4 -r
 ```
 
-Every `.epub` under `books/` gets fitted (`.md` files for `md`), one line per file plus a summary, and one bad book never stops the rest. Reruns are idempotent: a file ending in a known profile appendix (`.x4.epub`, `.kindle.epub`, `.tailored.epub`) is recognized as a previous run's output and skipped, and so is any book whose output already exists - so after adding books, a rerun only does the new ones. The flip side: a book legitimately *named* `travel.kindle.epub` gets skipped too, which is what `--force` is for. `--dry-run` shows the whole plan without writing a byte.
+Every `.epub` under `books/` gets fitted (`.md` files for `md`), one line per file plus a summary, and one bad book never stops the rest. Add `--lets-get-dangerous` and each book is replaced in place instead of copied - your whole library, tailored where it stands.
+
+Reruns are idempotent, three ways. Every book `fit` produces carries an invisible provenance marker in its OPF (`<meta property="tailor:fitted">`), and folder scans - `fit` and `check`, copy mode and in place - skip marked books. A file ending in a known profile appendix (`.x4.epub`, `.kindle.epub`, `.tailored.epub`) is skipped by name alone, and in copy mode a book whose output already exists is skipped too. So after adding books, a rerun only does the new ones. `--force` overrides all three rules, a book legitimately *named* `travel.kindle.epub` being the classic reason to need it. `md` output is never marked - it is a source, not a fitted book. Books fitted by 0.3.0 or earlier carry no marker yet, so an in-place scan re-fits each of them exactly once and marks it; from then on reruns skip. `--dry-run` shows the whole plan without writing a byte.
 
 ## Profiles
 
@@ -242,7 +244,7 @@ Their cover *images* are a different matter: they come from many sources and are
 
 Under `--report json`, stdout is exactly one JSON document, every payload carries a `schema` version, and a failure prints `{"error": {"code": "drm-protected", ...}}` rather than making you grep English. `metadata pick` is the only command that ever prompts, and it refuses to run when stdin is not a terminal - so it can never hang something that was not expecting a question.
 
-A batch run (a folder or several inputs) keeps that promise by aggregating: one document with a `results` array - each entry a per-file status of `converted`, `skipped` or `failed` (`checked`, `skipped` or `unreadable` under `check`) - and a `summary` with the counts. Per-file failures are entries in `results`, never separate error payloads. Single-file output is unchanged.
+A batch run (a folder or several inputs) keeps that promise by aggregating: one document with a `results` array - each entry a per-file status of `converted`, `skipped` or `failed` (`checked`, `skipped` or `unreadable` under `check`) - and a `summary` with the counts. Skipped entries carry a `reason` (`prior-output`, `output-exists` or `already-tailored`) and the document says whether the run was `in_place`. Per-file failures are entries in `results`, never separate error payloads. Single-file output is unchanged.
 
 ## Flags
 
@@ -261,7 +263,7 @@ Available on `fit` and `md` unless noted. Flags override profile values; flags y
 | `--force` | off | Process files a previous run already produced or covered. Also on `check`. |
 | `--report human\|json` | `human` | Use `json` for machine-readable output. |
 | `-o, --output <PATH>` | next to the input | Where to write the result. With folder input this must be a folder, and outputs mirror the input tree inside it. |
-| `--lets-get-dangerous` | off | `fit` only: replace the original file in place instead of writing a copy. Conflicts with `-o`. Lets. Get. Dangerous. |
+| `--lets-get-dangerous` | off | `fit` only: replace the original file in place instead of writing a copy. Works on folders and several files, composes with `-r`, `--dry-run` and `--force`. Conflicts with `-o`. Lets. Get. Dangerous. |
 
 ### Metadata flags
 
