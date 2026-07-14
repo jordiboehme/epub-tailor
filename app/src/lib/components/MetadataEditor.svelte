@@ -212,6 +212,13 @@
 
   // -- write metadata only ----------------------------------------------------
 
+  // Metadata is written under the plain `epub` profile - a repair, not a device
+  // conversion - so both the run and the name it may have to fall back on come
+  // from that profile and not from whatever device is selected. With `x4`
+  // active, an appendix taken from the picker would write "Book.x4.epub": a
+  // filename promising a conversion the file did not get.
+  const WRITE_PROFILE = "epub";
+
   const epubEditable = $derived(selected.filter((b) => b.kind === "epub" && edits.hasEdits(b.id)));
   const mdOnlySelection = $derived(selected.length > 0 && selected.every((b) => b.kind === "md"));
   const canWrite = $derived(epubEditable.length > 0 && !writing && !jobs.active);
@@ -223,8 +230,13 @@
     writing = true;
     writeFailed = null;
     try {
-      const appendix = await profiles.activeAppendix();
-      const opts: RunOptions = { profiles: ["epub"], quality: null, tables: null, dryRun: false };
+      const appendix = profiles.builtinAppendix(WRITE_PROFILE);
+      const opts: RunOptions = {
+        profiles: [WRITE_PROFILE],
+        quality: null,
+        tables: null,
+        dryRun: false,
+      };
       const planned = items.map((b) => ({ input: b.path, kind: b.kind, template: toTemplateBook(b) }));
       const plans = await resolvePlans(planned, {
         template: settings.filenameTemplate,

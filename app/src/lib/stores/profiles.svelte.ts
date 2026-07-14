@@ -40,6 +40,17 @@ class ProfilesStore {
   }
 
   /**
+   * The appendix one built-in profile stamps onto a self-overwriting output.
+   * For a run that deliberately does *not* use the active profile - "Write
+   * metadata only" converts under `epub`, whatever device is selected - the
+   * appendix has to come from the profile the run actually uses, or the file is
+   * named for a conversion it never had.
+   */
+  builtinAppendix(name: string): string {
+    return this.builtins.find((p) => p.name === name)?.appendix ?? FALLBACK_APPENDIX;
+  }
+
+  /**
    * The appendix the active composition stamps onto a self-overwriting output.
    * With no user layer this is just the selected built-in's appendix (from the
    * already-loaded list); with a layer it is whatever the composed profile
@@ -47,8 +58,7 @@ class ProfilesStore {
    */
   async activeAppendix(): Promise<string> {
     if (settings.userProfilePaths.length === 0) {
-      const builtin = this.builtins.find((p) => p.name === settings.profile);
-      return builtin?.appendix ?? FALLBACK_APPENDIX;
+      return this.builtinAppendix(settings.profile);
     }
     const result = await runSidecar(["profiles", ...this.activeProfileSpecs(), "--report", "json"]);
     try {
