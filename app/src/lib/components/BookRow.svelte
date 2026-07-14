@@ -139,7 +139,9 @@
       {/if}
     </div>
 
-    <!-- Title, byline (or the failure, which is the news) -->
+    <!-- Title, byline, and the failure beneath it when there is one: a failed
+         row is a line taller, but the author stays visible instead of being
+         swapped out for the failure text. -->
     <div class="min-w-0 flex-1">
       <div class="flex min-w-0 items-center gap-1.5">
         <p class="truncate text-[13px] font-medium text-zinc-800 dark:text-zinc-100" title={title}>
@@ -165,15 +167,16 @@
         {/if}
       </div>
 
+      {#if byline}
+        <p class="truncate text-[11px] text-zinc-500 dark:text-zinc-400" title={byline}>{byline}</p>
+      {/if}
       {#if failure && !showDetails}
         <p
-          class="truncate text-[11px] leading-snug text-rose-600 dark:text-rose-400"
+          class="line-clamp-1 text-[11px] leading-snug text-rose-600 dark:text-rose-400"
           title={failure.friendly}
         >
           {failure.friendly}
         </p>
-      {:else if byline}
-        <p class="truncate text-[11px] text-zinc-500 dark:text-zinc-400" title={byline}>{byline}</p>
       {/if}
     </div>
 
