@@ -8,6 +8,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type { CheckReport, CliFailure, Creator, FitReport, MetadataShowReport } from "../api/contract";
 import { coverCacheKey, coverCachePath } from "../api/covers";
 import { showArgv } from "../api/argv";
+import type { TemplateBook } from "../api/templates";
 import { settings } from "./settings.svelte";
 import { jobs } from "./jobs.svelte";
 
@@ -61,6 +62,22 @@ function creatorName(creator: Creator): string {
 function toList<T>(value: T | T[] | undefined): T[] {
   if (value === undefined) return [];
   return Array.isArray(value) ? value : [value];
+}
+
+/** The input stem (file name without its extension). */
+export function stemOf(fileName: string): string {
+  return fileName.replace(/\.[^.]+$/, "");
+}
+
+/** Build the template-engine view of a book from its ingested metadata. */
+export function toTemplateBook(book: Book): TemplateBook {
+  return {
+    title: book.meta?.title,
+    authors: book.meta?.authors ?? [],
+    series: book.meta?.series,
+    seriesIndex: book.meta?.seriesIndex,
+    originalStem: stemOf(book.fileName),
+  };
 }
 
 /** Turn a `metadata show` report into the compact `BookMeta` a card needs. */

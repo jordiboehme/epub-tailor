@@ -1,1 +1,45 @@
 @import "tailwindcss";
+
+/* Light and dark are both honored, keyed off the OS via prefers-color-scheme.
+   `color-scheme` lets native chrome (scrollbars, the select popup) follow. */
+:root {
+  color-scheme: light dark;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family:
+    system-ui,
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    Roboto,
+    Helvetica,
+    Arial,
+    sans-serif;
+  font-size: 14px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* A quieter scrollbar that suits both themes. */
+* {
+  scrollbar-width: thin;
+}
+
+/* Indeterminate progress sliver on a running card. */
+@keyframes shimmer {
+  0% {
+    transform: translateX(-120%);
+  }
+  100% {
+    transform: translateX(420%);
+  }
+}
