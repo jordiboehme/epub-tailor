@@ -28,6 +28,17 @@ export interface RunOptions {
 /** The CLI's own `md --split-level` default, which we never spell out. */
 const DEFAULT_SPLIT_LEVEL = 1;
 
+/** The clearable fields and their `--clear` names, in emission order. */
+const CLEAR_NAMES: [keyof StagedEdits, string][] = [
+  ["authors", "authors"],
+  ["series", "series"],
+  ["seriesIndex", "series-index"],
+  ["publisher", "publisher"],
+  ["description", "description"],
+  ["date", "date"],
+  ["subjects", "subjects"],
+];
+
 /**
  * The per-field metadata flags for a set of staged edits, or `[]` when there is
  * nothing to write. Always closes with `--metadata-merge replace`: staged edits
@@ -35,6 +46,7 @@ const DEFAULT_SPLIT_LEVEL = 1;
  * silently ignore any edit to a value the book already has. `--author` and
  * `--subject` repeat once per entry. The unique identifier is never touched by
  * the CLI, and `--isbn` only ever adds one - both are the CLI's rules, not ours.
+ * A staged `null` becomes `--clear <field>`; the CLI removes the field after any merge.
  */
 export function metadataArgv(edits: StagedEdits | undefined): string[] {
   if (!edits || !hasAnyEdit(edits)) return [];
@@ -50,6 +62,9 @@ export function metadataArgv(edits: StagedEdits | undefined): string[] {
   if (edits.series) argv.push("--series", edits.series);
   if (edits.seriesIndex) argv.push("--series-index", edits.seriesIndex);
   if (edits.coverPath) argv.push("--cover", edits.coverPath);
+  for (const [key, name] of CLEAR_NAMES) {
+    if (edits[key] === null) argv.push("--clear", name);
+  }
   argv.push("--metadata-merge", "replace");
   return argv;
 }

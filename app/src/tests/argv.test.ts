@@ -238,6 +238,36 @@ describe("metadataArgv", () => {
       "replace",
     ]);
   });
+
+  it("emits --clear for staged clears, after the values", () => {
+    const edits: StagedEdits = {
+      title: "Kept",
+      series: null,
+      seriesIndex: null,
+      publisher: null,
+    };
+    expect(metadataArgv(edits)).toEqual([
+      "--title",
+      "Kept",
+      "--clear",
+      "series",
+      "--clear",
+      "series-index",
+      "--clear",
+      "publisher",
+      "--metadata-merge",
+      "replace",
+    ]);
+  });
+
+  it("a clears-only edit still builds an argv", () => {
+    expect(metadataArgv({ subjects: null })).toEqual([
+      "--clear",
+      "subjects",
+      "--metadata-merge",
+      "replace",
+    ]);
+  });
 });
 
 describe("fitArgv with staged edits", () => {
