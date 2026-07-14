@@ -11,6 +11,9 @@ import { stemOf } from "../stores/books.svelte";
 import type { Book } from "../stores/books.svelte";
 import type { Finding, Stats } from "./contract";
 import { formatSize } from "./format";
+import type { StagedEdits } from "./edits";
+import { mergeEditsIntoMeta } from "./edits";
+import type { BookMeta } from "./meta";
 
 /**
  * The failure a card (or row) can explain: a conversion that failed, or a
@@ -40,24 +43,40 @@ export const TONE_CLASS: Record<Tone, string> = {
   neutral: "bg-zinc-200 text-zinc-600 dark:bg-zinc-700 dark:text-zinc-300",
 };
 
-/** The title to show: the book's own metadata title, else the file name's stem. */
-export function bookTitle(book: Book): string {
-  return book.meta?.title?.trim() || stemOf(book.fileName);
+/**
+ * The metadata a view should display: the book's own, with any staged edits
+ * folded over it. Views pass `edits.get(book.id)`; this stays a pure function
+ * so vitest reaches it without a store in sight.
+ */
+export function effectiveMeta(book: Book, staged?: StagedEdits): BookMeta | undefined {
+  if (!staged) return book.meta;
+  return mergeEditsIntoMeta(book.meta, staged);
+}
+
+/** The title to show: the effective metadata title, else the file name's stem. */
+export function bookTitle(book: Book, staged?: StagedEdits): string {
+  return effectiveMeta(book, staged)?.title?.trim() || stemOf(book.fileName);
 }
 
 /** The subtitle: the first author, else "Markdown" for a Markdown book, else nothing. */
-export function bookSubtitle(book: Book): string {
-  return book.meta?.authors?.[0] ?? (book.kind === "md" ? "Markdown" : "");
+export function bookSubtitle(book: Book, staged?: StagedEdits): string {
+  return effectiveMeta(book, staged)?.authors?.[0] ?? (book.kind === "md" ? "Markdown" : "");
+}
+
+/** Every author, joined for a list column. Empty when the book names none. */
+export function bookAuthors(book: Book, staged?: StagedEdits): string {
+  return (effectiveMeta(book, staged)?.authors ?? []).join(", ");
 }
 
 /**
  * The series a book belongs to, with its position when it has one: "Dune #2".
  * Empty when the book carries no series at all.
  */
-export function bookSeries(book: Book): string {
-  const series = book.meta?.series?.trim();
+export function bookSeries(book: Book, staged?: StagedEdits): string {
+  const meta = effectiveMeta(book, staged);
+  const series = meta?.series?.trim();
   if (!series) return "";
-  const index = book.meta?.seriesIndex?.trim();
+  const index = meta?.seriesIndex?.trim();
   return index ? `${series} #${index}` : series;
 }
 
@@ -66,8 +85,13 @@ export function bookSeries(book: Book): string {
  * them the book has. A row has the width to say both; a card only shows the
  * subtitle, which is why this lives beside `bookSubtitle` rather than in it.
  */
-export function bookByline(book: Book): string {
-  return [bookSubtitle(book), bookSeries(book)].filter(Boolean).join(" · ");
+export function bookByline(book: Book, staged?: StagedEdits): string {
+  return [bookSubtitle(book, staged), bookSeries(book, staged)].filter(Boolean).join(" · ");
+}
+
+/** The 4-digit year out of the effective date, for a narrow list column. */
+export function bookYear(book: Book, staged?: StagedEdits): string {
+  return effectiveMeta(book, staged)?.date?.match(/\d{4}/)?.[0] ?? "";
 }
 
 /** Up to two initials from the stem's words, for a coverless placeholder. */

@@ -5,12 +5,15 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  bookAuthors,
   bookByline,
   bookInitials,
   bookSeries,
   bookSubtitle,
   bookTitle,
+  bookYear,
   chipsFor,
+  effectiveMeta,
   failureOf,
   findingsOf,
   TONE_CLASS,
@@ -18,6 +21,7 @@ import {
 } from "../lib/api/book-view";
 import type { Book, BookMeta } from "../lib/stores/books.svelte";
 import type { CheckReport, FitReport, Stats } from "../lib/api/contract";
+import type { StagedEdits } from "../lib/api/edits";
 
 function makeBook(overrides: Partial<Book> = {}): Book {
   return {
@@ -318,5 +322,50 @@ describe("chipsFor", () => {
 describe("TONE_CLASS", () => {
   it("has a Tailwind class for every tone", () => {
     expect(Object.keys(TONE_CLASS).sort()).toEqual(["bad", "good", "neutral", "warn"]);
+  });
+});
+
+describe("staged-aware display helpers", () => {
+  const book = makeBook({
+    meta: meta({
+      title: "Dune Messiah",
+      authors: ["Frank Herbert", "Brian Herbert"],
+      series: "Dune",
+      seriesIndex: "2",
+      date: "1969-07-15",
+    }),
+  });
+
+  it("without staged edits everything reads from the book", () => {
+    expect(bookTitle(book)).toBe("Dune Messiah");
+    expect(bookAuthors(book)).toBe("Frank Herbert, Brian Herbert");
+    expect(bookSeries(book)).toBe("Dune #2");
+    expect(bookYear(book)).toBe("1969");
+  });
+
+  it("staged values win over the book's own", () => {
+    const staged: StagedEdits = { title: "Dune II", date: "1970" };
+    expect(bookTitle(book, staged)).toBe("Dune II");
+    expect(bookYear(book, staged)).toBe("1970");
+    expect(bookSeries(book, staged)).toBe("Dune #2");
+  });
+
+  it("a staged series clear hides the series and its index", () => {
+    expect(bookSeries(book, { series: null })).toBe("");
+  });
+
+  it("a staged authors clear empties the author line", () => {
+    expect(bookAuthors(book, { authors: null })).toBe("");
+    expect(bookSubtitle(book, { authors: null })).toBe("");
+  });
+
+  it("bookYear finds the year inside a fuller date and stays quiet without one", () => {
+    expect(bookYear(makeBook({ meta: meta({ date: "September 1937" }) }))).toBe("1937");
+    expect(bookYear(makeBook({ meta: meta({}) }))).toBe("");
+  });
+
+  it("effectiveMeta without staged edits is the book's own meta object", () => {
+    expect(effectiveMeta(book)).toBe(book.meta);
+    expect(effectiveMeta(makeBook({}))).toBeUndefined();
   });
 });
