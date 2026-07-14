@@ -301,7 +301,11 @@ fn cover_extension(source: &Path) -> String {
                 .collect::<String>()
         })
         .unwrap_or_default();
-    if ext.is_empty() { "img".to_string() } else { ext }
+    if ext.is_empty() {
+        "img".to_string()
+    } else {
+        ext
+    }
 }
 
 /// Copy a user-chosen cover image into the cover cache and return the copy's
@@ -320,8 +324,8 @@ fn cover_extension(source: &Path) -> String {
 #[tauri::command]
 pub fn cache_cover(app: tauri::AppHandle, source: String) -> Result<String, String> {
     let source = PathBuf::from(source);
-    let metadata = std::fs::metadata(&source)
-        .map_err(|e| format!("cannot read {}: {e}", source.display()))?;
+    let metadata =
+        std::fs::metadata(&source).map_err(|e| format!("cannot read {}: {e}", source.display()))?;
     let modified_ms = metadata
         .modified()
         .ok()
