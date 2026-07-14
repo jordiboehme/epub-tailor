@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { planOutputs } from "../lib/api/outputs";
+import { planOutputs, previewOutputName } from "../lib/api/outputs";
 import type { PlannedBook } from "../lib/api/outputs";
 
 const epub = (input: string, template: Partial<PlannedBook["template"]> = {}): PlannedBook => ({
@@ -151,5 +151,49 @@ describe("planOutputs", () => {
     );
     // Output joins with '/', but the directory comes from the backslash split.
     expect(plans[0].output).toBe("C:\\Books/Dune.tailored.epub");
+  });
+});
+
+describe("previewOutputName", () => {
+  const opts = {
+    template: "{original}",
+    outputDir: null,
+    inPlace: false,
+    appendix: "tailored",
+  };
+
+  it("shows the appendix the planner inserts in the default configuration", () => {
+    // {original} + "Alongside originals": every output lands on its own input,
+    // so what actually gets written is Dune.tailored.epub - and the preview has
+    // to say so, or it lies to every user on first launch.
+    expect(previewOutputName(epub("/books/Dune.epub"), opts)).toBe("Dune.tailored.epub");
+  });
+
+  it("shows the plain name when the template moves the output off its input", () => {
+    const book = epub("/books/Dune.epub", { title: "Dune", authors: ["Herbert"] });
+    expect(previewOutputName(book, { ...opts, template: "{author} - {title}" })).toBe(
+      "Herbert - Dune.epub",
+    );
+  });
+
+  it("shows the plain name when the output goes to another folder", () => {
+    expect(previewOutputName(epub("/books/Dune.epub"), { ...opts, outputDir: "/out" })).toBe(
+      "Dune.epub",
+    );
+  });
+
+  it("is just the file name, never the whole path", () => {
+    const name = previewOutputName(epub("/books/Dune.epub"), { ...opts, outputDir: "/out/box" });
+    expect(name).toBe("Dune.epub");
+  });
+
+  it("has nothing to preview for an epub written in place", () => {
+    expect(previewOutputName(epub("/books/Dune.epub"), { ...opts, inPlace: true })).toBeNull();
+  });
+
+  it("previews a Markdown book even in place, because it is always written out", () => {
+    expect(previewOutputName(md("/docs/notes.md"), { ...opts, inPlace: true })).toBe(
+      "notes.epub",
+    );
   });
 });

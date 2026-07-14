@@ -110,6 +110,27 @@ export function planOutputs(books: PlannedBook[], opts: PlanOptions): OutputPlan
   );
 }
 
+/**
+ * The file name one book would be written as, for the naming preview: the real
+ * planner, run on that book alone, so the preview cannot drift from what the
+ * app actually writes. `null` when the book is rewritten in place and there is
+ * no new name to show.
+ *
+ * Disk is not consulted (a preview that stats the filesystem on every keystroke
+ * would be a poor trade), so the " (2)" a real collision earns is not shown -
+ * but the appendix, which the *default* configuration hits on every single
+ * book, is.
+ */
+export function previewOutputName(
+  book: PlannedBook,
+  opts: Omit<PlanOptions, "existsOnDisk">,
+): string | null {
+  const [plan] = planOutputs([book], { ...opts, existsOnDisk: () => false });
+  if (plan.output === null) return null;
+  const slash = Math.max(plan.output.lastIndexOf("/"), plan.output.lastIndexOf("\\"));
+  return slash >= 0 ? plan.output.slice(slash + 1) : plan.output;
+}
+
 /** Rebuild an absolute output path from a `dir\nstem` collision key. */
 function pathOfKey(key: string): string {
   const sep = key.indexOf(KEY_SEP);

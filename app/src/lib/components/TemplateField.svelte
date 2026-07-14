@@ -1,7 +1,8 @@
 <script lang="ts">
   import { fade } from "svelte/transition";
-  import { renderTemplate } from "../api/templates";
+  import { previewOutputName } from "../api/outputs";
   import { books, toTemplateBook } from "../stores/books.svelte";
+  import { profiles } from "../stores/profiles.svelte";
   import { settings } from "../stores/settings.svelte";
 
   let showTokens = $state(false);
@@ -9,9 +10,44 @@
   const disabled = $derived(settings.inPlace);
 
   const sample = $derived(books.selected[0] ?? books.books[0]);
+
+  // The appendix the planner stamps on an output that would land on its own
+  // input - which the defaults ({original}, alongside originals) do for every
+  // book there is. Resolving it can mean asking the CLI to compose the user's
+  // profile layers, so it is kept in state and refreshed when they change.
+  let appendix = $state("tailored");
+  $effect(() => {
+    // Read what the answer depends on here, in the effect's tracking scope; the
+    // resolution itself is async, and a failed composition keeps the fallback.
+    void profiles.builtins;
+    void settings.profile;
+    void settings.userProfilePaths;
+    let live = true;
+    void profiles
+      .activeAppendix()
+      .then((next) => {
+        if (live) appendix = next;
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  });
+
+  // The real planner, run on the sample book: a preview that renders the
+  // template alone would promise "Dune.epub" while the app writes
+  // "Dune.tailored.epub".
   const preview = $derived(
     sample
-      ? `${renderTemplate(settings.filenameTemplate, toTemplateBook(sample))}.epub`
+      ? (previewOutputName(
+          { input: sample.path, kind: sample.kind, template: toTemplateBook(sample) },
+          {
+            template: settings.filenameTemplate,
+            outputDir: settings.outputDir,
+            inPlace: settings.inPlace,
+            appendix,
+          },
+        ) ?? "")
       : "",
   );
 
