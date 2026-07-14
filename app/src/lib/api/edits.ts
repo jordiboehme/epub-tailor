@@ -5,6 +5,7 @@
 // from it without importing a store.
 
 import type { MetadataDoc } from "./contract";
+import type { BookMeta } from "./meta";
 import { creatorNames, stringList } from "./meta";
 
 /**
@@ -100,4 +101,43 @@ export function mergeDocIntoEdits(
   if (take("cover") && nonEmpty(doc.cover)) next.coverPath = doc.cover;
 
   return next;
+}
+
+/** Which `missing_fields` name each edit key clears once written (some keys clear none). */
+const CLEARS_MISSING: Partial<Record<keyof StagedEdits, string>> = {
+  title: "title",
+  authors: "authors",
+  series: "series",
+  publisher: "publisher",
+  description: "description",
+  date: "date",
+  isbn: "isbn",
+  subjects: "subjects",
+};
+
+/**
+ * Fold written edits into a book's compact `BookMeta`, for refreshing a card
+ * after an in-place write without re-ingesting. Fields the edits set win; the
+ * `missing` list loses whatever those fields just filled.
+ */
+export function mergeEditsIntoMeta(base: BookMeta | undefined, edits: StagedEdits): BookMeta {
+  const meta: BookMeta = base ?? { authors: [], subjects: [], missing: [] };
+  const filled = new Set<string>();
+  for (const key of Object.keys(edits) as (keyof StagedEdits)[]) {
+    const name = CLEARS_MISSING[key];
+    if (name) filled.add(name);
+  }
+  return {
+    title: edits.title ?? meta.title,
+    authors: edits.authors ?? meta.authors,
+    series: edits.series ?? meta.series,
+    seriesIndex: edits.seriesIndex ?? meta.seriesIndex,
+    publisher: edits.publisher ?? meta.publisher,
+    description: edits.description ?? meta.description,
+    language: edits.language ?? meta.language,
+    date: edits.date ?? meta.date,
+    isbn: edits.isbn ?? meta.isbn,
+    subjects: edits.subjects ?? meta.subjects,
+    missing: meta.missing.filter((name) => !filled.has(name)),
+  };
 }

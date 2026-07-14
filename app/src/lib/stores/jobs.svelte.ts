@@ -13,7 +13,10 @@ import { friendlyError } from "../api/errors";
 import { fitArgv, mdArgv, checkArgv } from "../api/argv";
 import type { RunOptions } from "../api/argv";
 import { normalizeMeta } from "../api/meta";
+import { mergeEditsIntoMeta } from "../api/edits";
+import type { StagedEdits } from "../api/edits";
 import { settings } from "./settings.svelte";
+import { edits } from "./edits.svelte";
 import type { Book } from "./books.svelte";
 
 /** How many trailing stderr lines a running job keeps for a details view. */
@@ -53,6 +56,10 @@ class JobsStore {
   // being deep-proxied again by this store's own state.
   #handles = new Map<string, SidecarHandle>();
   #books = new Map<string, Book>();
+  // The staged edits a convert job carried, so a successful run can clear them
+  // and (for an in-place write) refresh the card without re-ingesting. Kept off
+  // the reactive array for the same reason as #books.
+  #applied = new Map<string, { edits: StagedEdits; inPlace: boolean }>();
 
   batchJobs = $derived(this.jobs.filter((j) => this.#batchIds.includes(j.id)));
   total = $derived(this.batchJobs.length);
@@ -70,16 +77,31 @@ class JobsStore {
     this.#pump();
   }
 
-  /** Start a conversion batch: one fit (or md) job per book, using its plan. */
-  runFit(books: Book[], plans: { input: string; output: string | null }[], opts: RunOptions): void {
+  /**
+   * Start a conversion batch: one fit (or md) job per book, using its plan.
+   * `editsByBook` (already de-proxied to plain objects by the caller) supplies
+   * per-book staged metadata that is spliced into that book's argv.
+   */
+  runFit(
+    books: Book[],
+    plans: { input: string; output: string | null }[],
+    opts: RunOptions,
+    editsByBook: Record<string, StagedEdits> = {},
+  ): void {
     this.#startBatch();
     const outputByInput = new Map(plans.map((p) => [p.input, p.output]));
     for (const book of books) {
       const output = outputByInput.has(book.path) ? outputByInput.get(book.path)! : null;
+      const bookEdits = editsByBook[book.id];
+      const perBook: RunOptions = bookEdits ? { ...opts, edits: bookEdits } : opts;
       if (book.kind === "md") {
-        this.#enqueue(book, "md", mdArgv(book.path, output, opts), "normal");
+        this.#enqueue(book, "md", mdArgv(book.path, output, perBook), "normal");
       } else {
-        this.#enqueue(book, "fit", fitArgv(book.path, output, opts), "normal");
+        this.#enqueue(book, "fit", fitArgv(book.path, output, perBook), "normal");
+      }
+      if (bookEdits) {
+        const jobId = this.#batchIds[this.#batchIds.length - 1];
+        this.#applied.set(jobId, { edits: bookEdits, inPlace: output === null });
       }
     }
     this.#pump();
@@ -143,12 +165,16 @@ class JobsStore {
     for (const id of [...this.#books.keys()]) {
       if (!keptIds.has(id)) this.#books.delete(id);
     }
+    for (const id of [...this.#applied.keys()]) {
+      if (!keptIds.has(id)) this.#applied.delete(id);
+    }
     this.jobs = kept;
     this.#batchIds = [];
   }
 
   #cancelJob(job: Job): void {
     job.state = "cancelled";
+    this.#applied.delete(job.id);
     const book = this.#books.get(job.id);
     if (book) {
       if (job.kind === "show") book.ingest = "failed";
@@ -256,7 +282,10 @@ class JobsStore {
         if (!isCliFailure(report)) {
           job.result = report;
           const book = this.#books.get(job.id);
-          if (book) book.result = { kind: "fit", report };
+          if (book) {
+            book.result = { kind: "fit", report };
+            this.#consumeEdits(job.id, book);
+          }
           job.state = "done";
           return;
         }
@@ -265,6 +294,24 @@ class JobsStore {
       }
     }
     this.#applyFailure(job, res);
+  }
+
+  /**
+   * A successful convert consumes its staged edits: clear them (the badge goes
+   * away) and, when the book was rewritten in place, fold the written fields
+   * back into its card so the title/cover reflect what is now on disk. A copy
+   * run leaves the input book's own metadata untouched, so only the edits are
+   * cleared there.
+   */
+  #consumeEdits(jobId: string, book: Book): void {
+    const applied = this.#applied.get(jobId);
+    if (!applied) return;
+    this.#applied.delete(jobId);
+    edits.clear([book.id]);
+    if (applied.inPlace) {
+      book.meta = mergeEditsIntoMeta(book.meta, applied.edits);
+      if (applied.edits.coverPath) book.coverPath = applied.edits.coverPath;
+    }
   }
 
   #settleCheck(job: Job, res: SidecarResult): void {
@@ -286,6 +333,7 @@ class JobsStore {
   }
 
   #applyFailure(job: Job, res: SidecarResult): void {
+    this.#applied.delete(job.id);
     let failure: CliFailure;
     try {
       const parsed = parseReport<unknown>(res.stdout, job.kind);
@@ -309,6 +357,7 @@ class JobsStore {
 
   #settleSpawnError(id: string, message: string): void {
     this.#handles.delete(id);
+    this.#applied.delete(id);
     const job = this.jobs.find((j) => j.id === id);
     if (!job) return;
     const failure: CliFailure = { code: "io-error", message };
