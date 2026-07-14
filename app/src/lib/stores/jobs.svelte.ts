@@ -57,8 +57,10 @@ class JobsStore {
   #handles = new Map<string, SidecarHandle>();
   #books = new Map<string, Book>();
   // The staged edits a convert job carried, so a successful run can clear them
-  // and (for an in-place write) refresh the card without re-ingesting. Kept off
-  // the reactive array for the same reason as #books.
+  // and (for an in-place write) refresh the card without re-ingesting. Never
+  // populated for a dry run: it wrote nothing, so there is nothing here for a
+  // settled job to consume. Kept off the reactive array for the same reason
+  // as #books.
   #applied = new Map<string, { edits: StagedEdits; inPlace: boolean }>();
 
   batchJobs = $derived(this.jobs.filter((j) => this.#batchIds.includes(j.id)));
@@ -108,7 +110,14 @@ class JobsStore {
       } else {
         this.#enqueue(book, "fit", fitArgv(book.path, output, perBook), "normal");
       }
-      if (bookEdits) {
+      // A dry run writes nothing, so there is nothing to consume once it
+      // settles: tracking it here would make #consumeEdits unstage (and, for
+      // an in-place plan, fold into the card) edits the CLI was never asked
+      // to write. Gating on `opts.dryRun` at enqueue time - rather than on
+      // the settled report's own `dry_run` - keeps the one flag that decided
+      // whether `--dry-run` went into this job's argv also the one flag that
+      // decides whether its edits are ever tracked as applied.
+      if (bookEdits && !opts.dryRun) {
         const jobId = this.#batchIds[this.#batchIds.length - 1];
         this.#applied.set(jobId, { edits: bookEdits, inPlace: output === null });
       }
