@@ -403,6 +403,7 @@ class JobsStore {
         kind: "failed",
         failure,
         friendly: friendlyError(failure.code, failure.message),
+        stderr: [...job.stderrTail],
       };
     }
     job.state = "failed";
@@ -421,7 +422,12 @@ class JobsStore {
         book.ingest = "failed";
         book.ingestError = this.#ingestError(job, failure);
       } else {
-        book.result = { kind: "failed", failure, friendly: friendlyError(failure.code, message) };
+        book.result = {
+          kind: "failed",
+          failure,
+          friendly: friendlyError(failure.code, message),
+          stderr: [...job.stderrTail],
+        };
       }
     }
     job.state = "failed";

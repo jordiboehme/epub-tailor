@@ -34,13 +34,14 @@
   );
 
   // The failure this card can explain: a conversion that failed, or a book we
-  // could not even read in the first place.
+  // could not even read in the first place. Both carry their own stderr, so
+  // the drawer keeps working long after the job behind it has been pruned.
   const failure = $derived(
     book.result?.kind === "failed"
       ? {
           friendly: book.result.friendly,
           code: book.result.failure.code,
-          stderr: job?.stderrTail ?? [],
+          stderr: book.result.stderr,
         }
       : unreadable && book.ingestError
         ? book.ingestError

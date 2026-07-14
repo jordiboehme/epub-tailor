@@ -1,5 +1,6 @@
 <script lang="ts">
   import { books } from "../stores/books.svelte";
+  import { jobs } from "../stores/jobs.svelte";
   import { isModalOpen, isTextField, shortcutFor } from "../api/keys";
   import BrowseButtons from "./BrowseButtons.svelte";
   import BookGrid from "./BookGrid.svelte";
@@ -29,8 +30,15 @@
         break;
       case "remove-selected": {
         // No confirmation: these are list entries, not files. Nothing on disk
-        // is touched, and dropping the book back in takes one drag.
-        const ids = books.selected.map((b) => b.id);
+        // is touched, and dropping the book back in takes one drag. A book
+        // that is mid-conversion is left alone, exactly as its card's own
+        // remove button is while it is busy.
+        const ids = books.selected
+          .filter((b) => {
+            const state = jobs.conversionJobFor(b.id)?.state;
+            return state !== "running" && state !== "queued";
+          })
+          .map((b) => b.id);
         if (ids.length === 0) return;
         books.remove(ids);
         break;

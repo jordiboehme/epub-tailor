@@ -24,11 +24,16 @@ interface InputEntry {
   modified_ms: number;
 }
 
-/** A book's conversion or check outcome, shaped for the card to render. */
+/**
+ * A book's conversion or check outcome, shaped for the card to render. A
+ * failure carries its own stderr tail rather than pointing at the job that
+ * produced it: jobs are pruned when the next batch starts, and a card that
+ * still says "failed" has to still be able to say why.
+ */
 export type PerBookResult =
   | { kind: "fit"; report: FitReport }
   | { kind: "check"; report: CheckReport }
-  | { kind: "failed"; failure: CliFailure; friendly: string }
+  | { kind: "failed"; failure: CliFailure; friendly: string; stderr: string[] }
   | { kind: "cancelled" };
 
 export interface Book {
