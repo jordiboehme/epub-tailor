@@ -31,6 +31,14 @@ function prune(edits: StagedEdits): StagedEdits | undefined {
   return hasAnyEdit(next) ? next : undefined;
 }
 
+/** Field-value equality for `unstageApplied`'s "still matches what was applied" check. */
+function sameValue(a: StagedEdits[keyof StagedEdits], b: StagedEdits[keyof StagedEdits]): boolean {
+  if (Array.isArray(a) && Array.isArray(b)) {
+    return a.length === b.length && a.every((v, i) => v === b[i]);
+  }
+  return a === b;
+}
+
 class EditsStore {
   #map = $state<Map<string, StagedEdits>>(new Map());
   #flushers = new Set<() => void>();
@@ -105,6 +113,32 @@ class EditsStore {
       if (merged) next.set(bookId, merged);
       else next.delete(bookId);
     }
+    this.#map = next;
+  }
+
+  /**
+   * Drop only the fields a finished job actually wrote, and only where the
+   * currently staged value still equals what that job applied. A convert
+   * job carries a snapshot of the edits staged at the moment it was queued;
+   * a book late in a batch may sit in the queue long enough for the user to
+   * stage more on it (or retype a field) before the job settles, and none of
+   * that ever made it into the job's argv. Clearing the whole entry on
+   * success would destroy those never-written edits along with the badge
+   * that says they exist, so this only unstages what matches `appliedEdits`
+   * field-for-field and leaves everything else - re-typed or newly staged -
+   * for the next Tailor run.
+   */
+  unstageApplied(bookId: string, appliedEdits: StagedEdits): void {
+    const current = this.#map.get(bookId);
+    if (!current) return;
+    const rest: StagedEdits = { ...current };
+    for (const key of Object.keys(appliedEdits) as (keyof StagedEdits)[]) {
+      if (sameValue(rest[key], appliedEdits[key])) delete rest[key];
+    }
+    const next = new Map(this.#map);
+    const merged = prune(rest);
+    if (merged) next.set(bookId, merged);
+    else next.delete(bookId);
     this.#map = next;
   }
 

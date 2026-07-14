@@ -342,17 +342,21 @@ class JobsStore {
   }
 
   /**
-   * A successful convert consumes its staged edits: clear them (the badge goes
-   * away) and, when the book was rewritten in place, fold the written fields
-   * back into its card so the title/cover reflect what is now on disk. A copy
-   * run leaves the input book's own metadata untouched, so only the edits are
-   * cleared there.
+   * A successful convert consumes its staged edits: unstage the fields it
+   * actually wrote (the badge goes away once nothing is left) and, when the
+   * book was rewritten in place, fold the written fields back into its card
+   * so the title/cover reflect what is now on disk. A copy run leaves the
+   * input book's own metadata untouched, so only the edits are unstaged
+   * there. Unstaging by field rather than clearing the whole entry matters
+   * for a book late in a batch: the user may have staged (or retyped) more
+   * on it while this job's argv snapshot - taken back when Tailor was
+   * clicked - sat in the queue, and none of that ever ran through the CLI.
    */
   #consumeEdits(jobId: string, book: Book): void {
     const applied = this.#applied.get(jobId);
     if (!applied) return;
     this.#applied.delete(jobId);
-    edits.clear([book.id]);
+    edits.unstageApplied(book.id, applied.edits);
     if (applied.inPlace) {
       book.meta = mergeEditsIntoMeta(book.meta, applied.edits);
       if (applied.edits.coverPath) book.coverPath = applied.edits.coverPath;

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { mergeDocIntoEdits, mergeEditsIntoMeta } from "../lib/api/edits";
 import type { StagedEdits } from "../lib/api/edits";
 import type { BookMeta } from "../lib/api/meta";
@@ -153,18 +153,69 @@ describe("mergeEditsIntoMeta", () => {
   });
 });
 
+describe("EditsStore unstageApplied", () => {
+  // A convert job carries a snapshot of the edits staged when the user clicked
+  // Tailor. By the time it settles - late in a batch, potentially - the user
+  // may have staged more on that same book. Only the fields the job actually
+  // wrote should be dropped, and only where the staged value still matches
+  // what was applied: a field re-typed mid-run must survive to the next run.
+
+  afterEach(() => edits.clear());
+
+  it("drops only the applied fields whose staged value is unchanged, keeping the rest", () => {
+    const bookId = "book-1";
+    edits.stage([bookId], { series: "Old Series", title: "Old Title" });
+    const applied = { series: "Old Series", title: "Old Title" };
+    // A new edit lands mid-run: title is re-typed, publisher is newly staged.
+    edits.stage([bookId], { title: "New Title", publisher: "New Press" });
+
+    edits.unstageApplied(bookId, applied);
+
+    const staged = edits.get(bookId);
+    expect(staged?.series).toBeUndefined();
+    expect(staged?.title).toBe("New Title");
+    expect(staged?.publisher).toBe("New Press");
+  });
+
+  it("drops the whole entry when every applied field still matches what is staged", () => {
+    const bookId = "book-2";
+    edits.stage([bookId], { series: "Middle-earth", seriesIndex: "1" });
+
+    edits.unstageApplied(bookId, { series: "Middle-earth", seriesIndex: "1" });
+
+    expect(edits.hasEdits(bookId)).toBe(false);
+  });
+
+  it("is a no-op for a book with nothing staged", () => {
+    expect(() => edits.unstageApplied("no-such-book", { title: "X" })).not.toThrow();
+    expect(edits.hasEdits("no-such-book")).toBe(false);
+  });
+});
+
 describe("EditsStore flush registry", () => {
   // MetadataEditor debounces staging by ~200ms and registers its own
   // flushPending as a callback here, so a Tailor/write-metadata click (or a
   // selection change) can settle a still-debouncing keystroke instead of
   // losing it. This exercises that registry in isolation from the timer.
 
-  it("runs a registered flush callback, landing a still-pending edit", () => {
+  const registered: Array<() => void> = [];
+
+  /** Register a flush callback and remember it for teardown, so one test's
+   * callback never keeps firing in a later test's flushPending(). */
+  function register(fn: () => void): void {
+    registered.push(edits.onFlush(fn));
+  }
+
+  afterEach(() => {
+    for (const unregister of registered.splice(0)) unregister();
     edits.clear();
+  });
+
+  it("runs a registered flush callback, landing a still-pending edit", () => {
     const bookId = "book-1";
     // Stands in for MetadataEditor's flushPending(): applies the last typed
     // value that a debounce timer has not committed yet.
-    edits.onFlush(() => edits.stage([bookId], { title: "Typed but not yet staged" }));
+    register(() => edits.stage([bookId], { title: "Typed but not yet staged" }));
 
     expect(edits.get(bookId)).toBeUndefined();
     edits.flushPending();
@@ -172,9 +223,8 @@ describe("EditsStore flush registry", () => {
   });
 
   it("runs every registered callback, not just the first", () => {
-    edits.clear();
-    edits.onFlush(() => edits.stage(["a"], { title: "A" }));
-    edits.onFlush(() => edits.stage(["b"], { title: "B" }));
+    register(() => edits.stage(["a"], { title: "A" }));
+    register(() => edits.stage(["b"], { title: "B" }));
 
     edits.flushPending();
     expect(edits.get("a")?.title).toBe("A");
@@ -182,7 +232,6 @@ describe("EditsStore flush registry", () => {
   });
 
   it("stops calling a callback once it is unregistered", () => {
-    edits.clear();
     let calls = 0;
     const unregister = edits.onFlush(() => calls++);
 
