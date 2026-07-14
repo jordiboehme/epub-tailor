@@ -1,15 +1,34 @@
 <script lang="ts">
+  import { onMount } from "svelte";
   import { open } from "@tauri-apps/plugin-dialog";
-  import { pollVolumes } from "../api/volumes";
+  import { listRemovableVolumes, pollVolumes } from "../api/volumes";
   import type { Volume } from "../api/volumes";
   import { settings } from "../stores/settings.svelte";
 
   let volumes = $state<Volume[]>([]);
 
-  // Keep the removable-volume list live while this picker is on screen.
+  /** True while the pointer is over this picker, or something inside it has focus. */
+  let atPicker = $state(false);
+
+  // A drive already plugged in is offered from the moment the picker appears:
+  // one read, on mount.
+  onMount(() => {
+    void listRemovableVolumes()
+      .then((next) => (volumes = next))
+      .catch(() => {
+        // A volume list we could not read is an empty one; the two fixed
+        // choices below still work, and the next poll tries again.
+      });
+  });
+
+  // The live poll, though, only runs while the user is actually *at* the picker.
+  // This component is mounted for the app's whole lifetime, and the poll stats
+  // /Volumes every two seconds - a cost with no payoff while the user is doing
+  // anything else. Reaching for the destination list is exactly the gesture that
+  // follows plugging a reader in, so the list is live when it needs to be.
   $effect(() => {
-    const stop = pollVolumes((next) => (volumes = next));
-    return stop;
+    if (!atPicker) return;
+    return pollVolumes((next) => (volumes = next));
   });
 
   function middleTruncate(path: string, max = 34): string {
@@ -29,7 +48,15 @@
   }
 </script>
 
-<div class="flex flex-col gap-1.5">
+<div
+  role="group"
+  aria-label="Destination"
+  class="flex flex-col gap-1.5"
+  onpointerenter={() => (atPicker = true)}
+  onpointerleave={() => (atPicker = false)}
+  onfocusin={() => (atPicker = true)}
+  onfocusout={() => (atPicker = false)}
+>
   <!-- Alongside originals -->
   <button
     type="button"
