@@ -2,12 +2,21 @@
   import { slide } from "svelte/transition";
   import { revealItemInDir } from "@tauri-apps/plugin-opener";
   import { coverUrl } from "../api/covers";
-  import { formatSize } from "../api/format";
-  import { books } from "../stores/books.svelte";
+  import { books, stemOf } from "../stores/books.svelte";
   import type { Book } from "../stores/books.svelte";
   import { jobs } from "../stores/jobs.svelte";
   import { edits } from "../stores/edits.svelte";
-  import type { Stats } from "../api/contract";
+  import {
+    bookInitials,
+    bookSubtitle,
+    bookTitle,
+    chipsFor,
+    failureOf,
+    findingsOf,
+    TONE_CLASS,
+    writtenPathOf,
+  } from "../api/book-view";
+  import type { Chip } from "../api/book-view";
   import CardDetails from "./CardDetails.svelte";
 
   let { book }: { book: Book } = $props();
@@ -31,67 +40,17 @@
   const queued = $derived(job?.state === "queued");
   const unreadable = $derived(book.ingest === "failed");
 
-  const stem = $derived(book.fileName.replace(/\.[^.]+$/, ""));
-  const title = $derived(book.meta?.title?.trim() || stem);
-  const subtitle = $derived(book.meta?.authors?.[0] ?? (book.kind === "md" ? "Markdown" : ""));
+  const stem = $derived(stemOf(book.fileName));
+  const title = $derived(bookTitle(book));
+  const subtitle = $derived(bookSubtitle(book));
+  const initials = $derived(bookInitials(book));
   const hasCover = $derived(!!book.coverPath && !imgError);
 
-  // The written file, when there is one to reveal: a real conversion, not a
-  // preview (a dry run writes nothing, so there is nothing to show anyone).
-  const writtenPath = $derived(
-    book.result?.kind === "fit" && !book.result.report.dry_run ? book.result.report.output : null,
-  );
-
-  // The failure this card can explain: a conversion that failed, or a book we
-  // could not even read in the first place. Both carry their own stderr, so
-  // the drawer keeps working long after the job behind it has been pruned.
-  const failure = $derived(
-    book.result?.kind === "failed"
-      ? {
-          friendly: book.result.friendly,
-          code: book.result.failure.code,
-          stderr: book.result.stderr,
-        }
-      : unreadable && book.ingestError
-        ? book.ingestError
-        : undefined,
-  );
-  const findings = $derived(book.result?.kind === "check" ? book.result.report.findings : undefined);
+  const writtenPath = $derived(writtenPathOf(book));
+  const failure = $derived(failureOf(book));
+  const findings = $derived(findingsOf(book));
   const canExpand = $derived(Boolean(failure || findings));
-
-  const initials = $derived(
-    stem
-      .split(/[\s_·—–-]+/)
-      .filter(Boolean)
-      .slice(0, 2)
-      .map((w) => w[0]?.toUpperCase() ?? "")
-      .join(""),
-  );
-
-  interface Chip {
-    label: string;
-    tone: "good" | "warn" | "bad" | "neutral";
-    title?: string;
-  }
-
-  function sizeChip(stats: Stats): Chip {
-    if (stats.bytes_in > 0 && stats.bytes_out < stats.bytes_in) {
-      const pct = Math.round((1 - stats.bytes_out / stats.bytes_in) * 100);
-      return {
-        label: `-${pct}%`,
-        tone: "good",
-        title: `${formatSize(stats.bytes_in)} to ${formatSize(stats.bytes_out)}`,
-      };
-    }
-    return { label: `wrote ${formatSize(stats.bytes_out)}`, tone: "neutral" };
-  }
-
-  const toneClass: Record<Chip["tone"], string> = {
-    good: "bg-emerald-100 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300",
-    warn: "bg-amber-100 text-amber-700 dark:bg-amber-500/15 dark:text-amber-300",
-    bad: "bg-rose-100 text-rose-700 dark:bg-rose-500/15 dark:text-rose-300",
-    neutral: "bg-zinc-200 text-zinc-600 dark:bg-zinc-700 dark:text-zinc-300",
-  };
+  const chips = $derived(chipsFor(book));
 
   function onClick(event: MouseEvent) {
     if (event.shiftKey) books.range(book.id);
@@ -113,7 +72,7 @@
 </script>
 
 {#snippet chip(c: Chip)}
-  <span class="rounded-md px-1.5 py-0.5 text-[11px] font-medium {toneClass[c.tone]}" title={c.title}>
+  <span class="rounded-md px-1.5 py-0.5 text-[11px] font-medium {TONE_CLASS[c.tone]}" title={c.title}>
     {c.label}
   </span>
 {/snippet}
@@ -250,33 +209,11 @@
     {/if}
 
     <!-- Chips: the result, or the state the book is stuck in -->
-    {#if book.result || unreadable}
+    {#if chips.length > 0}
       <div class="mt-1.5 flex flex-wrap items-center gap-1">
-        {#if book.result?.kind === "fit"}
-          {@render chip(sizeChip(book.result.report.stats))}
-          {#if book.result.report.dry_run}
-            {@render chip({ label: "preview", tone: "neutral" })}
-          {/if}
-          {#if book.result.report.stats.warnings > 0}
-            {@render chip({ label: `${book.result.report.stats.warnings} warnings`, tone: "warn" })}
-          {/if}
-        {:else if book.result?.kind === "check"}
-          {#if book.result.report.errors > 0}
-            {@render chip({ label: `${book.result.report.errors} errors`, tone: "bad" })}
-          {/if}
-          {#if book.result.report.warnings > 0}
-            {@render chip({ label: `${book.result.report.warnings} warnings`, tone: "warn" })}
-          {/if}
-          {#if book.result.report.errors === 0 && book.result.report.warnings === 0}
-            {@render chip({ label: "clean", tone: "good" })}
-          {/if}
-        {:else if book.result?.kind === "failed"}
-          {@render chip({ label: "failed", tone: "bad" })}
-        {:else if book.result?.kind === "cancelled"}
-          {@render chip({ label: "cancelled", tone: "neutral" })}
-        {:else if unreadable}
-          {@render chip({ label: "could not read", tone: "bad" })}
-        {/if}
+        {#each chips as c}
+          {@render chip(c)}
+        {/each}
 
         {#if canExpand}
           <button

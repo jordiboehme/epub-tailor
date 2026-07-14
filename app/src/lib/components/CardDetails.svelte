@@ -4,12 +4,7 @@
   // failure worth showing at all is worth showing properly - the friendly
   // line, the CLI's own error code, and the last of what it said on stderr.
   import type { Finding } from "../api/contract";
-
-  interface Failure {
-    friendly: string;
-    code: string;
-    stderr: string[];
-  }
+  import type { Failure } from "../api/book-view";
 
   let {
     findings,
