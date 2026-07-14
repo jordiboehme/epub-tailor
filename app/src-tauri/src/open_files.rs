@@ -90,10 +90,16 @@ pub fn push_and_emit(app: &AppHandle, paths: Vec<String>) {
 
 /// Return and clear whatever [`push_and_emit`] has buffered so far. The
 /// frontend calls this once on startup to pick up files the OS handed the
-/// app before its `files-opened` listener existed.
+/// app before its `files-opened` listener existed. A poisoned lock (some
+/// other code panicked while holding it) still yields whatever was buffered
+/// rather than panicking this command in turn.
 #[tauri::command]
 pub fn drain_pending_opens(state: State<PendingOpens>) -> Vec<String> {
-    std::mem::take(&mut *state.0.lock().unwrap())
+    let mut pending = state
+        .0
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    std::mem::take(&mut *pending)
 }
 
 #[cfg(test)]
