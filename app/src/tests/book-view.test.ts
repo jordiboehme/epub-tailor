@@ -5,7 +5,9 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  bookByline,
   bookInitials,
+  bookSeries,
   bookSubtitle,
   bookTitle,
   chipsFor,
@@ -103,6 +105,48 @@ describe("bookSubtitle", () => {
 
   it("is empty for an epub with no author", () => {
     expect(bookSubtitle(makeBook())).toBe("");
+  });
+});
+
+describe("bookSeries", () => {
+  it("pairs the series with its position", () => {
+    const book = makeBook({ meta: meta({ series: "Dune", seriesIndex: "2" }) });
+    expect(bookSeries(book)).toBe("Dune #2");
+  });
+
+  it("is the series alone when there is no position", () => {
+    expect(bookSeries(makeBook({ meta: meta({ series: "Dune" }) }))).toBe("Dune");
+  });
+
+  it("ignores a blank position", () => {
+    const book = makeBook({ meta: meta({ series: "Dune", seriesIndex: "  " }) });
+    expect(bookSeries(book)).toBe("Dune");
+  });
+
+  it("is empty when the book has no series", () => {
+    expect(bookSeries(makeBook({ meta: meta({ series: "   " }) }))).toBe("");
+    expect(bookSeries(makeBook())).toBe("");
+  });
+});
+
+describe("bookByline", () => {
+  it("joins the author and the series", () => {
+    const book = makeBook({
+      meta: meta({ authors: ["Frank Herbert"], series: "Dune", seriesIndex: "2" }),
+    });
+    expect(bookByline(book)).toBe("Frank Herbert · Dune #2");
+  });
+
+  it("is the author alone when there is no series", () => {
+    expect(bookByline(makeBook({ meta: meta({ authors: ["Jane Author"] }) }))).toBe("Jane Author");
+  });
+
+  it("is the series alone when there is no author", () => {
+    expect(bookByline(makeBook({ meta: meta({ series: "Dune" }) }))).toBe("Dune");
+  });
+
+  it("is empty when the book has neither", () => {
+    expect(bookByline(makeBook())).toBe("");
   });
 });
 

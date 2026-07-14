@@ -50,6 +50,26 @@ export function bookSubtitle(book: Book): string {
   return book.meta?.authors?.[0] ?? (book.kind === "md" ? "Markdown" : "");
 }
 
+/**
+ * The series a book belongs to, with its position when it has one: "Dune #2".
+ * Empty when the book carries no series at all.
+ */
+export function bookSeries(book: Book): string {
+  const series = book.meta?.series?.trim();
+  if (!series) return "";
+  const index = book.meta?.seriesIndex?.trim();
+  return index ? `${series} #${index}` : series;
+}
+
+/**
+ * The one line under a row's title: the author and the series, whichever of
+ * them the book has. A row has the width to say both; a card only shows the
+ * subtitle, which is why this lives beside `bookSubtitle` rather than in it.
+ */
+export function bookByline(book: Book): string {
+  return [bookSubtitle(book), bookSeries(book)].filter(Boolean).join(" · ");
+}
+
 /** Up to two initials from the stem's words, for a coverless placeholder. */
 export function bookInitials(book: Book): string {
   return stemOf(book.fileName)
