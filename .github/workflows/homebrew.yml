@@ -23,7 +23,7 @@ jobs:
             --repo "${{ github.repository }}" \
             --pattern SHA256SUMS --dir /tmp/release
 
-      - name: Regenerate and push the formula
+      - name: Regenerate and push the formula and the cask
         env:
           TAP_GITHUB_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
         run: |
@@ -32,15 +32,32 @@ jobs:
           VERSION="${TAG#v}"
           sums="/tmp/release/SHA256SUMS"
 
-          sha_macos_arm=$(grep "epub-tailor-${TAG}-macos-arm64.tar.gz" "$sums" | awk '{print $1}')
-          sha_macos_intel=$(grep "epub-tailor-${TAG}-macos-intel.tar.gz" "$sums" | awk '{print $1}')
-          sha_linux_arm=$(grep "epub-tailor-${TAG}-linux-arm64.tar.gz" "$sums" | awk '{print $1}')
-          sha_linux_intel=$(grep "epub-tailor-${TAG}-linux-amd64.tar.gz" "$sums" | awk '{print $1}')
+          # Exact filename match (a sha256sum line is "<hash>  <name>"), and a
+          # missing entry is fatal: a formula or cask carrying an empty sha256
+          # fails for every user who installs it, and it fails obscurely.
+          sum_of() {
+            local file="$1"
+            local sum
+            sum="$(awk -v f="$file" '$2 == f { print $1 }' "$sums")"
+            if [ -z "$sum" ]; then
+              echo "::error::no checksum for ${file} in SHA256SUMS - was it published?" >&2
+              exit 1
+            fi
+            printf '%s' "$sum"
+          }
+
+          sha_macos_arm=$(sum_of "epub-tailor-${TAG}-macos-arm64.tar.gz")
+          sha_macos_intel=$(sum_of "epub-tailor-${TAG}-macos-intel.tar.gz")
+          sha_linux_arm=$(sum_of "epub-tailor-${TAG}-linux-arm64.tar.gz")
+          sha_linux_intel=$(sum_of "epub-tailor-${TAG}-linux-amd64.tar.gz")
+
+          sha_app_arm=$(sum_of "EPUB-Tailor-${TAG}-macos-arm64.dmg")
+          sha_app_intel=$(sum_of "EPUB-Tailor-${TAG}-macos-intel.dmg")
 
           git clone "https://x-access-token:${TAP_GITHUB_TOKEN}@github.com/jordiboehme/homebrew-tap.git" \
             "${{ runner.temp }}/homebrew-tap"
 
-          mkdir -p "${{ runner.temp }}/homebrew-tap/Formula"
+          mkdir -p "${{ runner.temp }}/homebrew-tap/Formula" "${{ runner.temp }}/homebrew-tap/Casks"
 
           cat > "${{ runner.temp }}/homebrew-tap/Formula/epub-tailor.rb" << FORMULA
           class EpubTailor < Formula
@@ -83,9 +100,49 @@ jobs:
           end
           FORMULA
 
+          # The desktop app: a signed, notarized, stapled DMG per architecture.
+          # `auto_updates true` is the literal truth - the app carries Tauri's
+          # updater and installs new versions itself - and it also tells Homebrew
+          # not to cry version mismatch when `brew list` finds a newer app than
+          # the cask installed.
+          cat > "${{ runner.temp }}/homebrew-tap/Casks/epub-tailor-app.rb" << CASK
+          cask "epub-tailor-app" do
+            version "${VERSION}"
+
+            on_arm do
+              sha256 "${sha_app_arm}"
+
+              url "https://github.com/jordiboehme/epub-tailor/releases/download/v#{version}/EPUB-Tailor-v#{version}-macos-arm64.dmg"
+            end
+
+            on_intel do
+              sha256 "${sha_app_intel}"
+
+              url "https://github.com/jordiboehme/epub-tailor/releases/download/v#{version}/EPUB-Tailor-v#{version}-macos-intel.dmg"
+            end
+
+            name "EPUB Tailor"
+            desc "Clean, fix and tailor EPUB books to fit your e-reader"
+            homepage "https://github.com/jordiboehme/epub-tailor"
+
+            auto_updates true
+            depends_on macos: ">= :catalina"
+
+            app "EPUB Tailor.app"
+
+            zap trash: [
+              "~/Library/Application Support/io.github.jordiboehme.epub-tailor.gui",
+              "~/Library/Caches/io.github.jordiboehme.epub-tailor.gui",
+              "~/Library/Preferences/io.github.jordiboehme.epub-tailor.gui.plist",
+              "~/Library/Saved Application State/io.github.jordiboehme.epub-tailor.gui.savedState",
+              "~/Library/WebKit/io.github.jordiboehme.epub-tailor.gui",
+            ]
+          end
+          CASK
+
           cd "${{ runner.temp }}/homebrew-tap"
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add Formula/epub-tailor.rb
-          git commit -m "Update epub-tailor to ${VERSION}"
+          git add Formula/epub-tailor.rb Casks/epub-tailor-app.rb
+          git commit -m "Update epub-tailor and epub-tailor-app to ${VERSION}"
           git push
