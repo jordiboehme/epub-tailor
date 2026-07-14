@@ -55,6 +55,15 @@ describe("renderTemplate", () => {
     expect(result).toBe("x".repeat(120));
   });
 
+  it("does not end with a space or dot after capping at 120 characters", () => {
+    // A title of 119 x's + space + y (121 chars) will slice to 120 chars at the space
+    // without re-trimming trailing dots/spaces after the slice.
+    const b = book({ title: "x".repeat(119) + " y", authors: [] });
+    const result = renderTemplate("{title}", b);
+    expect(result).not.toMatch(/[ .]$/);
+    expect(result).toBe("x".repeat(119));
+  });
+
   it("renders a missing token as an empty string", () => {
     const b = book({ title: "Solo", authors: [], series: undefined });
     expect(renderTemplate("{title}{author}", b)).toBe("Solo");

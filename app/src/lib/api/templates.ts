@@ -50,7 +50,10 @@ function sanitizeFilename(name: string): string {
   // Windows rejects a trailing dot or space; strip them (repeatedly, in case
   // stripping one exposes another).
   result = result.replace(/[. ]+$/, "");
-  return result.slice(0, 120);
+  result = result.slice(0, 120);
+  // Re-trim trailing dots and spaces after the cap in case slicing reintroduced them.
+  result = result.replace(/[. ]+$/, "");
+  return result;
 }
 
 /**
