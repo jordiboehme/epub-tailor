@@ -49,9 +49,20 @@
     });
   });
 
-  // `indeterminate` is a DOM property, not an attribute.
+  /** The box is written imperatively: a cancelled checkbox click makes the
+      browser restore the old checkedness after the framework's own write,
+      so the template attribute cannot be trusted to stick. */
+  function syncBox() {
+    if (!box) return;
+    box.checked = check === "checked";
+    box.indeterminate = check === "indeterminate";
+  }
+
+  // `indeterminate` is a DOM property, not an attribute; `checked` lives
+  // here too so both always reflect the staged state.
   $effect(() => {
-    if (box) box.indeterminate = check === "indeterminate";
+    void check;
+    syncBox();
   });
 
   function onInput(event: Event) {
@@ -59,9 +70,10 @@
     oninput?.(draft);
   }
 
-  function onBoxClick(event: MouseEvent) {
-    // The box reflects staged state; it is never toggled directly.
-    event.preventDefault();
+  function onBoxClick() {
+    // The box is a pure reflection of staged state - undo the browser's
+    // toggle synchronously, then route the intent.
+    syncBox();
     if (check === "unchecked") field?.focus();
     else onuncheck?.();
   }
@@ -72,7 +84,6 @@
     <input
       bind:this={box}
       type="checkbox"
-      checked={check === "checked"}
       onclick={onBoxClick}
       title={staged ? "Staged - uncheck to revert" : "Edit the field to stage it"}
       class="h-3 w-3 rounded accent-indigo-600"
