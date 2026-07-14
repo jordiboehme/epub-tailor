@@ -10,6 +10,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             commands::expand_inputs,
+            commands::paths_exist,
             commands::list_removable_volumes,
             commands::is_appimage,
             commands::ensure_covers_dir,

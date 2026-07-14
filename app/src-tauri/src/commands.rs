@@ -135,6 +135,17 @@ pub fn expand_inputs(paths: Vec<String>, recursive: bool) -> Result<Vec<InputEnt
     Ok(out)
 }
 
+/// Whether a file (or anything) already sits at each of `paths`, positionally.
+/// The output planner needs this to number a name collision (`Book (2).epub`)
+/// or dodge overwriting an existing file, and it needs it as one batched call
+/// rather than a chatty round-trip per candidate. Existence follows symlinks -
+/// a link pointing at a real file counts as occupied, because writing there
+/// would still clobber the target.
+#[tauri::command]
+pub fn paths_exist(paths: Vec<String>) -> Vec<bool> {
+    paths.iter().map(|p| Path::new(p).exists()).collect()
+}
+
 /// A removable volume the workbench can offer as a conversion destination.
 #[derive(serde::Serialize)]
 pub struct Volume {
@@ -262,7 +273,7 @@ pub fn ensure_covers_dir(app: tauri::AppHandle) -> Result<String, String> {
 mod tests {
     use std::path::{Path, PathBuf};
 
-    use super::{InputEntry, expand_inputs, is_appimage};
+    use super::{InputEntry, expand_inputs, is_appimage, paths_exist};
 
     fn scratch(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
@@ -446,5 +457,22 @@ mod tests {
         // A smoke test: whatever this machine has plugged in, the call must
         // return rather than panic.
         let _ = super::list_removable_volumes();
+    }
+
+    #[test]
+    fn paths_exist_reports_presence_positionally() {
+        let dir = scratch("exists");
+        let here = dir.join("here.epub");
+        touch(&here);
+        let gone = dir.join("gone.epub");
+
+        let result = paths_exist(vec![
+            here.display().to_string(),
+            gone.display().to_string(),
+            here.display().to_string(),
+        ]);
+        assert_eq!(result, vec![true, false, true]);
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 }
