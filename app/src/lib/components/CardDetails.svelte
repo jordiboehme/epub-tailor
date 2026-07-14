@@ -9,9 +9,16 @@
   let {
     findings,
     failure,
+    padding = "px-2.5 py-2",
   }: {
     findings?: Finding[];
     failure?: Failure;
+    /**
+     * The drawer's own padding. The default is tuned for a 150px card; a list
+     * row overrides it to indent the text under the row's title column, so the
+     * drawer reads as part of the row rather than as a stray block under it.
+     */
+    padding?: string;
   } = $props();
 
   let showStderr = $state(false);
@@ -25,7 +32,7 @@
   const stderr = $derived((failure?.stderr ?? []).filter((line) => line.trim().length > 0));
 </script>
 
-<div class="border-t border-zinc-200 px-2.5 py-2 dark:border-zinc-800">
+<div class="border-t border-zinc-200 {padding} dark:border-zinc-800">
   {#if failure}
     <p class="text-[11px] leading-snug text-zinc-600 dark:text-zinc-300">{failure.friendly}</p>
     <div class="mt-1.5 flex items-center gap-2">

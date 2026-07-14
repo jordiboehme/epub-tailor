@@ -1,11 +1,15 @@
 <script lang="ts">
   import { books } from "../stores/books.svelte";
   import { jobs } from "../stores/jobs.svelte";
+  import { settings } from "../stores/settings.svelte";
+  import type { ViewMode } from "../stores/settings.svelte";
   import { isModalOpen, isTextField, shortcutFor } from "../api/keys";
   import BrowseButtons from "./BrowseButtons.svelte";
   import BookGrid from "./BookGrid.svelte";
+  import BookList from "./BookList.svelte";
   import Inspector from "./Inspector.svelte";
   import ActionBar from "./ActionBar.svelte";
+  import SegmentedControl from "./ui/SegmentedControl.svelte";
 
   // The workbench's three shortcuts. What a chord means is decided in api/keys
   // (and unit-tested there); this only reads the event and does the deed.
@@ -50,6 +54,23 @@
 
 <svelte:window onkeydown={onKeydown} />
 
+{#snippet galleryIcon()}
+  <svg class="h-4 w-4" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5">
+    <rect x="3" y="3" width="6" height="6" rx="1.2" />
+    <rect x="11" y="3" width="6" height="6" rx="1.2" />
+    <rect x="3" y="11" width="6" height="6" rx="1.2" />
+    <rect x="11" y="11" width="6" height="6" rx="1.2" />
+  </svg>
+{/snippet}
+
+{#snippet listIcon()}
+  <svg class="h-4 w-4" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5">
+    <rect x="3" y="4" width="3.5" height="3.5" rx="0.8" />
+    <rect x="3" y="12.5" width="3.5" height="3.5" rx="0.8" />
+    <path d="M9 5.75h8M9 14.25h8" stroke-linecap="round" />
+  </svg>
+{/snippet}
+
 {#snippet mark(size: string)}
   <svg class={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
     <path d="M5 4.5A1.5 1.5 0 016.5 3H13v18H6.5A1.5 1.5 0 015 19.5v-15z" stroke-linejoin="round" />
@@ -76,12 +97,26 @@
         <span class="text-indigo-500">{@render mark("h-5 w-5")}</span>
         <span class="text-sm font-semibold tracking-tight">EPUB Tailor</span>
       </div>
-      <BrowseButtons size="sm" />
+      <div class="flex items-center gap-3">
+        <SegmentedControl
+          value={settings.viewMode}
+          options={[
+            { value: "grid", label: "Gallery", icon: galleryIcon },
+            { value: "list", label: "List", icon: listIcon },
+          ]}
+          onchange={(value) => (settings.viewMode = value as ViewMode)}
+        />
+        <BrowseButtons size="sm" />
+      </div>
     </header>
 
     <div class="flex min-h-0 flex-1">
       <main class="min-w-0 flex-1 overflow-y-auto">
-        <BookGrid />
+        {#if settings.viewMode === "list"}
+          <BookList />
+        {:else}
+          <BookGrid />
+        {/if}
       </main>
       <aside
         class="w-[300px] shrink-0 overflow-y-auto border-l border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900"
