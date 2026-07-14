@@ -89,7 +89,9 @@ class JobsStore {
   runCheck(books: Book[], profileSpecs: string[]): void {
     this.#startBatch();
     for (const book of books) {
-      this.#enqueue(book, "check", checkArgv(book.path, profileSpecs), "normal");
+      if (book.kind === "epub") {
+        this.#enqueue(book, "check", checkArgv(book.path, profileSpecs), "normal");
+      }
     }
     this.#pump();
   }

@@ -11,8 +11,11 @@
   let starting = $state(false);
 
   const targetCount = $derived(books.selected.length || books.books.length);
+  const targetBooks = $derived(books.selected.length ? [...books.selected] : [...books.books]);
+  const epubCount = $derived(targetBooks.filter((b) => b.kind === "epub").length);
   const busy = $derived(jobs.active || starting);
   const canRun = $derived(targetCount > 0 && !busy);
+  const canCheck = $derived(epubCount > 0 && !busy);
   const runLabel = $derived(
     `${settings.dryRun ? "Preview" : "Tailor"} ${targetCount} ${targetCount === 1 ? "book" : "books"}`,
   );
@@ -98,7 +101,7 @@
     </div>
   {:else}
     <div class="flex items-center gap-2">
-      <Button variant="secondary" disabled={!canRun} onclick={check}>Check</Button>
+      <Button variant="secondary" disabled={!canCheck} onclick={check}>Check</Button>
       <Button variant="primary" disabled={!canRun} onclick={tailor}>{runLabel}</Button>
     </div>
   {/if}
