@@ -1,7 +1,8 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { getCurrentWebview } from "@tauri-apps/api/webview";
-  import type { UnlistenFn } from "@tauri-apps/api/event";
+  import { invoke } from "@tauri-apps/api/core";
+  import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import { settings } from "./lib/stores/settings.svelte";
   import { profiles } from "./lib/stores/profiles.svelte";
   import { books } from "./lib/stores/books.svelte";
@@ -14,7 +15,7 @@
     void settings.load();
     void profiles.load();
 
-    let unlisten: UnlistenFn | undefined;
+    let unlistenDrag: UnlistenFn | undefined;
     getCurrentWebview()
       .onDragDropEvent((event) => {
         const payload = event.payload;
@@ -28,9 +29,24 @@
           dragging = false;
         }
       })
-      .then((fn) => (unlisten = fn));
+      .then((fn) => (unlistenDrag = fn));
 
-    return () => unlisten?.();
+    // Files the OS handed the app directly (double-click, Open With, `open
+    // -a`, a bare command line): drain whatever arrived before this listener
+    // existed, then listen for the rest. Both feed the same books.addPaths
+    // the drop zone uses, so dedupe is handled in one place.
+    void invoke<string[]>("drain_pending_opens").then((paths) => {
+      if (paths.length > 0) void books.addPaths(paths);
+    });
+    let unlistenOpen: UnlistenFn | undefined;
+    listen<string[]>("files-opened", (event) => {
+      void books.addPaths(event.payload);
+    }).then((fn) => (unlistenOpen = fn));
+
+    return () => {
+      unlistenDrag?.();
+      unlistenOpen?.();
+    };
   });
 </script>
 
