@@ -32,16 +32,23 @@
       .then((fn) => (unlistenDrag = fn));
 
     // Files the OS handed the app directly (double-click, Open With, `open
-    // -a`, a bare command line): drain whatever arrived before this listener
-    // existed, then listen for the rest. Both feed the same books.addPaths
-    // the drop zone uses, so dedupe is handled in one place.
-    void invoke<string[]>("drain_pending_opens").then((paths) => {
-      if (paths.length > 0) void books.addPaths(paths);
-    });
+    // -a`, a bare command line). Register the live listener *first* and only
+    // drain the pending-opens buffer once it is confirmed up, so there is no
+    // gap between the two where an arrival could be missed by both: anything
+    // from here on is caught live, and the drain call sweeps up whatever
+    // arrived before that. Both feed the same books.addPaths the drop zone
+    // uses, so dedupe is handled in one place.
     let unlistenOpen: UnlistenFn | undefined;
     listen<string[]>("files-opened", (event) => {
       void books.addPaths(event.payload);
-    }).then((fn) => (unlistenOpen = fn));
+    })
+      .then((fn) => {
+        unlistenOpen = fn;
+        return invoke<string[]>("drain_pending_opens");
+      })
+      .then((paths) => {
+        if (paths.length > 0) void books.addPaths(paths);
+      });
 
     return () => {
       unlistenDrag?.();
