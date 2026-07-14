@@ -1,6 +1,6 @@
 # Releasing
 
-Everything ships from one tag. `v0.4.2` on `main` builds the CLI for six targets, the desktop app for the same six, signs and notarizes what Apple wants signed and notarized, and leaves a **draft** GitHub release for a human to read before the world does. Publishing that draft is what updates the Homebrew tap and what makes the app's auto-updater see the new version at all.
+Everything ships from one tag. `v0.4.2` on `main` builds the CLI for six targets and the desktop app for the same six, then signs and notarizes what Apple wants signed and notarized. It leaves a **draft** GitHub release for a human to read before the world does. Publishing that draft is what updates the Homebrew tap and what makes the app's auto-updater see the new version at all.
 
 ## The secrets a maintainer must set
 
@@ -29,7 +29,7 @@ cd app
 npx tauri signer generate -w epub-tailor-updater.key
 ```
 
-That prints the public key and writes two files. The private key (`epub-tailor-updater.key`) goes into `TAURI_SIGNING_PRIVATE_KEY`, its password into `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`, and then the file is deleted. `*.key` is gitignored, and it must stay out of the repo: anyone holding it can sign an update that every installed copy of the app will accept and run.
+That prints the public key and writes two files. The private key (`epub-tailor-updater.key`) goes into `TAURI_SIGNING_PRIVATE_KEY`, its password into `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` and then the file is deleted. `*.key` is gitignored, and it must stay out of the repo: anyone holding it can sign an update that every installed copy of the app will accept and run.
 
 Losing it is worse than it sounds. A new keypair means a new public key, which means a new build, which the already-installed copies will refuse to install because it is signed by a key they never heard of. Everyone would have to reinstall by hand. Keep a copy somewhere safe.
 
@@ -37,7 +37,7 @@ Rotating the pubkey in `tauri.conf.json` and the two secrets together is fine, a
 
 ## Releasing
 
-1. Bump `version` under `[workspace.package]` in `Cargo.toml`, then `cargo check` so `Cargo.lock` follows. The app takes its version from there too, and a tag that disagrees with it fails the build on purpose: the updater compares `latest.json`'s version against the version the running app reports, so a mismatch would offer everyone an update to the release they are already running, forever.
+1. Bump `version` under `[workspace.package]` in `Cargo.toml`, then `cargo check` so `Cargo.lock` follows. The app takes its version from there too, and a tag that disagrees with it fails the build on purpose: the updater compares `latest.json`'s version against the version the running app reports, so a mismatch would offer everyone an update to the release they are already running, forever. The check is an exact string match, not a semver-aware one, so a prerelease tag such as `v0.5.0-rc.1` needs `[workspace.package] version` set to the identical `0.5.0-rc.1`, or the build fails the same way.
 2. Commit, tag `vX.Y.Z`, push the tag.
 3. `release.yml` builds `build` (six CLI targets) and `build-app` (six app bundles), then `publish` collects everything, writes `SHA256SUMS` and `latest.json`, generates notes with git-cliff and creates a **draft** release.
 4. Read the notes, fix them up, publish the release.
@@ -63,7 +63,7 @@ Per platform, for the CLI: `epub-tailor-vX.Y.Z-<platform>.tar.gz` (or `.zip` on 
 
 Plus `SHA256SUMS` (the cask reads the DMG hashes out of it) and `latest.json`.
 
-The Windows installers are unsigned: a code-signing certificate costs real money, and SmartScreen's warning is the price of not paying it. macOS is signed with a Developer ID, notarized, and the ticket is stapled to the `.app` and to the DMG, so a first launch works offline and without a right-click-Open dance.
+The Windows installers are unsigned: a code-signing certificate costs real money, and SmartScreen's warning is the price of not paying it. macOS is signed with a Developer ID and notarized, and the ticket is stapled to the `.app` and to the DMG, so a first launch works offline and without a right-click-Open dance.
 
 ## Building the app locally
 

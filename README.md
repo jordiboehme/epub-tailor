@@ -75,7 +75,7 @@ Windows and Linux: grab a binary from [Releases](https://github.com/jordiboehme/
 
 ### Or install the app
 
-There is a desktop app now. Same tailor, with a shopfront: drop books in, pick a device, watch them come out fitted. It shows you the covers, lets you fix a wrong title or a missing author before the book is converted (looking the correct one up online if you ask it to), converts a whole pile in one go with a progress bar and a cancel button, and writes the results straight to the e-reader when you plug it in. It is not a reimplementation - the CLI rides along inside the app and does all the work, so what comes out is exactly what the command line would have produced.
+There is a desktop app now. Same tailor, with a shopfront: drop books in, pick a device, watch them come out fitted. It shows you the covers, lets you fix a wrong title or a missing author before the book is converted (looking the correct one up online if you ask it to), converts a whole pile in one go with a progress bar plus a cancel button and writes the results straight to the e-reader when you plug it in. It is not a reimplementation - the CLI rides along inside the app and does all the work, so what comes out is exactly what the command line would have produced.
 
 macOS, with Homebrew:
 
@@ -176,7 +176,7 @@ Four things worth knowing about the device profiles:
 - **A Kindle cannot open an EPUB at all.** It ingests one through Send to Kindle, which converts it server side. So the `kindle-*` profiles tailor a book to survive Amazon's converter, not to drive a renderer.
 - **A plain EPUB on a Kobo renders through Adobe RMSDK**, whose CSS parser is frozen around 2013 and throws away the *entire* stylesheet if it meets a single `calc()`, `var()` or `clamp()` - sometimes refusing to open the book at all. The same engine sits under PocketBook's EPUB2 path and tolino's RMSDK mode. Those profiles switch on `sanitize_css`, which removes exactly those constructs and leaves the rest of the stylesheet alone.
 - **Only the Xteink readers get the full conversion.** Every other device here has a real HTML renderer, so the aggressive transforms (CSS subsetting, table linearization, code-block rebuilding) stay off - they would damage the book. What those profiles do is repair it, fit its images to the panel and rasterize its SVG.
-- **Boox is the weakest target and we say so.** It is plain Android with the Play Store, its stock NeoReader is widely considered mediocre, and most experienced owners install KOReader instead. The profile still helps: fitting images to the panel is what stops NeoReader's V2 engine getting stuck on an oversized image, and it helps whatever app you read in.
+- **Boox is the weakest target and we say so.** It is plain Android with the Play Store, its stock NeoReader is widely considered mediocre and most experienced owners install KOReader instead. The profile still helps: fitting images to the panel is what stops NeoReader's V2 engine getting stuck on an oversized image, and it helps whatever app you read in.
 
 The reasoning, device by device with sources and an explicit list of what nobody publishes, is in [`research/`](research/).
 
@@ -221,7 +221,7 @@ The full schema, every feature switch and the composition rules are documented i
 
 ## Metadata
 
-Your book keeps everything it came with: description, publisher, subjects, dates, rights, contributors, ISBNs, series, and the author sort keys your e-reader shelves it by.
+Your book keeps everything it came with: description, publisher, subjects, dates, rights, contributors, ISBNs, series and the author sort keys your e-reader shelves it by.
 
 If something is *missing*, there are three ways to supply it, and they compose - the book loses to a document, a document loses to a flag.
 
@@ -268,7 +268,7 @@ Their cover *images* are a different matter: they come from many sources and are
 
 **`fit`, `md` and `check` never touch the network.** Only `metadata search` and `metadata fetch` do, and neither ever writes a book. Looking up and converting are separate acts with a file in between, so a conversion is always reproducible and you always get to see what was found before anything is written.
 
-Under `--report json`, stdout is exactly one JSON document, every payload carries a `schema` version, and a failure prints `{"error": {"code": "drm-protected", ...}}` rather than making you grep English. `metadata pick` is the only command that ever prompts, and it refuses to run when stdin is not a terminal - so it can never hang something that was not expecting a question.
+Under `--report json`, stdout is exactly one JSON document; every payload carries a `schema` version; and a failure prints `{"error": {"code": "drm-protected", ...}}` rather than making you grep English. `metadata pick` is the only command that ever prompts, and it refuses to run when stdin is not a terminal - so it can never hang something that was not expecting a question.
 
 A batch run (a folder or several inputs) keeps that promise by aggregating: one document with a `results` array - each entry a per-file status of `converted`, `skipped` or `failed` (`checked`, `skipped` or `unreadable` under `check`) - and a `summary` with the counts. Skipped entries carry a `reason` (`prior-output`, `output-exists` or `already-tailored`) and the document says whether the run was `in_place`. Per-file failures are entries in `results`, never separate error payloads. Single-file output is unchanged.
 

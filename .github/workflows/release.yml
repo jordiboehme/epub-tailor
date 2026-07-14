@@ -349,7 +349,7 @@ jobs:
         run: rustup target add ${{ matrix.target }}
 
       # Tauri's Linux dependencies: the webview itself, the AppImage tooling's
-      # helpers, and patchelf, which the AppImage bundler shells out to.
+      # helpers and patchelf, which the AppImage bundler shells out to.
       - name: Install Linux webview dependencies
         if: matrix.family == 'linux'
         run: |
@@ -410,9 +410,9 @@ jobs:
           cargo build --release -p epub-tailor --target ${{ matrix.target }}
           node app/scripts/prepare-sidecar.mjs --target ${{ matrix.target }}
 
-      # Same gate as the CLI's `build` job: a tag build must be fully signed, a
+      # Same gate as the CLI's `build` job: a tag build must be fully signed; a
       # secretless workflow_dispatch dry run is allowed to produce an unsigned
-      # bundle, and a half-configured secret set is always an error.
+      # bundle; and a half-configured secret set is always an error.
       #
       # The Apple variables are exported through $GITHUB_ENV rather than the
       # build step's `env:` block because Tauri decides whether to sign by
@@ -494,6 +494,10 @@ jobs:
           # gate above about $GITHUB_ENV and newlines); a trailing newline picked
           # up from `gh secret set < file` would otherwise corrupt the file.
           if [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
+            if [ -z "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}" ] && [ "${{ github.ref_type }}" == "tag" ]; then
+              echo "::error::TAURI_SIGNING_PRIVATE_KEY_PASSWORD is not set; a tag build with TAURI_SIGNING_PRIVATE_KEY configured needs its password too, or the bundler fails deep inside minisign with an opaque decrypt error"
+              exit 1
+            fi
             {
               echo "TAURI_SIGNING_PRIVATE_KEY=$(printf '%s' "$TAURI_SIGNING_PRIVATE_KEY" | tr -d '[:space:]')"
               echo "TAURI_SIGNING_PRIVATE_KEY_PASSWORD=$(printf '%s' "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}" | tr -d '\r\n')"

@@ -130,6 +130,8 @@ jobs:
 
             app "EPUB Tailor.app"
 
+            uninstall quit: "io.github.jordiboehme.epub-tailor.gui"
+
             zap trash: [
               "~/Library/Application Support/io.github.jordiboehme.epub-tailor.gui",
               "~/Library/Caches/io.github.jordiboehme.epub-tailor.gui",
