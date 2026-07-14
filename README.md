@@ -28,7 +28,7 @@ EPUBs accumulate grime. Vendors leave marker files and watermark blocks in every
 
 ## TL;DR
 
-You bought an Xteink X4, a lovely little slab of e-ink. You copied your favorite EPUB onto it and opened something else entirely: the fonts are gone, every numbered list is bullets and the diagram in chapter 3 is missing. This fixes it:
+You bought an Xteink X4, a lovely little slab of e-ink. You copied your favorite EPUB onto it and opened something else entirely: the fonts are gone, every numbered list is bullets and the diagram in chapter 3 is missing. So are a few paragraphs, and you would never have noticed. This fixes it:
 
 ```sh
 epub-tailor fit my-book.epub --profile x4
