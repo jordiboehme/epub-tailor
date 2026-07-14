@@ -147,6 +147,9 @@ export function mergeEditsIntoMeta(base: BookMeta | undefined, edits: StagedEdit
     if (edits[key] === null) cleared.add(name);
     else filled.add(name);
   }
+  const missing = new Set(meta.missing);
+  for (const name of filled) missing.delete(name);
+  for (const name of cleared) missing.add(name);
   const pick = (edit: string | null | undefined, own: string | undefined): string | undefined =>
     edit === null ? undefined : (edit ?? own);
   const seriesGone = edits.series === null;
@@ -161,9 +164,6 @@ export function mergeEditsIntoMeta(base: BookMeta | undefined, edits: StagedEdit
     date: pick(edits.date, meta.date),
     isbn: edits.isbn ?? meta.isbn,
     subjects: edits.subjects === null ? [] : (edits.subjects ?? meta.subjects),
-    missing: [
-      ...meta.missing.filter((name) => !filled.has(name) && !cleared.has(name)),
-      ...[...cleared].filter((name) => !meta.missing.includes(name)),
-    ],
+    missing: [...missing],
   };
 }

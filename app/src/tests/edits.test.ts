@@ -207,6 +207,12 @@ describe("mergeEditsIntoMeta with clears", () => {
     expect(merged.description).toBe("A blurb.");
     expect(merged.missing).not.toContain("description");
   });
+
+  it("keeps an already-missing field missing when it is cleared", () => {
+    const alreadyMissing: BookMeta = { authors: [], subjects: [], missing: ["publisher"] };
+    const merged = mergeEditsIntoMeta(alreadyMissing, { publisher: null });
+    expect(merged.missing).toEqual(["publisher"]);
+  });
 });
 
 describe("EditsStore unstageApplied", () => {
