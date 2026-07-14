@@ -23,6 +23,19 @@
   onclick={onBackgroundClick}
   class="flex min-h-full flex-col divide-y divide-zinc-200 dark:divide-zinc-800"
 >
+  <!-- The header names the row grid's columns; the two blank cells sit over
+       the thumbnails and the status/actions area, which explain themselves. -->
+  <div
+    class="book-list-grid sticky top-0 z-10 border-b border-zinc-200 bg-zinc-50/95 px-4 py-1.5 text-[10px] font-medium uppercase tracking-wider text-zinc-400 backdrop-blur dark:border-zinc-800 dark:bg-zinc-950/90 dark:text-zinc-500"
+  >
+    <span></span>
+    <span>Title</span>
+    <span>Author</span>
+    <span>Series</span>
+    <span>Year</span>
+    <span></span>
+  </div>
+
   {#each books.books as book (book.id)}
     <!-- The rows keep the store's order, which is what makes a shift-click
          range (books.range walks that same array) select what it looks like

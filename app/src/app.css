@@ -43,3 +43,14 @@ body {
     transform: translateX(420%);
   }
 }
+
+/* The list view's column grid. The header row and every book row must agree
+   on it, so it lives here once: thumb | title | author | series | year |
+   status. The text columns squeeze (minmax 0) and truncate; year is fixed;
+   the status cell takes what its chips and actions need. */
+.book-list-grid {
+  display: grid;
+  grid-template-columns: 2rem minmax(0, 2fr) minmax(0, 1.3fr) minmax(0, 1fr) 3.5rem auto;
+  column-gap: 0.75rem;
+  align-items: center;
+}
