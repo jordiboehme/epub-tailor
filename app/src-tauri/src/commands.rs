@@ -20,7 +20,7 @@ pub struct InputEntry {
 }
 
 /// Whether `path`'s extension is one this app converts, ASCII case-insensitive.
-fn classify(path: &Path) -> Option<&'static str> {
+pub(crate) fn classify(path: &Path) -> Option<&'static str> {
     let ext = path.extension()?.to_str()?;
     if ext.eq_ignore_ascii_case("epub") {
         Some("epub")

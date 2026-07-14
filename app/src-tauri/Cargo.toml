@@ -25,6 +25,10 @@ tauri-plugin-dialog = "2"
 tauri-plugin-store = "2"
 tauri-plugin-process = "2"
 tauri-plugin-opener = "2"
+# Forwards a second launch's argv/cwd to the already-running instance (see
+# `open_files.rs`) instead of spawning a duplicate window; also lets a
+# Windows/Linux file-association launch reach the one process that handles it.
+tauri-plugin-single-instance = "2"
 serde = { workspace = true }
 serde_json = { workspace = true }
 
