@@ -14,7 +14,11 @@ pub fn run() {
     // with EPUB Tailor while it is already running" - a file association or
     // `epub-tailor-app book.epub` there spawns a full second process, whose
     // argv this callback receives before that process exits.
-    #[cfg(desktop)]
+    //
+    // The cfg matches the target gate on the dependency itself (Cargo.toml)
+    // rather than tauri's broader `desktop` alias, so the two can never
+    // disagree about whether the crate is even there to call.
+    #[cfg(any(target_os = "macos", windows, target_os = "linux"))]
     {
         builder = builder.plugin(tauri_plugin_single_instance::init(|app, argv, cwd| {
             let paths = open_files::resolve_argv(&argv, &cwd);

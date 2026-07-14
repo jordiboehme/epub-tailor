@@ -7,7 +7,7 @@
 //! platform or timing.
 
 use std::path::Path;
-use std::sync::Mutex;
+use std::sync::{Mutex, PoisonError};
 
 use tauri::{AppHandle, Emitter, Manager, State, Url};
 
@@ -75,12 +75,23 @@ pub fn urls_to_paths(urls: &[Url]) -> Vec<String> {
 /// that has not run yet) and emit `files-opened` to the main window (for one
 /// that is already up and listening). A no-op if `paths` is empty, so a
 /// launch with nothing to open never bothers the frontend.
+/// A poisoned lock (some other code panicked while holding it) is recovered
+/// from rather than propagated: the buffer is a plain `Vec<String>` that a
+/// panic cannot leave half-written into an invalid state, and dropping a file
+/// the user asked us to open - or panicking the whole app over it - is a worse
+/// outcome than reading a list that is exactly as valid as it was before.
+/// [`drain_pending_opens`] takes the same view, and the two must agree.
+fn lock_pending(pending: &Mutex<Vec<String>>) -> std::sync::MutexGuard<'_, Vec<String>> {
+    pending.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
 pub fn push_and_emit(app: &AppHandle, paths: Vec<String>) {
     if paths.is_empty() {
         return;
     }
-    if let Ok(mut pending) = app.state::<PendingOpens>().0.lock() {
-        pending.extend(paths.iter().cloned());
+    {
+        let state = app.state::<PendingOpens>();
+        lock_pending(&state.0).extend(paths.iter().cloned());
     }
     // Best-effort: if the frontend is not listening yet this is simply not
     // observed, which is fine - `drain_pending_opens` is the reliable path
@@ -90,22 +101,41 @@ pub fn push_and_emit(app: &AppHandle, paths: Vec<String>) {
 
 /// Return and clear whatever [`push_and_emit`] has buffered so far. The
 /// frontend calls this once on startup to pick up files the OS handed the
-/// app before its `files-opened` listener existed. A poisoned lock (some
-/// other code panicked while holding it) still yields whatever was buffered
-/// rather than panicking this command in turn.
+/// app before its `files-opened` listener existed. Poison-tolerant, for the
+/// reason [`lock_pending`] gives.
 #[tauri::command]
 pub fn drain_pending_opens(state: State<PendingOpens>) -> Vec<String> {
-    let mut pending = state
-        .0
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut pending = lock_pending(&state.0);
     std::mem::take(&mut *pending)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{filter_existing_candidates, is_candidate_arg, resolve_argv};
+    use super::{filter_existing_candidates, is_candidate_arg, lock_pending, resolve_argv};
+    use std::panic::AssertUnwindSafe;
     use std::path::PathBuf;
+    use std::sync::Mutex;
+
+    #[test]
+    fn a_poisoned_lock_still_yields_the_buffered_paths() {
+        let pending: Mutex<Vec<String>> = Mutex::new(vec!["book.epub".to_string()]);
+
+        // Poison it the only way a mutex gets poisoned: panic while holding the
+        // guard. The hook is muted for the duration so the deliberate panic
+        // does not print a scary backtrace into an otherwise clean test run.
+        let hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        let _ = std::panic::catch_unwind(AssertUnwindSafe(|| {
+            let _guard = pending.lock().expect("lock");
+            panic!("poison the mutex");
+        }));
+        std::panic::set_hook(hook);
+        assert!(pending.is_poisoned());
+
+        let mut guard = lock_pending(&pending);
+        guard.push("more.md".to_string());
+        assert_eq!(*guard, vec!["book.epub".to_string(), "more.md".to_string()]);
+    }
 
     #[test]
     fn accepts_epub_and_md_case_insensitively() {

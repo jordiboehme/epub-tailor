@@ -25,12 +25,16 @@ tauri-plugin-dialog = "2"
 tauri-plugin-store = "2"
 tauri-plugin-process = "2"
 tauri-plugin-opener = "2"
+serde = { workspace = true }
+serde_json = { workspace = true }
+
 # Forwards a second launch's argv/cwd to the already-running instance (see
 # `open_files.rs`) instead of spawning a duplicate window; also lets a
 # Windows/Linux file-association launch reach the one process that handles it.
+# Target-gated as the plugin's own docs prescribe - it is a desktop-only plugin,
+# and the `cfg` here is the exact one `lib.rs` gates its registration on.
+[target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]
 tauri-plugin-single-instance = "2"
-serde = { workspace = true }
-serde_json = { workspace = true }
 
 # Removable-drive detection (list_removable_volumes) on Windows: GetDriveTypeW
 # is the only reliable way to tell a USB stick from a fixed or network drive.

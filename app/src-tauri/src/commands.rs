@@ -290,8 +290,17 @@ mod tests {
         std::fs::write(path, b"hello").expect("write file");
     }
 
+    /// The entries' file names, sorted - for the assertions that only care
+    /// *which* files were found. Traversal order has its own test below.
     fn file_names(entries: &[InputEntry]) -> Vec<String> {
-        let mut names: Vec<String> = entries
+        let mut names = names_in_order(entries);
+        names.sort();
+        names
+    }
+
+    /// The entries' file names exactly as `expand_inputs` returned them.
+    fn names_in_order(entries: &[InputEntry]) -> Vec<String> {
+        entries
             .iter()
             .map(|e| {
                 Path::new(&e.path)
@@ -300,9 +309,52 @@ mod tests {
                     .to_string_lossy()
                     .to_string()
             })
-            .collect();
-        names.sort();
-        names
+            .collect()
+    }
+
+    #[test]
+    fn walks_a_folder_in_name_order_depth_first() {
+        // Mirrors `crates/cli/src/discover.rs`'s
+        // `finds_matching_files_in_name_order`: the app's own expansion must
+        // hand the workbench the same books in the same order the CLI's batch
+        // mode would, so a dropped folder is not shuffled by whatever order
+        // the filesystem happens to hand back.
+        let dir = scratch("order");
+        touch(&dir.join("b.epub"));
+        touch(&dir.join("a.epub"));
+        touch(&dir.join("c.md"));
+        touch(&dir.join("notes.txt"));
+        // `alpha` sorts before every top-level file, and is descended into
+        // where it sits - depth-first, not after everything else.
+        touch(&dir.join("alpha/inner-b.epub"));
+        touch(&dir.join("alpha/inner-a.epub"));
+
+        let entries = expand_inputs(vec![dir.display().to_string()], true).expect("expand_inputs");
+        assert_eq!(
+            names_in_order(&entries),
+            vec!["a.epub", "inner-a.epub", "inner-b.epub", "b.epub", "c.md"]
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn preserves_the_order_of_the_paths_it_was_given() {
+        let dir = scratch("arg-order");
+        touch(&dir.join("z.epub"));
+        touch(&dir.join("a.epub"));
+
+        let entries = expand_inputs(
+            vec![
+                dir.join("z.epub").display().to_string(),
+                dir.join("a.epub").display().to_string(),
+            ],
+            false,
+        )
+        .expect("expand_inputs");
+        assert_eq!(names_in_order(&entries), vec!["z.epub", "a.epub"]);
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
