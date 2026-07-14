@@ -16,7 +16,7 @@ import type { StagedEdits } from "../api/edits";
 export type { StagedEdits };
 
 /**
- * Drop keys whose value is blank, an empty list, or explicitly undefined (a
+ * Drop keys whose value is blank, an empty list or explicitly undefined (a
  * patch saying "unstage this"); keep `null` - a staged clear - on the fields
  * that may carry one. Returns undefined when nothing is left.
  */

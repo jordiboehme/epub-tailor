@@ -317,7 +317,8 @@ describe("edits store with clears", () => {
   });
 
   it("an explicitly-undefined patch value unstages the field across books", () => {
-    edits.stage(["a", "b"], { series: "Dune", title: "T" });
+    edits.stage(["a", "b"], { series: null, title: "T" });
+    expect(edits.get("a")).toEqual({ title: "T", series: null });
     edits.stage(["a", "b"], { series: undefined });
     expect(edits.get("a")).toEqual({ title: "T" });
     expect(edits.get("b")).toEqual({ title: "T" });
@@ -325,16 +326,23 @@ describe("edits store with clears", () => {
 
   it("unstaging the last field drops the book entirely", () => {
     edits.stage(["a"], { series: null });
+    expect(edits.hasEdits("a")).toBe(true);
     edits.stage(["a"], { series: undefined });
     expect(edits.hasEdits("a")).toBe(false);
   });
 
   it("unstageApplied drops an applied clear but keeps a re-staged value", () => {
     edits.stage(["a"], { series: null, publisher: null });
+    expect(edits.get("a")).toEqual({ series: null, publisher: null });
     const applied = { series: null, publisher: null };
     edits.stage(["a"], { publisher: "Re-typed" });
     edits.unstageApplied("a", applied);
     expect(edits.get("a")).toEqual({ publisher: "Re-typed" });
+  });
+
+  it("keeps clears on the list fields too", () => {
+    edits.stage(["a"], { authors: null, subjects: null });
+    expect(edits.get("a")).toEqual({ authors: null, subjects: null });
   });
 
   it("snapshotFor carries nulls through", () => {
