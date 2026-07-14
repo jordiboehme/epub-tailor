@@ -10,8 +10,10 @@
 
   let starting = $state(false);
 
-  const targetCount = $derived(books.selected.length || books.books.length);
-  const targetBooks = $derived(books.selected.length ? [...books.selected] : [...books.books]);
+  // The one definition of "these books" lives in the books store; both buttons
+  // and every label below read it, so they can never disagree.
+  const targetBooks = $derived(books.targets);
+  const targetCount = $derived(targetBooks.length);
   const epubCount = $derived(targetBooks.filter((b) => b.kind === "epub").length);
   const editedCount = $derived(targetBooks.filter((b) => edits.hasEdits(b.id)).length);
   const busy = $derived(jobs.active || starting);
@@ -26,19 +28,17 @@
       : "",
   );
 
-  function targets() {
-    return books.selected.length ? [...books.selected] : [...books.books];
-  }
-
   function check() {
-    const items = targets();
+    // A copy of the derived list, so a selection change mid-run cannot reshape
+    // the batch under the job store's feet.
+    const items = [...targetBooks];
     if (items.length === 0) return;
     jobs.runCheck(items, profiles.activeProfileSpecs());
   }
 
   async function tailor() {
     edits.flushPending();
-    const items = targets();
+    const items = [...targetBooks];
     if (items.length === 0) return;
     starting = true;
     try {
@@ -48,6 +48,7 @@
         quality: settings.quality,
         tables: settings.tables,
         dryRun: settings.dryRun,
+        splitLevel: settings.mdSplitLevel,
       };
       const planned = items.map((b) => ({ input: b.path, kind: b.kind, template: toTemplateBook(b) }));
       const plans = await resolvePlans(planned, {

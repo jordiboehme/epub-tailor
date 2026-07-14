@@ -1,5 +1,6 @@
 <script lang="ts">
   import { slide } from "svelte/transition";
+  import { books } from "../stores/books.svelte";
   import { settings } from "../stores/settings.svelte";
   import ProfilePicker from "./ProfilePicker.svelte";
   import OutputPicker from "./OutputPicker.svelte";
@@ -24,6 +25,14 @@
     { value: "image", label: "Image" },
     { value: "image-all", label: "Image (all)" },
   ];
+  const splitOptions = [
+    { value: "1", label: "Heading 1" },
+    { value: "2", label: "Heading 2" },
+  ];
+
+  // Markdown-only, so the control only shows up when a Markdown book is
+  // actually in the firing line.
+  const hasMarkdown = $derived(books.targets.some((b) => b.kind === "md"));
 
   function onInPlaceToggle(next: boolean) {
     if (next) confirmInPlace = true;
@@ -51,6 +60,22 @@
     <h3 class="mb-2 text-[11px] font-semibold uppercase tracking-wide text-zinc-400">Naming</h3>
     <TemplateField />
   </section>
+
+  {#if hasMarkdown}
+    <section transition:slide={{ duration: 150 }} class="border-b border-zinc-200 px-4 py-4 dark:border-zinc-800">
+      <h3 class="mb-2 text-[11px] font-semibold uppercase tracking-wide text-zinc-400">Markdown</h3>
+      <span class="mb-1 block text-[12px] text-zinc-500 dark:text-zinc-400">Split chapters at</span>
+      <Select
+        value={String(settings.mdSplitLevel)}
+        options={splitOptions}
+        ariaLabel="Split chapters at"
+        onchange={(v) => (settings.mdSplitLevel = Number(v))}
+      />
+      <p class="mt-1.5 text-[11px] leading-snug text-zinc-500 dark:text-zinc-400">
+        Every heading at this level starts a new chapter.
+      </p>
+    </section>
+  {/if}
 
   <section class="px-4 py-4">
     <h3 class="mb-2 text-[11px] font-semibold uppercase tracking-wide text-zinc-400">Options</h3>

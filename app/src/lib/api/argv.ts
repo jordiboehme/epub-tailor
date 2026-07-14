@@ -15,9 +15,18 @@ export interface RunOptions {
   tables: string | null;
   /** Analyze without writing anything. */
   dryRun: boolean;
+  /**
+   * Heading level a Markdown book splits chapters on (1 or 2). Markdown-only:
+   * `fit` has no such flag, and the CLI's own default is 1, so 1 (or omitted)
+   * emits nothing.
+   */
+  splitLevel?: number;
   /** Staged metadata to write into this book, if any. */
   edits?: StagedEdits;
 }
+
+/** The CLI's own `md --split-level` default, which we never spell out. */
+const DEFAULT_SPLIT_LEVEL = 1;
 
 /**
  * The per-field metadata flags for a set of staged edits, or `[]` when there is
@@ -47,14 +56,16 @@ export function metadataArgv(edits: StagedEdits | undefined): string[] {
 
 /**
  * The shared body of `fit` and `md`: both take the same flags in the same
- * order. `output === null` means an in-place run (`--lets-get-dangerous`);
- * any other value is written with `-o`.
+ * order, with `extra` (today: `md`'s `--split-level`) slotted in between the
+ * shared flags and the metadata ones. `output === null` means an in-place run
+ * (`--lets-get-dangerous`); any other value is written with `-o`.
  */
 function convertArgv(
   command: "fit" | "md",
   input: string,
   output: string | null,
   opts: RunOptions,
+  extra: string[] = [],
 ): string[] {
   const argv = [command, input, "--report", "json"];
 
@@ -71,6 +82,7 @@ function convertArgv(
     argv.push("--dry-run");
   }
 
+  argv.push(...extra);
   argv.push(...metadataArgv(opts.edits));
 
   if (output === null) {
@@ -88,12 +100,15 @@ export function fitArgv(input: string, output: string | null, opts: RunOptions):
 }
 
 /**
- * `epub-tailor md <input> ...`: same shape as {@link fitArgv}, different verb.
- * Markdown never runs in place, so `output` is expected to be a real path -
- * the planner never hands this a `null`.
+ * `epub-tailor md <input> ...`: same shape as {@link fitArgv}, different verb,
+ * plus `--split-level` when the user asked for anything other than the CLI's
+ * own default. Markdown never runs in place, so `output` is expected to be a
+ * real path - the planner never hands this a `null`.
  */
 export function mdArgv(input: string, output: string | null, opts: RunOptions): string[] {
-  return convertArgv("md", input, output, opts);
+  const level = opts.splitLevel ?? DEFAULT_SPLIT_LEVEL;
+  const extra = level === DEFAULT_SPLIT_LEVEL ? [] : ["--split-level", String(level)];
+  return convertArgv("md", input, output, opts, extra);
 }
 
 /** `epub-tailor check <input> --report json` plus one `--profile` pair per spec. */

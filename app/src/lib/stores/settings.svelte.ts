@@ -11,6 +11,14 @@ import { Store } from "@tauri-apps/plugin-store";
 const STORE_FILE = "settings.json";
 const AUTOSAVE_DEBOUNCE_MS = 300;
 
+/** A window's last size and position, in physical pixels (see api/window.ts). */
+export interface WindowGeometry {
+  width: number;
+  height: number;
+  x: number;
+  y: number;
+}
+
 class SettingsStore {
   // -- persisted --------------------------------------------------------------
   /** Selected built-in profile name. */
@@ -25,10 +33,14 @@ class SettingsStore {
   quality = $state<string | null>(null);
   /** Table handling override, or `null` for the profile default. */
   tables = $state<string | null>(null);
+  /** Heading level a Markdown book splits chapters on: 1 or 2 (the CLI's default is 1). */
+  mdSplitLevel = $state(1);
   /** Walk subfolders when a dropped folder is expanded. */
   recursive = $state(true);
   /** How many conversions run at once. */
   parallelism = $state(3);
+  /** Where the window was, and how big, when it was last moved or resized. */
+  windowGeometry = $state<WindowGeometry | null>(null);
 
   // -- session-only (never persisted) -----------------------------------------
   /** Analyze without writing (Preview only). Always starts off. */
@@ -50,8 +62,10 @@ class SettingsStore {
     this.filenameTemplate = (await store.get<string>("filenameTemplate")) ?? this.filenameTemplate;
     this.quality = (await store.get<string | null>("quality")) ?? this.quality;
     this.tables = (await store.get<string | null>("tables")) ?? this.tables;
+    this.mdSplitLevel = (await store.get<number>("mdSplitLevel")) ?? this.mdSplitLevel;
     this.recursive = (await store.get<boolean>("recursive")) ?? this.recursive;
     this.parallelism = (await store.get<number>("parallelism")) ?? this.parallelism;
+    this.windowGeometry = (await store.get<WindowGeometry>("windowGeometry")) ?? null;
     this.#store = store;
     this.ready = true;
 
@@ -65,8 +79,10 @@ class SettingsStore {
       $effect(() => void store.set("filenameTemplate", this.filenameTemplate));
       $effect(() => void store.set("quality", this.quality));
       $effect(() => void store.set("tables", this.tables));
+      $effect(() => void store.set("mdSplitLevel", this.mdSplitLevel));
       $effect(() => void store.set("recursive", this.recursive));
       $effect(() => void store.set("parallelism", this.parallelism));
+      $effect(() => void store.set("windowGeometry", $state.snapshot(this.windowGeometry)));
     });
   }
 }

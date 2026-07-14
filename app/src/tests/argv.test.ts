@@ -93,6 +93,49 @@ describe("mdArgv", () => {
       "/out.epub",
     ]);
   });
+
+  it("omits --split-level at the CLI default of 1", () => {
+    expect(mdArgv("/in.md", "/out.epub", opts({ splitLevel: 1 }))).not.toContain("--split-level");
+  });
+
+  it("emits --split-level 2 after the shared flags and before the output", () => {
+    expect(
+      mdArgv("/in.md", "/out.epub", {
+        profiles: ["epub"],
+        quality: "high",
+        tables: null,
+        dryRun: true,
+        splitLevel: 2,
+      }),
+    ).toEqual([
+      "md",
+      "/in.md",
+      "--report",
+      "json",
+      "--profile",
+      "epub",
+      "--quality",
+      "high",
+      "--dry-run",
+      "--split-level",
+      "2",
+      "-o",
+      "/out.epub",
+    ]);
+  });
+
+  it("keeps --split-level ahead of the metadata flags", () => {
+    const argv = mdArgv("/in.md", "/out.epub", opts({ splitLevel: 2, edits: { title: "Dune" } }));
+    expect(argv).toContain("--split-level");
+    expect(argv).toContain("--title");
+    expect(argv.indexOf("--split-level")).toBeLessThan(argv.indexOf("--title"));
+  });
+});
+
+describe("fitArgv and split level", () => {
+  it("never emits --split-level: it is a Markdown-only flag", () => {
+    expect(fitArgv("/in.epub", "/out.epub", opts({ splitLevel: 2 }))).not.toContain("--split-level");
+  });
 });
 
 describe("checkArgv", () => {

@@ -40,6 +40,12 @@ export interface Book {
   meta?: BookMeta;
   coverPath?: string;
   ingest: "pending" | "done" | "failed";
+  /**
+   * Why the ingestion failed, kept on the book rather than looked up from its
+   * job: ingestion jobs are pruned once they are done, and a card that says
+   * "could not read" has to be able to say *why* for as long as it says it.
+   */
+  ingestError?: { friendly: string; code: string; stderr: string[] };
   result?: PerBookResult;
 }
 
@@ -71,6 +77,14 @@ class BooksStore {
   #anchor: string | null = null;
 
   selected = $derived(this.books.filter((b) => this.selectedIds.has(b.id)));
+
+  /**
+   * What an action acts on: the selection, or - when nothing is selected -
+   * every book on the workbench. One definition, because the ActionBar's
+   * buttons and the Inspector's options have to agree on what "these books"
+   * means down to the last card.
+   */
+  targets = $derived(this.selected.length > 0 ? this.selected : this.books);
 
   /** Expand and add paths (files or folders), deduping against what is already here. */
   async addPaths(paths: string[]): Promise<void> {
