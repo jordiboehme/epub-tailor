@@ -98,7 +98,8 @@ pub fn drain_pending_opens(state: State<PendingOpens>) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::is_candidate_arg;
+    use super::{filter_existing_candidates, is_candidate_arg, resolve_argv};
+    use std::path::PathBuf;
 
     #[test]
     fn accepts_epub_and_md_case_insensitively() {
@@ -124,5 +125,61 @@ mod tests {
         assert!(!is_candidate_arg("archive.zip"));
         assert!(!is_candidate_arg("noext"));
         assert!(!is_candidate_arg(""));
+    }
+
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "epub-tailor-app-open-files-{name}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create scratch dir");
+        dir
+    }
+
+    fn touch(path: &std::path::Path) {
+        std::fs::write(path, b"hello").expect("write file");
+    }
+
+    #[test]
+    fn filter_existing_candidates_drops_qualifying_paths_that_do_not_exist() {
+        let dir = scratch("exists");
+        let here = dir.join("here.epub");
+        touch(&here);
+        let gone = dir.join("gone.epub").display().to_string();
+
+        let result = filter_existing_candidates(&[here.display().to_string(), gone]);
+        assert_eq!(result, vec![here.display().to_string()]);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn resolve_argv_resolves_relative_paths_against_cwd_and_drops_argv0() {
+        let dir = scratch("argv");
+        touch(&dir.join("book.epub"));
+
+        let argv = vec![
+            "/usr/bin/epub-tailor-app".to_string(), // argv[0]: no qualifying extension
+            "book.epub".to_string(),                // relative: resolved against cwd
+            "--flag".to_string(),                   // rejected outright
+            "missing.epub".to_string(),             // qualifies but does not exist
+        ];
+        let result = resolve_argv(&argv, &dir.display().to_string());
+        assert_eq!(result, vec![dir.join("book.epub").display().to_string()]);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn resolve_argv_passes_through_an_existing_absolute_path() {
+        let dir = scratch("argv-abs");
+        let book = dir.join("book.md");
+        touch(&book);
+
+        let result = resolve_argv(&[book.display().to_string()], "/some/other/cwd");
+        assert_eq!(result, vec![book.display().to_string()]);
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 }
