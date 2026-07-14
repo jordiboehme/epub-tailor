@@ -26,6 +26,16 @@ EPUBs accumulate grime. Vendors leave marker files and watermark blocks in every
 
 \* Unless you pass `--lets-get-dangerous`, which replaces the original in place - and now works on folders and several files too, each book staged in a temp file and renamed at the end, so even a failed run cannot eat your book. But you did ask for it by name.
 
+## TL;DR
+
+You bought an Xteink X4, a lovely little slab of e-ink. You copied your favorite EPUB onto it and opened something else entirely: the fonts are gone, every numbered list is bullets and the diagram in chapter 3 is missing. This fixes it:
+
+```sh
+epub-tailor fit my-book.epub --profile x4
+```
+
+Out comes `my-book.x4.epub`, rewritten into exactly what the device can render, ready to copy over. Your original file is never touched.
+
 ## What it does
 
 **Always (the repair core):**
