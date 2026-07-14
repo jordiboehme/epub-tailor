@@ -1,0 +1,29 @@
+[package]
+name = "epub-tailor-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Desktop app that drives the epub-tailor CLI to fit EPUBs to e-readers"
+
+# The lib target is named distinctly so the app's binary (main.rs) and library
+# (lib.rs) targets do not clash. main.rs is a thin wrapper that calls
+# epub_tailor_app_lib::run(); mobile builds compile the crate as a library.
+[lib]
+name = "epub_tailor_app_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# `protocol-asset` is required because tauri.conf.json enables the asset
+# protocol (app.security.assetProtocol) for serving cached cover images.
+tauri = { version = "2", features = ["protocol-asset"] }
+tauri-plugin-shell = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-store = "2"
+tauri-plugin-process = "2"
+tauri-plugin-opener = "2"
+serde = { workspace = true }
+serde_json = { workspace = true }

@@ -41,6 +41,43 @@ ignore = [
     # advisory, no vulnerability, no safe upgrade until resvg itself moves to
     # harfrust. Flagged for review rather than added silently.
     "RUSTSEC-2026-0206",
+
+    # --- Tauri desktop GUI tree (app/src-tauri) ---
+    # Everything below reaches us only through the Tauri v2 stack that powers the
+    # desktop app. All are unmaintained-only advisories: no vulnerability, and no
+    # safe upgrade until Tauri itself moves off these crates. Reviewed and added
+    # one RUSTSEC ID at a time, no wildcards.
+    #
+    # The gtk-rs GTK3 bindings (atk, gdk, gtk and their -sys/-macros crates) are
+    # the Linux webview backend, pulled in via tauri -> tauri-runtime-wry and
+    # muda. gtk-rs dropped GTK3 for GTK4, but Tauri v2 still targets GTK3 on
+    # Linux, so there is no upgrade path from our side. macOS and Windows do not
+    # use them at runtime; they are in the lockfile only because cargo deny scans
+    # every target.
+    "RUSTSEC-2024-0411", # gdkwayland-sys
+    "RUSTSEC-2024-0412", # gdk
+    "RUSTSEC-2024-0413", # atk
+    "RUSTSEC-2024-0414", # gdkx11-sys
+    "RUSTSEC-2024-0415", # gtk
+    "RUSTSEC-2024-0416", # atk-sys
+    "RUSTSEC-2024-0417", # gdkx11
+    "RUSTSEC-2024-0418", # gdk-sys
+    "RUSTSEC-2024-0419", # gtk3-macros
+    "RUSTSEC-2024-0420", # gtk-sys
+    # proc-macro-error is unmaintained (superseded by proc-macro-error2). It
+    # reaches us only through the same GTK tree: glib-macros -> glib -> atk ->
+    # gtk -> muda -> tauri. Unmaintained-only, no vulnerability, no upgrade until
+    # glib-macros moves off it.
+    "RUSTSEC-2024-0370",
+    # The rust-unic Unicode crates are all unmaintained (the whole
+    # open-i18n/rust-unic project is retired). They reach us through
+    # tauri-utils -> urlpattern -> unic-ucd-ident. Unmaintained-only, no
+    # vulnerability, no safe upgrade until urlpattern drops rust-unic.
+    "RUSTSEC-2025-0075", # unic-char-range
+    "RUSTSEC-2025-0080", # unic-common
+    "RUSTSEC-2025-0081", # unic-char-property
+    "RUSTSEC-2025-0098", # unic-ucd-version
+    "RUSTSEC-2025-0100", # unic-ucd-ident
 ]
 
 [bans]

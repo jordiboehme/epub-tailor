@@ -15,3 +15,10 @@ AGENTS.md
 /*.tar.gz
 /*.zip
 /SHA256SUMS
+
+# desktop app (app/)
+app/node_modules/
+app/dist/
+app/src-tauri/binaries/*
+!app/src-tauri/binaries/.gitkeep
+app/src-tauri/gen/
