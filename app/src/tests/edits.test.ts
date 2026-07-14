@@ -3,6 +3,7 @@ import { mergeDocIntoEdits, mergeEditsIntoMeta } from "../lib/api/edits";
 import type { StagedEdits } from "../lib/api/edits";
 import type { BookMeta } from "../lib/api/meta";
 import type { MetadataDoc } from "../lib/api/contract";
+import { edits } from "../lib/stores/edits.svelte";
 
 const all = new Set([
   "title",
@@ -149,5 +150,46 @@ describe("mergeEditsIntoMeta", () => {
     expect(merged.seriesIndex).toBe("2");
     expect(merged.language).toBe("en");
     expect(merged.missing).toEqual(["title"]);
+  });
+});
+
+describe("EditsStore flush registry", () => {
+  // MetadataEditor debounces staging by ~200ms and registers its own
+  // flushPending as a callback here, so a Tailor/write-metadata click (or a
+  // selection change) can settle a still-debouncing keystroke instead of
+  // losing it. This exercises that registry in isolation from the timer.
+
+  it("runs a registered flush callback, landing a still-pending edit", () => {
+    edits.clear();
+    const bookId = "book-1";
+    // Stands in for MetadataEditor's flushPending(): applies the last typed
+    // value that a debounce timer has not committed yet.
+    edits.onFlush(() => edits.stage([bookId], { title: "Typed but not yet staged" }));
+
+    expect(edits.get(bookId)).toBeUndefined();
+    edits.flushPending();
+    expect(edits.get(bookId)?.title).toBe("Typed but not yet staged");
+  });
+
+  it("runs every registered callback, not just the first", () => {
+    edits.clear();
+    edits.onFlush(() => edits.stage(["a"], { title: "A" }));
+    edits.onFlush(() => edits.stage(["b"], { title: "B" }));
+
+    edits.flushPending();
+    expect(edits.get("a")?.title).toBe("A");
+    expect(edits.get("b")?.title).toBe("B");
+  });
+
+  it("stops calling a callback once it is unregistered", () => {
+    edits.clear();
+    let calls = 0;
+    const unregister = edits.onFlush(() => calls++);
+
+    edits.flushPending();
+    unregister();
+    edits.flushPending();
+
+    expect(calls).toBe(1);
   });
 });

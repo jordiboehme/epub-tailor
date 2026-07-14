@@ -33,6 +33,7 @@ function prune(edits: StagedEdits): StagedEdits | undefined {
 
 class EditsStore {
   #map = $state<Map<string, StagedEdits>>(new Map());
+  #flushers = new Set<() => void>();
 
   /** How many books have staged edits right now. */
   count = $derived(this.#map.size);
@@ -45,6 +46,26 @@ class EditsStore {
   /** True when this book has anything staged. */
   hasEdits(bookId: string): boolean {
     return this.#map.has(bookId);
+  }
+
+  /**
+   * Register a callback that commits any edit a UI still has sitting in a
+   * debounce timer - there is one metadata editor mounted at a time, but this
+   * stays a set instead of a single slot so it never has to assume that.
+   * Returns an unregister function for the caller's teardown.
+   */
+  onFlush(fn: () => void): () => void {
+    this.#flushers.add(fn);
+    return () => this.#flushers.delete(fn);
+  }
+
+  /**
+   * Run every registered flush callback. Call this before snapshotFor at
+   * each consuming action (Tailor, write metadata only) so a keystroke still
+   * inside its debounce window lands here instead of being silently dropped.
+   */
+  flushPending(): void {
+    for (const fn of this.#flushers) fn();
   }
 
   /**

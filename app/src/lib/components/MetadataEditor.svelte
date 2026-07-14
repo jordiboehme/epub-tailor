@@ -33,19 +33,43 @@
   let coverError = $state(false);
 
   // Debounced live staging in single-book mode, one timer per field so fast
-  // typing in one box never delays another.
-  const timers = new Map<string, ReturnType<typeof setTimeout>>();
+  // typing in one box never delays another. Each pending timer keeps its own
+  // apply function too, so flushPending() can settle it immediately instead
+  // of losing it - to a Tailor/write click that reads the edits store before
+  // the timer fires, or to the same field key being reused for a different
+  // book before its 200ms is up.
+  const timers = new Map<string, { timer: ReturnType<typeof setTimeout>; apply: () => void }>();
   function debounce(key: string, fn: () => void) {
     const prev = timers.get(key);
-    if (prev) clearTimeout(prev);
-    timers.set(
-      key,
-      setTimeout(() => {
+    if (prev) clearTimeout(prev.timer);
+    timers.set(key, {
+      apply: fn,
+      timer: setTimeout(() => {
         timers.delete(key);
         fn();
       }, 200),
-    );
+    });
   }
+
+  /** Run and clear every pending debounced stage right now, in field order. */
+  function flushPending(): void {
+    for (const { timer, apply } of timers.values()) {
+      clearTimeout(timer);
+      apply();
+    }
+    timers.clear();
+  }
+
+  // Let Tailor (in ActionBar) and "write metadata only" (below) settle a
+  // pending keystroke before either reads a snapshot of the edits store. Also
+  // flush on every selection change, so a pending edit for the book being
+  // left never gets cancelled by the same field key being reused on the book
+  // being switched to.
+  $effect(() => edits.onFlush(flushPending));
+  $effect(() => {
+    void ids;
+    flushPending();
+  });
 
   function parseLines(value: string): string[] {
     return value.split("\n").map((line) => line.trim()).filter(Boolean);
@@ -180,6 +204,7 @@
   const canWrite = $derived(epubEditable.length > 0 && !writing && !jobs.active);
 
   async function writeMetadataOnly() {
+    edits.flushPending();
     const items = epubEditable;
     if (items.length === 0) return;
     writing = true;

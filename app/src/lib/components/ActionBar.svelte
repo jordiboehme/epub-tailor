@@ -37,6 +37,7 @@
   }
 
   async function tailor() {
+    edits.flushPending();
     const items = targets();
     if (items.length === 0) return;
     starting = true;
