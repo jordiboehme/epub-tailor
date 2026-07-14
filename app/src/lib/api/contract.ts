@@ -277,3 +277,29 @@ export function parseReport<T>(stdout: string, kind: string): T | CliFailure {
 
   return parsed as T;
 }
+
+/**
+ * Read the *bare* `MetadataDoc` that `metadata fetch --report json` prints.
+ *
+ * Unlike every other `--report json` command, `fetch` emits the document
+ * unwrapped - no `{schema, ...}` envelope - because its whole point is to be
+ * what `fit --metadata -` consumes. So `parseReport` (which asserts
+ * `schema === 1`) would throw on it. This is the minimal, envelope-free reader:
+ * parse the JSON, accept any object as a document, refuse anything that is not
+ * one. The caller decides success from the process exit code first (a failed
+ * fetch prints to stderr and exits non-zero, it does not print a doc), so there
+ * is no error branch to discriminate here.
+ */
+export function parseFetchedDoc(stdout: string): MetadataDoc {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stdout);
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    throw new ContractError(`metadata fetch: could not parse output as JSON (${reason})`);
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new ContractError("metadata fetch: output was not a JSON object");
+  }
+  return parsed as MetadataDoc;
+}

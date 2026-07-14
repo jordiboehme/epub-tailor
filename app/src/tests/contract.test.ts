@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   ContractError,
   parseReport,
+  parseFetchedDoc,
   isCliFailure,
 } from "../lib/api/contract";
 import type {
@@ -355,5 +356,45 @@ describe("parseReport", () => {
     expect(() => parseReport<FitReport>("not json", "fit")).toThrow(
       ContractError,
     );
+  });
+});
+
+// `metadata fetch --report json` prints the document *unwrapped* - no schema
+// envelope - because it is exactly what `fit --metadata -` consumes. So
+// parseReport (which asserts schema === 1) would throw on it; parseFetchedDoc
+// exists precisely to read that bare shape.
+const FETCH_DOC_JSON = `{
+  "title": "The Fellowship of the Ring",
+  "authors": ["J.R.R. Tolkien"],
+  "publisher": "Allen & Unwin",
+  "date": "1954",
+  "subjects": ["Fantasy"],
+  "cover": "/cache/fetched-openlibrary-OL262758W.img"
+}`;
+
+describe("parseFetchedDoc", () => {
+  it("reads a bare, schema-less MetadataDoc", () => {
+    const doc = parseFetchedDoc(FETCH_DOC_JSON);
+    expect(doc.title).toBe("The Fellowship of the Ring");
+    expect(doc.authors).toEqual(["J.R.R. Tolkien"]);
+    expect(doc.publisher).toBe("Allen & Unwin");
+    expect(doc.cover).toBe("/cache/fetched-openlibrary-OL262758W.img");
+  });
+
+  it("is needed because parseReport throws on the same bare payload", () => {
+    expect(() => parseReport(FETCH_DOC_JSON, "metadata fetch")).toThrow(ContractError);
+  });
+
+  it("accepts an empty document (a record with nothing to add)", () => {
+    expect(parseFetchedDoc("{}")).toEqual({});
+  });
+
+  it("throws a ContractError on unparsable JSON", () => {
+    expect(() => parseFetchedDoc("not json")).toThrow(ContractError);
+  });
+
+  it("throws a ContractError when the payload is not a JSON object", () => {
+    expect(() => parseFetchedDoc("[1, 2, 3]")).toThrow(ContractError);
+    expect(() => parseFetchedDoc("42")).toThrow(ContractError);
   });
 });
