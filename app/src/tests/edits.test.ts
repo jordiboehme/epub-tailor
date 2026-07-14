@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { mergeDocIntoEdits, mergeEditsIntoMeta } from "../lib/api/edits";
+import { mergeDocIntoEdits, mergeEditsIntoMeta, countEdits, hasAnyEdit } from "../lib/api/edits";
 import type { StagedEdits } from "../lib/api/edits";
 import type { BookMeta } from "../lib/api/meta";
 import type { MetadataDoc } from "../lib/api/contract";
@@ -109,6 +109,23 @@ describe("mergeDocIntoEdits", () => {
   });
 });
 
+describe("countEdits", () => {
+  it("counts values and clears alike, and coverPath", () => {
+    expect(countEdits({})).toBe(0);
+    expect(countEdits({ title: "T", series: null, coverPath: "/c.img" })).toBe(3);
+  });
+
+  it("ignores blank strings and empty lists", () => {
+    expect(countEdits({ title: "  ", authors: [] })).toBe(0);
+  });
+});
+
+describe("hasAnyEdit with clears", () => {
+  it("a clears-only edit still counts", () => {
+    expect(hasAnyEdit({ subjects: null })).toBe(true);
+  });
+});
+
 describe("mergeEditsIntoMeta", () => {
   const base: BookMeta = {
     title: "Old Title",
@@ -150,6 +167,45 @@ describe("mergeEditsIntoMeta", () => {
     expect(merged.seriesIndex).toBe("2");
     expect(merged.language).toBe("en");
     expect(merged.missing).toEqual(["title"]);
+  });
+});
+
+describe("mergeEditsIntoMeta with clears", () => {
+  const base: BookMeta = {
+    title: "Dune Messiah",
+    authors: ["Frank Herbert"],
+    series: "Dune",
+    seriesIndex: "2",
+    publisher: "Putnam",
+    subjects: ["SF"],
+    date: "1969",
+    missing: ["description"],
+  };
+
+  it("removes a cleared field and marks it missing again", () => {
+    const merged = mergeEditsIntoMeta(base, { publisher: null });
+    expect(merged.publisher).toBeUndefined();
+    expect(merged.missing).toContain("publisher");
+    expect(merged.missing).toContain("description");
+  });
+
+  it("a cleared series takes its index with it", () => {
+    const merged = mergeEditsIntoMeta(base, { series: null });
+    expect(merged.series).toBeUndefined();
+    expect(merged.seriesIndex).toBeUndefined();
+    expect(merged.missing).toContain("series");
+  });
+
+  it("cleared lists become empty, not undefined", () => {
+    const merged = mergeEditsIntoMeta(base, { authors: null, subjects: null });
+    expect(merged.authors).toEqual([]);
+    expect(merged.subjects).toEqual([]);
+  });
+
+  it("values still win and still clear the missing list", () => {
+    const merged = mergeEditsIntoMeta(base, { description: "A blurb." });
+    expect(merged.description).toBe("A blurb.");
+    expect(merged.missing).not.toContain("description");
   });
 });
 

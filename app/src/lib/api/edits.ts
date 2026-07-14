@@ -9,23 +9,38 @@ import type { BookMeta } from "./meta";
 import { creatorNames, stringList } from "./meta";
 
 /**
- * One book's pending metadata changes, waiting to be written on the next Tailor
- * run (or by "Write metadata only"). Every field is optional: an absent field
- * means "leave the book's value alone", a present one means "write this".
+ * One book's pending metadata changes, waiting to be written on the next
+ * Tailor run (or by "Write metadata only"). Every field is optional: an
+ * absent field means "leave the book's value alone", a present one means
+ * "write this" - and on the clearable fields, `null` means "remove this from
+ * the book" (the CLI's `--clear`). Title, language, isbn and cover can never
+ * be null: a book must keep a title and a language, identifiers are only
+ * ever added, and a cover is only ever replaced.
  */
 export interface StagedEdits {
   title?: string;
-  authors?: string[];
-  series?: string;
-  seriesIndex?: string;
-  publisher?: string;
-  description?: string;
+  authors?: string[] | null;
+  series?: string | null;
+  seriesIndex?: string | null;
+  publisher?: string | null;
+  description?: string | null;
   language?: string;
-  date?: string;
+  date?: string | null;
   isbn?: string;
-  subjects?: string[];
+  subjects?: string[] | null;
   coverPath?: string;
 }
+
+/** The fields a staged `null` may clear - the CLI's `--clear` vocabulary. */
+export const CLEARABLE_FIELDS: ReadonlySet<keyof StagedEdits> = new Set<keyof StagedEdits>([
+  "authors",
+  "series",
+  "seriesIndex",
+  "publisher",
+  "description",
+  "date",
+  "subjects",
+]);
 
 /**
  * The checkbox/field vocabulary shared by the editor, the search-accept step and
@@ -45,21 +60,21 @@ export type EditField =
   | "subjects"
   | "cover";
 
+/** How many fields these edits stage - values and clears both count. */
+export function countEdits(edits: StagedEdits): number {
+  let count = 0;
+  for (const key of Object.keys(edits) as (keyof StagedEdits)[]) {
+    const value = edits[key];
+    if (value === null) count += 1;
+    else if (Array.isArray(value)) count += value.length > 0 ? 1 : 0;
+    else if (typeof value === "string" && value.trim()) count += 1;
+  }
+  return count;
+}
+
 /** True when the edits carry at least one thing worth writing. */
 export function hasAnyEdit(edits: StagedEdits): boolean {
-  return Boolean(
-    edits.title ||
-      edits.authors?.length ||
-      edits.series ||
-      edits.seriesIndex ||
-      edits.publisher ||
-      edits.description ||
-      edits.language ||
-      edits.date ||
-      edits.isbn ||
-      edits.subjects?.length ||
-      edits.coverPath,
-  );
+  return countEdits(edits) > 0;
 }
 
 function nonEmpty(value: string | undefined): value is string {
@@ -117,27 +132,38 @@ const CLEARS_MISSING: Partial<Record<keyof StagedEdits, string>> = {
 
 /**
  * Fold written edits into a book's compact `BookMeta`, for refreshing a card
- * after an in-place write without re-ingesting. Fields the edits set win; the
- * `missing` list loses whatever those fields just filled.
+ * after an in-place write without re-ingesting. Fields the edits set win; a
+ * `null` removes the field. The `missing` list loses what a value just
+ * filled and gains what a clear just removed. A cleared series takes its
+ * index with it: the book model nests the index under the series.
  */
 export function mergeEditsIntoMeta(base: BookMeta | undefined, edits: StagedEdits): BookMeta {
   const meta: BookMeta = base ?? { authors: [], subjects: [], missing: [] };
   const filled = new Set<string>();
+  const cleared = new Set<string>();
   for (const key of Object.keys(edits) as (keyof StagedEdits)[]) {
     const name = CLEARS_MISSING[key];
-    if (name) filled.add(name);
+    if (!name) continue;
+    if (edits[key] === null) cleared.add(name);
+    else filled.add(name);
   }
+  const pick = (edit: string | null | undefined, own: string | undefined): string | undefined =>
+    edit === null ? undefined : (edit ?? own);
+  const seriesGone = edits.series === null;
   return {
     title: edits.title ?? meta.title,
-    authors: edits.authors ?? meta.authors,
-    series: edits.series ?? meta.series,
-    seriesIndex: edits.seriesIndex ?? meta.seriesIndex,
-    publisher: edits.publisher ?? meta.publisher,
-    description: edits.description ?? meta.description,
+    authors: edits.authors === null ? [] : (edits.authors ?? meta.authors),
+    series: pick(edits.series, meta.series),
+    seriesIndex: seriesGone ? undefined : pick(edits.seriesIndex, meta.seriesIndex),
+    publisher: pick(edits.publisher, meta.publisher),
+    description: pick(edits.description, meta.description),
     language: edits.language ?? meta.language,
-    date: edits.date ?? meta.date,
+    date: pick(edits.date, meta.date),
     isbn: edits.isbn ?? meta.isbn,
-    subjects: edits.subjects ?? meta.subjects,
-    missing: meta.missing.filter((name) => !filled.has(name)),
+    subjects: edits.subjects === null ? [] : (edits.subjects ?? meta.subjects),
+    missing: [
+      ...meta.missing.filter((name) => !filled.has(name) && !cleared.has(name)),
+      ...[...cleared].filter((name) => !meta.missing.includes(name)),
+    ],
   };
 }
