@@ -1,0 +1,74 @@
+// The user's persistent preferences, backed by `@tauri-apps/plugin-store`
+// (`settings.json` in the app data dir). Loaded once at startup; changes to the
+// persisted fields are written back on a debounce by the store's own autoSave.
+//
+// Two fields are deliberately session-only - `dryRun` and `inPlace` always
+// start off, because "preview" and "replace originals" are decisions you make
+// per session, not defaults you want silently remembered into the next launch.
+
+import { Store } from "@tauri-apps/plugin-store";
+
+const STORE_FILE = "settings.json";
+const AUTOSAVE_DEBOUNCE_MS = 300;
+
+class SettingsStore {
+  // -- persisted --------------------------------------------------------------
+  /** Selected built-in profile name. */
+  profile = $state("epub");
+  /** Paths to user profile JSON layers, composed on top of the built-in. */
+  userProfilePaths = $state<string[]>([]);
+  /** Destination folder, or `null` to write alongside each original. */
+  outputDir = $state<string | null>(null);
+  /** Filename template; `{original}` keeps each book's own stem. */
+  filenameTemplate = $state("{original}");
+  /** JPEG quality override (`low`/`std`/`high` or a number), or `null` for the profile default. */
+  quality = $state<string | null>(null);
+  /** Table handling override, or `null` for the profile default. */
+  tables = $state<string | null>(null);
+  /** Walk subfolders when a dropped folder is expanded. */
+  recursive = $state(true);
+  /** How many conversions run at once. */
+  parallelism = $state(3);
+
+  // -- session-only (never persisted) -----------------------------------------
+  /** Analyze without writing (Preview only). Always starts off. */
+  dryRun = $state(false);
+  /** Rewrite originals in place. Always starts off. */
+  inPlace = $state(false);
+
+  /** True once `load()` has read the persisted values. */
+  ready = $state(false);
+
+  #store: Store | null = null;
+
+  /** Read persisted settings, then wire up write-back for future changes. */
+  async load(): Promise<void> {
+    const store = await Store.load(STORE_FILE, { defaults: {}, autoSave: AUTOSAVE_DEBOUNCE_MS });
+    this.profile = (await store.get<string>("profile")) ?? this.profile;
+    this.userProfilePaths = (await store.get<string[]>("userProfilePaths")) ?? this.userProfilePaths;
+    this.outputDir = (await store.get<string | null>("outputDir")) ?? this.outputDir;
+    this.filenameTemplate = (await store.get<string>("filenameTemplate")) ?? this.filenameTemplate;
+    this.quality = (await store.get<string | null>("quality")) ?? this.quality;
+    this.tables = (await store.get<string | null>("tables")) ?? this.tables;
+    this.recursive = (await store.get<boolean>("recursive")) ?? this.recursive;
+    this.parallelism = (await store.get<number>("parallelism")) ?? this.parallelism;
+    this.#store = store;
+    this.ready = true;
+
+    // One effect per persisted field: each writes only its own key when it
+    // changes, and the store debounces the actual disk write. Set up after the
+    // reads above so the initial values are not clobbered before they load.
+    $effect.root(() => {
+      $effect(() => void store.set("profile", this.profile));
+      $effect(() => void store.set("userProfilePaths", $state.snapshot(this.userProfilePaths)));
+      $effect(() => void store.set("outputDir", this.outputDir));
+      $effect(() => void store.set("filenameTemplate", this.filenameTemplate));
+      $effect(() => void store.set("quality", this.quality));
+      $effect(() => void store.set("tables", this.tables));
+      $effect(() => void store.set("recursive", this.recursive));
+      $effect(() => void store.set("parallelism", this.parallelism));
+    });
+  }
+}
+
+export const settings = new SettingsStore();
