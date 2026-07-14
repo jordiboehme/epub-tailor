@@ -299,6 +299,7 @@ mod tests {
         let dir = scratch("flat");
         touch(&dir.join("a.epub"));
         touch(&dir.join("B.MD"));
+        touch(&dir.join("SHOUTY.EPUB"));
         touch(&dir.join("notes.txt"));
 
         let entries = expand_inputs(vec![dir.display().to_string()], false).expect("expand_inputs");
@@ -320,6 +321,7 @@ mod tests {
             kinds,
             vec![
                 ("B.MD".to_string(), "md".to_string()),
+                ("SHOUTY.EPUB".to_string(), "epub".to_string()),
                 ("a.epub".to_string(), "epub".to_string()),
             ]
         );
