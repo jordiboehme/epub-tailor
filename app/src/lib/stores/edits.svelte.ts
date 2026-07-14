@@ -4,9 +4,10 @@
 // this store is only the reactive Map plus a small batch-friendly API.
 //
 // Reactivity idiom follows the books store's Sets: mutate a fresh Map and
-// reassign, so `$derived` and every reader re-run. A field set to blank is
-// pruned rather than stored, and a book with no fields left is dropped, so
-// `hasEdits`/`count` stay honest and argv never emits an empty flag.
+// reassign, so `$derived` and every reader re-run. A blank or undefined field
+// is pruned rather than stored (a `null` - a staged clear - is kept), and a
+// book with no fields left is dropped, so `hasEdits`/`count` stay honest and
+// argv never emits an empty flag.
 
 import type { MetadataDoc } from "../api/contract";
 import { hasAnyEdit, mergeDocIntoEdits } from "../api/edits";
@@ -14,19 +15,30 @@ import type { StagedEdits } from "../api/edits";
 
 export type { StagedEdits };
 
-/** Drop keys whose value is blank or an empty list; return undefined if nothing is left. */
+/**
+ * Drop keys whose value is blank, an empty list, or explicitly undefined (a
+ * patch saying "unstage this"); keep `null` - a staged clear - on the fields
+ * that may carry one. Returns undefined when nothing is left.
+ */
 function prune(edits: StagedEdits): StagedEdits | undefined {
   const next: StagedEdits = {};
   if (edits.title?.trim()) next.title = edits.title.trim();
-  if (edits.authors && edits.authors.length > 0) next.authors = edits.authors;
-  if (edits.series?.trim()) next.series = edits.series.trim();
-  if (edits.seriesIndex?.trim()) next.seriesIndex = edits.seriesIndex.trim();
-  if (edits.publisher?.trim()) next.publisher = edits.publisher.trim();
-  if (edits.description?.trim()) next.description = edits.description.trim();
+  if (edits.authors === null) next.authors = null;
+  else if (edits.authors && edits.authors.length > 0) next.authors = edits.authors;
+  if (edits.series === null) next.series = null;
+  else if (edits.series?.trim()) next.series = edits.series.trim();
+  if (edits.seriesIndex === null) next.seriesIndex = null;
+  else if (edits.seriesIndex?.trim()) next.seriesIndex = edits.seriesIndex.trim();
+  if (edits.publisher === null) next.publisher = null;
+  else if (edits.publisher?.trim()) next.publisher = edits.publisher.trim();
+  if (edits.description === null) next.description = null;
+  else if (edits.description?.trim()) next.description = edits.description.trim();
   if (edits.language?.trim()) next.language = edits.language.trim();
-  if (edits.date?.trim()) next.date = edits.date.trim();
+  if (edits.date === null) next.date = null;
+  else if (edits.date?.trim()) next.date = edits.date.trim();
   if (edits.isbn?.trim()) next.isbn = edits.isbn.trim();
-  if (edits.subjects && edits.subjects.length > 0) next.subjects = edits.subjects;
+  if (edits.subjects === null) next.subjects = null;
+  else if (edits.subjects && edits.subjects.length > 0) next.subjects = edits.subjects;
   if (edits.coverPath) next.coverPath = edits.coverPath;
   return hasAnyEdit(next) ? next : undefined;
 }
@@ -77,9 +89,10 @@ class EditsStore {
   }
 
   /**
-   * Apply a field patch to one or many books at once (the batch series/author
-   * workflow). The patch merges over each book's existing edits; blank values
-   * prune their field, and a book left with nothing is dropped.
+   * Apply a field patch to one or many books at once (the batch workflow the
+   * editor drives). The patch merges over each book's existing edits. A
+   * `null` value stages a clear; a blank or explicitly-undefined value
+   * prunes its field; a book left with nothing is dropped.
    */
   stage(bookIds: string[], patch: Partial<StagedEdits>): void {
     const next = new Map(this.#map);

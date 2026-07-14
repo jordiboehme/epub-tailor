@@ -304,3 +304,41 @@ describe("EditsStore flush registry", () => {
     expect(calls).toBe(1);
   });
 });
+
+describe("edits store with clears", () => {
+  afterEach(() => edits.clear());
+
+  it("stages a clear and keeps it through merges", () => {
+    edits.stage(["a", "b"], { series: null });
+    expect(edits.get("a")).toEqual({ series: null });
+    expect(edits.hasEdits("b")).toBe(true);
+    edits.stage(["a"], { title: "New" });
+    expect(edits.get("a")).toEqual({ title: "New", series: null });
+  });
+
+  it("an explicitly-undefined patch value unstages the field across books", () => {
+    edits.stage(["a", "b"], { series: "Dune", title: "T" });
+    edits.stage(["a", "b"], { series: undefined });
+    expect(edits.get("a")).toEqual({ title: "T" });
+    expect(edits.get("b")).toEqual({ title: "T" });
+  });
+
+  it("unstaging the last field drops the book entirely", () => {
+    edits.stage(["a"], { series: null });
+    edits.stage(["a"], { series: undefined });
+    expect(edits.hasEdits("a")).toBe(false);
+  });
+
+  it("unstageApplied drops an applied clear but keeps a re-staged value", () => {
+    edits.stage(["a"], { series: null, publisher: null });
+    const applied = { series: null, publisher: null };
+    edits.stage(["a"], { publisher: "Re-typed" });
+    edits.unstageApplied("a", applied);
+    expect(edits.get("a")).toEqual({ publisher: "Re-typed" });
+  });
+
+  it("snapshotFor carries nulls through", () => {
+    edits.stage(["a"], { series: null });
+    expect(edits.snapshotFor(["a"])).toEqual({ a: { series: null } });
+  });
+});
