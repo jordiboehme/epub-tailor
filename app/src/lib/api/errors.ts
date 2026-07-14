@@ -28,7 +28,7 @@ const COPY: Record<string, string> = {
   "write-failed":
     "The output could not be written. Check that the destination folder exists and is not read-only.",
   "output-collision":
-    "A file already sits where this output would land. Choose a different destination, or turn on overwriting to replace it.",
+    "A file already sits where this output would land, so nothing was written and nothing was overwritten. Move that file, or pick a different destination or name, and try again.",
   metadata:
     "The metadata you supplied could not be read. Check the document or the fields you typed and try again.",
 };

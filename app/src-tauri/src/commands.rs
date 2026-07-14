@@ -1,8 +1,12 @@
-//! Tauri command handlers.
+//! Tauri command handlers: the few things the frontend cannot do for itself.
 //!
-//! Placeholder for now: the workbench commands (running the sidecar, editing
-//! metadata, fetching covers) arrive in the next task and get registered in
-//! `lib.rs` via `tauri::generate_handler!`.
+//! All of them are registered in `lib.rs` via `tauri::generate_handler!`, and
+//! they fall into three groups: expanding what was dropped or browsed in
+//! (`expand_inputs`), answering the filesystem questions the planner and the
+//! destination picker need answered (`paths_exist`, `list_removable_volumes`,
+//! `is_appimage`), and the cover cache (`ensure_covers_dir`, `cache_cover`) -
+//! the only place the app writes to disk itself, which is why the fs plugin is
+//! not installed at all.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -273,9 +277,13 @@ fn covers_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
         .join("covers"))
 }
 
-/// FNV-1a (32-bit) over `input` - the same small, dependency-free hash
-/// `covers.ts` uses for its own cache keys, so both sides name a cached file
-/// the same way.
+/// FNV-1a (32-bit) over `input`'s UTF-8 bytes - the same small, dependency-free
+/// hash `covers.ts` uses, but deliberately *not* an agreement between the two:
+/// this one keys the covers the user picks (`picked-<hash>.<ext>`) off a source
+/// path, that one keys the covers an ingest writes off `path|size|mtime`, and
+/// it hashes UTF-16 code units, so the two diverge on any non-ASCII input. The
+/// two filename namespaces are disjoint, which is what makes that harmless -
+/// neither side ever has to reproduce the other's key.
 fn fnv1a(input: &str) -> u32 {
     let mut hash: u32 = 0x811c_9dc5;
     for byte in input.as_bytes() {
@@ -602,9 +610,11 @@ mod tests {
     }
 
     #[test]
-    fn fnv1a_matches_the_reference_vector_covers_ts_hashes_against() {
-        // The canonical FNV-1a 32-bit test vector; covers.ts implements the
-        // same hash in TypeScript, and the two must agree on it.
+    fn fnv1a_matches_the_canonical_reference_vectors() {
+        // The canonical FNV-1a 32-bit vectors. What is being pinned is that
+        // this side is a real, stable FNV-1a - not that it agrees with the
+        // TypeScript one, which hashes UTF-16 code units of a different input
+        // into a different set of filenames (see the note on `fnv1a`).
         assert_eq!(super::fnv1a("a"), 0xe40c_292c);
         assert_eq!(super::fnv1a(""), 0x811c_9dc5);
     }
