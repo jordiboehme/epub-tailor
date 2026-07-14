@@ -1,9 +1,9 @@
 <script lang="ts">
-  // The Inspector's Metadata section. One selected book: fields prefilled from
-  // staged edits over the book's own, edits stage live with a per-field revert.
-  // Many selected: each field shows the shared value or "Mixed", and an
-  // "Apply to N" commits it to the whole selection. Plus the two escape hatches -
-  // "Find online" (single book) and "Write metadata only" (epub books with edits).
+  // The Inspector's Metadata section. Every field stages live to the whole
+  // selection - one book or many - after a short debounce; its checkbox is a
+  // pure reflection of what is staged, and unchecking it reverts the field.
+  // Plus the two escape hatches - "Find online" (single book) and "Write
+  // metadata only" (epub books with edits).
 
   import { open } from "@tauri-apps/plugin-dialog";
   import { cacheCover, coverUrl } from "../api/covers";
@@ -13,15 +13,13 @@
   import type { Book } from "../stores/books.svelte";
   import { edits } from "../stores/edits.svelte";
   import type { StagedEdits } from "../api/edits";
+  import { CLEARABLE_FIELDS } from "../api/edits";
   import { jobs } from "../stores/jobs.svelte";
   import { profiles } from "../stores/profiles.svelte";
   import { settings } from "../stores/settings.svelte";
   import MetadataField from "./MetadataField.svelte";
   import MetadataSearchDialog from "./MetadataSearchDialog.svelte";
   import Button from "./ui/Button.svelte";
-
-  type TextKey = "title" | "series" | "seriesIndex" | "publisher" | "language" | "date" | "isbn";
-  type ListKey = "authors" | "subjects";
 
   const selected = $derived(books.selected);
   const single = $derived(selected.length === 1 ? selected[0] : null);
@@ -77,105 +75,92 @@
     return value.split("\n").map((line) => line.trim()).filter(Boolean);
   }
 
-  function metaText(book: Book, key: TextKey): string {
-    return book.meta?.[key] ?? "";
-  }
-  function metaList(book: Book, key: ListKey): string[] {
-    return book.meta?.[key] ?? [];
+  type FieldKey =
+    | "title"
+    | "authors"
+    | "series"
+    | "seriesIndex"
+    | "publisher"
+    | "description"
+    | "language"
+    | "date"
+    | "isbn"
+    | "subjects";
+  const LIST_KEYS: ReadonlySet<FieldKey> = new Set<FieldKey>(["authors", "subjects"]);
+
+  /** The book's own value for a field, flattened to the textbox's shape. */
+  function bookText(book: Book, key: FieldKey): string {
+    const own = book.meta?.[key];
+    return Array.isArray(own) ? own.join("\n") : (own ?? "");
   }
 
-  // -- single-book field props ------------------------------------------------
-
-  function textProps(book: Book, key: TextKey) {
+  /** The staged entry for a field: undefined (none), null (a clear), or text. */
+  function stagedText(book: Book, key: FieldKey): string | null | undefined {
     const staged = edits.get(book.id)?.[key];
-    const bookValue = metaText(book, key);
+    if (staged === undefined || staged === null) return staged;
+    return Array.isArray(staged) ? staged.join("\n") : staged;
+  }
+
+  /** Drop a field's pending debounce, so an uncheck cannot be re-staged over. */
+  function cancel(key: string): void {
+    const prev = timers.get(key);
+    if (prev) {
+      clearTimeout(prev.timer);
+      timers.delete(key);
+    }
+  }
+
+  /**
+   * Stage what was typed to every selected book, after the debounce. The
+   * target ids are captured now, at input time, so a selection change before
+   * the timer fires can never stage onto the wrong books. A blank on a
+   * clearable field some selected book has a value for stages a clear
+   * (null); any other blank simply unstages.
+   */
+  function stageField(key: FieldKey, raw: string): void {
+    const targets = [...ids];
+    const anyOwn = selected.some((b) => bookText(b, key).trim().length > 0);
+    debounce(key, () => {
+      const empty = LIST_KEYS.has(key)
+        ? parseLines(raw).length === 0
+        : raw.trim().length === 0;
+      if (!empty) {
+        edits.stage(targets, { [key]: LIST_KEYS.has(key) ? parseLines(raw) : raw });
+      } else if (CLEARABLE_FIELDS.has(key) && anyOwn) {
+        edits.stage(targets, { [key]: null });
+      } else {
+        edits.stage(targets, { [key]: undefined });
+      }
+    });
+  }
+
+  function uncheck(key: FieldKey): void {
+    cancel(key);
+    edits.stage([...ids], { [key]: undefined });
+  }
+
+  /** Everything one MetadataField needs, derived from the whole selection. */
+  function fieldProps(key: FieldKey) {
+    const staged = selected.map((b) => stagedText(b, key));
+    const stagedCount = staged.filter((v) => v !== undefined).length;
+    const first = staged.find((v) => v !== undefined);
+    const agree = stagedCount === selected.length && staged.every((v) => v === first);
+    const check =
+      stagedCount === 0
+        ? ("unchecked" as const)
+        : agree
+          ? ("checked" as const)
+          : ("indeterminate" as const);
+
+    const shown = selected.map((b, i) => (staged[i] === undefined ? bookText(b, key) : staged[i]));
+    const same = shown.every((v) => v === shown[0]);
     return {
-      value: staged ?? bookValue,
-      bookValue,
-      dirty: staged !== undefined,
-      oninput: (v: string) => debounce(key, () => edits.stage([book.id], { [key]: v })),
-      onrevert: () => edits.unstage(book.id, key),
-    };
-  }
-
-  function listProps(book: Book, key: ListKey) {
-    const staged = edits.get(book.id)?.[key];
-    const bookValue = metaList(book, key).join("\n");
-    return {
-      multiline: true,
-      value: (staged ?? metaList(book, key)).join("\n"),
-      bookValue,
-      dirty: staged !== undefined,
-      oninput: (v: string) => debounce(key, () => edits.stage([book.id], { [key]: parseLines(v) })),
-      onrevert: () => edits.unstage(book.id, key),
-    };
-  }
-
-  // -- multi-book field props -------------------------------------------------
-
-  function commonText(key: TextKey): { value: string; mixed: boolean } {
-    const values = selected.map((b) => edits.get(b.id)?.[key] ?? metaText(b, key));
-    const first = values[0] ?? "";
-    const mixed = values.some((v) => v !== first);
-    return { value: mixed ? "" : first, mixed };
-  }
-
-  function commonList(key: ListKey): { value: string; mixed: boolean } {
-    const values = selected.map((b) => (edits.get(b.id)?.[key] ?? metaList(b, key)).join("\n"));
-    const first = values[0] ?? "";
-    const mixed = values.some((v) => v !== first);
-    return { value: mixed ? "" : first, mixed };
-  }
-
-  function multiText(key: TextKey) {
-    const { value, mixed } = commonText(key);
-    return {
-      multi: true,
-      value,
-      mixed,
-      applyCount: selected.length,
-      onapply: (v: string) => edits.stage(ids, { [key]: v }),
-    };
-  }
-
-  function multiList(key: ListKey) {
-    const { value, mixed } = commonList(key);
-    return {
-      multi: true,
-      multiline: true,
-      value,
-      mixed,
-      applyCount: selected.length,
-      onapply: (v: string) => edits.stage(ids, { [key]: parseLines(v) }),
-    };
-  }
-
-  // Description is a plain text field that happens to be multiline.
-  function descSingle(book: Book) {
-    const staged = edits.get(book.id)?.description;
-    const bookValue = book.meta?.description ?? "";
-    return {
-      multiline: true,
-      value: staged ?? bookValue,
-      bookValue,
-      dirty: staged !== undefined,
-      oninput: (v: string) =>
-        debounce("description", () => edits.stage([book.id], { description: v })),
-      onrevert: () => edits.unstage(book.id, "description"),
-    };
-  }
-
-  function descMulti() {
-    const values = selected.map((b) => edits.get(b.id)?.description ?? b.meta?.description ?? "");
-    const first = values[0] ?? "";
-    const mixed = values.some((v) => v !== first);
-    return {
-      multi: true,
-      multiline: true,
-      value: mixed ? "" : first,
-      mixed,
-      applyCount: selected.length,
-      onapply: (v: string) => edits.stage(ids, { description: v }),
+      check,
+      cleared: same && shown[0] === null,
+      mixed: !same,
+      value: same && typeof shown[0] === "string" ? shown[0] : "",
+      oninput: (raw: string) => stageField(key, raw),
+      onuncheck: () => uncheck(key),
     };
   }
 
@@ -267,73 +252,45 @@
   {#key single ? single.id : `multi:${ids.join(",")}`}
     {#if isMulti}
       <p class="mb-2.5 text-[11px] text-zinc-500 dark:text-zinc-400">
-        Editing {selected.length} books - set a field once, apply it to all.
+        Editing {selected.length} books - a change stages to all of them as you type.
       </p>
     {/if}
 
     <div class="flex flex-col gap-2.5">
-      <MetadataField
-        label="Title"
-        placeholder="Book title"
-        {...single ? textProps(single, "title") : multiText("title")}
-      />
-      <MetadataField
-        label="Authors"
-        placeholder="One per line"
-        {...single ? listProps(single, "authors") : multiList("authors")}
-      />
+      <MetadataField label="Title" placeholder="Book title" {...fieldProps("title")} />
+      <MetadataField label="Authors" placeholder="One per line" multiline {...fieldProps("authors")} />
 
       <div class="grid grid-cols-[1fr_5.5rem] gap-2">
-        <MetadataField
-          label="Series"
-          placeholder="Series name"
-          {...single ? textProps(single, "series") : multiText("series")}
-        />
-        <MetadataField
-          label="Index"
-          placeholder="#"
-          {...single ? textProps(single, "seriesIndex") : multiText("seriesIndex")}
-        />
+        <MetadataField label="Series" placeholder="Series name" {...fieldProps("series")} />
+        <MetadataField label="Index" placeholder="#" {...fieldProps("seriesIndex")} />
       </div>
 
-      <MetadataField
-        label="Publisher"
-        placeholder="Publisher"
-        {...single ? textProps(single, "publisher") : multiText("publisher")}
-      />
+      <MetadataField label="Publisher" placeholder="Publisher" {...fieldProps("publisher")} />
 
       <div class="grid grid-cols-2 gap-2">
-        <MetadataField
-          label="Language"
-          placeholder="en"
-          {...single ? textProps(single, "language") : multiText("language")}
-        />
-        <MetadataField
-          label="Date"
-          placeholder="1937"
-          {...single ? textProps(single, "date") : multiText("date")}
-        />
+        <MetadataField label="Language" placeholder="en" {...fieldProps("language")} />
+        <MetadataField label="Date" placeholder="1937" {...fieldProps("date")} />
       </div>
 
-      <MetadataField
-        label="ISBN"
-        placeholder="978..."
-        {...single ? textProps(single, "isbn") : multiText("isbn")}
-      />
-      <MetadataField
-        label="Subjects"
-        placeholder="One per line"
-        {...single ? listProps(single, "subjects") : multiList("subjects")}
-      />
-      <MetadataField
-        label="Description"
-        placeholder="Back-cover blurb"
-        {...single ? descSingle(single) : descMulti()}
-      />
+      <MetadataField label="ISBN" placeholder="978..." {...fieldProps("isbn")} />
+      <MetadataField label="Subjects" placeholder="One per line" multiline {...fieldProps("subjects")} />
+      <MetadataField label="Description" placeholder="Back-cover blurb" multiline {...fieldProps("description")} />
 
       {#if single}
         <div class="flex flex-col gap-1.5">
-          <span class="text-[11px] font-medium text-zinc-500 dark:text-zinc-400">Cover</span>
+          <label class="flex w-fit cursor-pointer items-center gap-1.5">
+            <input
+              type="checkbox"
+              checked={!!coverStaged}
+              onclick={(e) => {
+                e.preventDefault();
+                if (coverStaged && single) edits.unstage(single.id, "coverPath");
+              }}
+              title={coverStaged ? "Staged - uncheck to revert" : "Choose an image to stage it"}
+              class="h-3 w-3 rounded accent-indigo-600"
+            />
+            <span class="text-[11px] font-medium text-zinc-500 dark:text-zinc-400">Cover</span>
+          </label>
           <div class="flex items-start gap-2.5">
             <div
               class="h-20 w-14 shrink-0 overflow-hidden rounded-md border border-zinc-200 bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-800"
@@ -353,15 +310,6 @@
             </div>
             <div class="flex min-w-0 flex-col gap-1.5">
               <Button variant="secondary" size="sm" onclick={chooseCover}>Choose image...</Button>
-              {#if coverStaged}
-                <button
-                  type="button"
-                  onclick={() => single && edits.unstage(single.id, "coverPath")}
-                  class="text-left text-[10px] font-medium text-zinc-400 hover:text-indigo-500 dark:text-zinc-500 dark:hover:text-indigo-400"
-                >
-                  Revert cover
-                </button>
-              {/if}
             </div>
           </div>
           {#if coverFailed}

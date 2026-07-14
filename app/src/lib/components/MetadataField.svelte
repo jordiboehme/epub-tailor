@@ -1,49 +1,47 @@
 <script lang="ts">
   import { untrack } from "svelte";
-  // One metadata field, in two moods. Single-book: it shows the effective value
-  // (staged over the book's own), edits stage live through `oninput`, and a
-  // revert affordance appears once the field is dirty. Multi-book: it shows the
-  // shared value or a "Mixed" hint, edits stay local until "Apply to N" commits
-  // them to every selected book through `onapply`. The parent owns all staging;
-  // this component owns only the text box.
+  // One metadata field with an iTunes-style checkbox. The box is a pure
+  // reflection of the staged state: editing (or emptying) the field stages it
+  // through `oninput` and the box ticks itself; unchecking it unstages via
+  // `onuncheck`; clicking an unticked box only focuses the input - there is
+  // nothing to stage until something is typed. The parent owns all staging
+  // and debouncing; this component owns the text box and the box's optics.
 
   let {
     label,
     value = "",
-    bookValue = "",
     placeholder = "",
     multiline = false,
-    multi = false,
     mixed = false,
-    dirty = false,
-    applyCount = 0,
+    cleared = false,
+    check = "unchecked",
     oninput,
-    onapply,
-    onrevert,
+    onuncheck,
   }: {
     label: string;
     value?: string;
-    bookValue?: string;
     placeholder?: string;
     multiline?: boolean;
-    multi?: boolean;
     mixed?: boolean;
-    dirty?: boolean;
-    applyCount?: number;
+    cleared?: boolean;
+    check?: "checked" | "indeterminate" | "unchecked";
     oninput?: (value: string) => void;
-    onapply?: (value: string) => void;
-    onrevert?: () => void;
+    onuncheck?: () => void;
   } = $props();
 
-  const external = $derived(multi ? (mixed ? "" : value) : value);
+  const external = $derived(mixed || cleared ? "" : value);
+  const staged = $derived(check !== "unchecked");
+  const shownPlaceholder = $derived(cleared ? "will be removed" : mixed ? "Mixed" : placeholder);
 
   let draft = $state("");
   let focused = $state(false);
+  let box = $state<HTMLInputElement | null>(null);
+  let field = $state<HTMLInputElement | HTMLTextAreaElement | null>(null);
 
-  // Seed the box, and re-seed it when the external value changes (a search
-  // accept staged something, a revert reset it) - but never mid-edit, so typing
-  // is never yanked out from under someone. Only `external` is a dependency;
-  // focused/draft are read untracked so a keystroke does not retrigger this.
+  // Seed the box, and re-seed it when the external value changes (an uncheck
+  // reset it, a search accept staged something) - but never mid-edit, so
+  // typing is never yanked out from under someone. Only `external` is a
+  // dependency; focused/draft are read untracked.
   $effect(() => {
     const incoming = external;
     untrack(() => {
@@ -51,77 +49,64 @@
     });
   });
 
-  const canApply = $derived(multi && draft.trim().length > 0);
+  // `indeterminate` is a DOM property, not an attribute.
+  $effect(() => {
+    if (box) box.indeterminate = check === "indeterminate";
+  });
 
   function onInput(event: Event) {
     draft = (event.target as HTMLInputElement | HTMLTextAreaElement).value;
-    if (!multi) oninput?.(draft);
+    oninput?.(draft);
   }
 
-  function revert() {
-    focused = false;
-    draft = bookValue;
-    onrevert?.();
-  }
-
-  function apply() {
-    if (canApply) onapply?.(draft);
+  function onBoxClick(event: MouseEvent) {
+    // The box reflects staged state; it is never toggled directly.
+    event.preventDefault();
+    if (check === "unchecked") field?.focus();
+    else onuncheck?.();
   }
 </script>
 
 <div class="flex flex-col gap-1">
-  <div class="flex items-center justify-between">
+  <label class="flex w-fit cursor-pointer items-center gap-1.5">
+    <input
+      bind:this={box}
+      type="checkbox"
+      checked={check === "checked"}
+      onclick={onBoxClick}
+      title={staged ? "Staged - uncheck to revert" : "Edit the field to stage it"}
+      class="h-3 w-3 rounded accent-indigo-600"
+    />
     <span class="text-[11px] font-medium text-zinc-500 dark:text-zinc-400">{label}</span>
-    {#if !multi && dirty}
-      <button
-        type="button"
-        onclick={revert}
-        class="text-[10px] font-medium text-zinc-400 hover:text-indigo-500 dark:text-zinc-500 dark:hover:text-indigo-400"
-      >
-        Revert
-      </button>
-    {/if}
-  </div>
+  </label>
 
-  <div class="flex items-start gap-1.5">
-    {#if multiline}
-      <textarea
-        rows="3"
-        spellcheck="false"
-        placeholder={mixed ? "Mixed" : placeholder}
-        value={draft}
-        oninput={onInput}
-        onfocus={() => (focused = true)}
-        onblur={() => (focused = false)}
-        class="min-w-0 flex-1 resize-y rounded-lg border bg-white px-2.5 py-1.5 text-[13px] text-zinc-800 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 dark:bg-zinc-800 dark:text-zinc-100 {dirty
-          ? 'border-indigo-400 dark:border-indigo-500/60'
-          : 'border-zinc-300 dark:border-zinc-700'}"
-      ></textarea>
-    {:else}
-      <input
-        type="text"
-        spellcheck="false"
-        placeholder={mixed ? "Mixed" : placeholder}
-        value={draft}
-        oninput={onInput}
-        onfocus={() => (focused = true)}
-        onblur={() => (focused = false)}
-        class="min-w-0 flex-1 rounded-lg border bg-white px-2.5 py-1.5 text-[13px] text-zinc-800 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 dark:bg-zinc-800 dark:text-zinc-100 {dirty
-          ? 'border-indigo-400 dark:border-indigo-500/60'
-          : 'border-zinc-300 dark:border-zinc-700'}"
-      />
-    {/if}
-
-    {#if multi}
-      <button
-        type="button"
-        disabled={!canApply}
-        onclick={apply}
-        title={`Apply to ${applyCount} ${applyCount === 1 ? "book" : "books"}`}
-        class="shrink-0 rounded-lg border border-indigo-500 bg-indigo-50 px-2 py-1.5 text-[11px] font-medium text-indigo-700 transition-colors hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-40 dark:border-indigo-500/50 dark:bg-indigo-500/10 dark:text-indigo-300 dark:hover:bg-indigo-500/20"
-      >
-        Apply to {applyCount}
-      </button>
-    {/if}
-  </div>
+  {#if multiline}
+    <textarea
+      bind:this={field}
+      rows="3"
+      spellcheck="false"
+      placeholder={shownPlaceholder}
+      value={draft}
+      oninput={onInput}
+      onfocus={() => (focused = true)}
+      onblur={() => (focused = false)}
+      class="min-w-0 resize-y rounded-lg border bg-white px-2.5 py-1.5 text-[13px] text-zinc-800 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 dark:bg-zinc-800 dark:text-zinc-100 {staged
+        ? 'border-indigo-400 dark:border-indigo-500/60'
+        : 'border-zinc-300 dark:border-zinc-700'}"
+    ></textarea>
+  {:else}
+    <input
+      bind:this={field}
+      type="text"
+      spellcheck="false"
+      placeholder={shownPlaceholder}
+      value={draft}
+      oninput={onInput}
+      onfocus={() => (focused = true)}
+      onblur={() => (focused = false)}
+      class="min-w-0 rounded-lg border bg-white px-2.5 py-1.5 text-[13px] text-zinc-800 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 dark:bg-zinc-800 dark:text-zinc-100 {staged
+        ? 'border-indigo-400 dark:border-indigo-500/60'
+        : 'border-zinc-300 dark:border-zinc-700'}"
+    />
+  {/if}
 </div>
