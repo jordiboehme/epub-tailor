@@ -32,6 +32,7 @@
   let writing = $state(false);
   let coverError = $state(false);
   let coverFailed = $state<string | null>(null);
+  let writeFailed = $state<string | null>(null);
 
   // Debounced live staging in single-book mode, one timer per field so fast
   // typing in one box never delays another. Each pending timer keeps its own
@@ -220,6 +221,7 @@
     const items = epubEditable;
     if (items.length === 0) return;
     writing = true;
+    writeFailed = null;
     try {
       const appendix = await profiles.activeAppendix();
       const opts: RunOptions = { profiles: ["epub"], quality: null, tables: null, dryRun: false };
@@ -231,6 +233,10 @@
         appendix,
       });
       jobs.runFit(items, plans, opts, edits.snapshotFor(items.map((b) => b.id)));
+    } catch (err) {
+      // Planning asks the OS what already sits on disk; a rejection there used
+      // to leave the button unpressed-looking and the edits unwritten, silently.
+      writeFailed = `Nothing was written: we could not work out where these books would go. ${String(err)}`;
     } finally {
       writing = false;
     }
@@ -371,6 +377,10 @@
       <Button variant="primary" size="sm" disabled={!canWrite} onclick={writeMetadataOnly}>
         {writeLabel}
       </Button>
+
+      {#if writeFailed}
+        <p class="text-[11px] leading-snug text-rose-600 dark:text-rose-400">{writeFailed}</p>
+      {/if}
 
       {#if mdOnlySelection}
         <p class="text-[11px] leading-snug text-zinc-500 dark:text-zinc-400">

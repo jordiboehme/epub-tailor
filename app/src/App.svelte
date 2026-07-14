@@ -13,6 +13,7 @@
 
   let dragging = $state(false);
   let loadWarning = $state<string | null>(null);
+  let openWarning = $state<string | null>(null);
 
   /**
    * Settings and profiles both load from outside the app (a store file, the
@@ -89,6 +90,13 @@
       })
       .then((paths) => {
         if (paths.length > 0) void books.addPaths(paths);
+      })
+      .catch(() => {
+        // Without this listener a double-clicked book never arrives, and the
+        // app would just sit there looking empty. Drag and drop is unaffected,
+        // which is what the notice tells the user to fall back on.
+        openWarning =
+          "Books opened from Finder or the command line will not reach us this session. Drag them onto the window instead.";
       });
 
     return () => {
@@ -99,25 +107,35 @@
   });
 </script>
 
+{#snippet notice(message: string, dismiss: () => void)}
+  <div
+    class="flex shrink-0 items-start gap-2 border-b border-amber-200 bg-amber-50 px-4 py-2 text-[12px] leading-snug text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200"
+  >
+    <span class="min-w-0 flex-1">{message}</span>
+    <button
+      type="button"
+      aria-label="Dismiss"
+      onclick={dismiss}
+      class="shrink-0 rounded p-0.5 text-amber-600 hover:bg-amber-100 dark:text-amber-300 dark:hover:bg-amber-500/20"
+    >
+      <svg class="h-3.5 w-3.5" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M6 6l8 8M14 6l-8 8" stroke-linecap="round" />
+      </svg>
+    </button>
+  </div>
+{/snippet}
+
 <main class="flex h-full flex-col bg-zinc-50 text-zinc-800 dark:bg-zinc-950 dark:text-zinc-200">
   <UpdateBanner />
 
   {#if loadWarning}
-    <div
-      class="flex shrink-0 items-start gap-2 border-b border-amber-200 bg-amber-50 px-4 py-2 text-[12px] leading-snug text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200"
-    >
-      <span class="min-w-0 flex-1">{loadWarning}</span>
-      <button
-        type="button"
-        aria-label="Dismiss"
-        onclick={() => (loadWarning = null)}
-        class="shrink-0 rounded p-0.5 text-amber-600 hover:bg-amber-100 dark:text-amber-300 dark:hover:bg-amber-500/20"
-      >
-        <svg class="h-3.5 w-3.5" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M6 6l8 8M14 6l-8 8" stroke-linecap="round" />
-        </svg>
-      </button>
-    </div>
+    {@render notice(loadWarning, () => (loadWarning = null))}
+  {/if}
+  {#if openWarning}
+    {@render notice(openWarning, () => (openWarning = null))}
+  {/if}
+  {#if books.addError}
+    {@render notice(books.addError, () => (books.addError = null))}
   {/if}
 
   <div class="min-h-0 flex-1">

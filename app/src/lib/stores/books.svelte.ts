@@ -80,6 +80,13 @@ export function toTemplateBook(book: Book): TemplateBook {
 class BooksStore {
   books = $state<Book[]>([]);
   selectedIds = $state<Set<string>>(new Set());
+  /**
+   * Why the last add failed, or `null`. Every route in (a drop, the Add
+   * buttons, a file the OS handed us) funnels through `addPaths`, and a drop
+   * that quietly vanishes because `expand_inputs` rejected is the one outcome
+   * a workbench must never have. App.svelte shows this.
+   */
+  addError = $state<string | null>(null);
   #anchor: string | null = null;
 
   selected = $derived(this.books.filter((b) => this.selectedIds.has(b.id)));
@@ -92,12 +99,25 @@ class BooksStore {
    */
   targets = $derived(this.selected.length > 0 ? this.selected : this.books);
 
-  /** Expand and add paths (files or folders), deduping against what is already here. */
+  /**
+   * Expand and add paths (files or folders), deduping against what is already
+   * here. A failed expansion is reported through `addError` rather than thrown:
+   * every caller fires this and forgets it, and a drop that lands on nothing at
+   * all has to say why.
+   */
   async addPaths(paths: string[]): Promise<void> {
-    const entries = await invoke<InputEntry[]>("expand_inputs", {
-      paths,
-      recursive: settings.recursive,
-    });
+    let entries: InputEntry[];
+    try {
+      entries = await invoke<InputEntry[]>("expand_inputs", {
+        paths,
+        recursive: settings.recursive,
+      });
+    } catch (err) {
+      this.addError = `We could not open what you just added. ${String(err)}`;
+      return;
+    }
+    this.addError = null;
+
     for (const entry of entries) {
       if (this.books.some((b) => b.path === entry.path)) continue;
       const book: Book = {

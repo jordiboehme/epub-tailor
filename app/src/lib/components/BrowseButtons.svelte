@@ -5,19 +5,27 @@
 
   let { size = "md" }: { size?: "sm" | "md" } = $props();
 
-  async function ingest(selection: string | string[] | null) {
-    if (!selection) return;
-    await books.addPaths(Array.isArray(selection) ? selection : [selection]);
+  // addPaths reports its own failures (books.addError, shown by App.svelte);
+  // this only has to catch the picker itself falling over, which would
+  // otherwise be a button that does nothing and says nothing.
+  async function ingest(chooser: () => Promise<string | string[] | null>) {
+    try {
+      const selection = await chooser();
+      if (!selection) return;
+      await books.addPaths(Array.isArray(selection) ? selection : [selection]);
+    } catch (err) {
+      books.addError = `The file picker could not be opened. ${String(err)}`;
+    }
   }
 
   async function addBooks() {
-    await ingest(
-      await open({ multiple: true, filters: [{ name: "Books", extensions: ["epub", "md"] }] }),
+    await ingest(() =>
+      open({ multiple: true, filters: [{ name: "Books", extensions: ["epub", "md"] }] }),
     );
   }
 
   async function addFolder() {
-    await ingest(await open({ directory: true }));
+    await ingest(() => open({ directory: true }));
   }
 </script>
 

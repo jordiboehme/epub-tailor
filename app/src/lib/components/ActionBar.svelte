@@ -9,6 +9,7 @@
   import Button from "./ui/Button.svelte";
 
   let starting = $state(false);
+  let planError = $state<string | null>(null);
 
   // The one definition of "these books" lives in the books store; both buttons
   // and every label below read it, so they can never disagree.
@@ -36,11 +37,15 @@
     jobs.runCheck(items, profiles.activeProfileSpecs());
   }
 
+  // Planning talks to the outside world - the CLI for a composed profile's
+  // appendix, the OS for what already sits on disk - so it can fail, and a
+  // Tailor click that quietly does nothing is the worst way to say so.
   async function tailor() {
     edits.flushPending();
     const items = [...targetBooks];
     if (items.length === 0) return;
     starting = true;
+    planError = null;
     try {
       const appendix = await profiles.activeAppendix();
       const opts: RunOptions = {
@@ -59,6 +64,8 @@
       });
 
       jobs.runFit(items, plans, opts, edits.snapshotFor(items.map((b) => b.id)));
+    } catch (err) {
+      planError = `Nothing was started: we could not work out where these books would go. ${String(err)}`;
     } finally {
       starting = false;
     }
@@ -97,7 +104,11 @@
       <Button variant="secondary" disabled={!canCheck} onclick={check}>Check</Button>
       <div class="flex flex-col items-end gap-0.5">
         <Button variant="primary" disabled={!canRun} onclick={tailor}>{runLabel}</Button>
-        {#if editHint}
+        {#if planError}
+          <span class="max-w-80 text-right text-[10px] leading-snug text-rose-600 dark:text-rose-400">
+            {planError}
+          </span>
+        {:else if editHint}
           <span class="text-[10px] leading-none text-zinc-400 dark:text-zinc-500">{editHint}</span>
         {/if}
       </div>
