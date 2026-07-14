@@ -117,7 +117,10 @@ jobs:
       # smoke check, not a substitute for CI.
       - name: Run workspace tests
         if: matrix.test
-        run: cargo test --workspace --release --target ${{ matrix.target }}
+        # epub-tailor-app (the Tauri desktop crate) is excluded: it cannot build
+        # on the musl and static-windows release targets and is not part of the
+        # CLI release artifact.
+        run: cargo test --workspace --exclude epub-tailor-app --release --target ${{ matrix.target }}
         env:
           RUSTFLAGS: ${{ matrix.rustflags }}
 

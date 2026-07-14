@@ -18,11 +18,14 @@ jobs:
           toolchain: stable
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
       - run: cargo fmt --all --check
-      - run: cargo clippy --workspace --all-targets -- -D warnings
+      # epub-tailor-app (the Tauri desktop crate) is excluded from the workspace
+      # clippy/test jobs: it needs a built frontend (../dist) and system webview
+      # libraries, and it has its own build path. CI covers the CLI/core here.
+      - run: cargo clippy --workspace --exclude epub-tailor-app --all-targets -- -D warnings
       - name: Install epubcheck (Linux)
         if: matrix.os == 'ubuntu-24.04'
         run: sudo apt-get update && sudo apt-get install -y epubcheck
-      - run: cargo test --workspace
+      - run: cargo test --workspace --exclude epub-tailor-app
 
   deny:
     runs-on: ubuntu-24.04
