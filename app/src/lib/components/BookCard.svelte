@@ -1,27 +1,53 @@
 <script lang="ts">
   import { slide } from "svelte/transition";
+  import { revealItemInDir } from "@tauri-apps/plugin-opener";
   import { coverUrl } from "../api/covers";
+  import { formatSize } from "../api/format";
   import { books } from "../stores/books.svelte";
   import type { Book } from "../stores/books.svelte";
   import { jobs } from "../stores/jobs.svelte";
   import { edits } from "../stores/edits.svelte";
   import type { Stats } from "../api/contract";
+  import CardDetails from "./CardDetails.svelte";
 
   let { book }: { book: Book } = $props();
 
   let imgError = $state(false);
-  let showFindings = $state(false);
+  let showDetails = $state(false);
 
   const selected = $derived(books.selectedIds.has(book.id));
   const edited = $derived(edits.hasEdits(book.id));
   const job = $derived(jobs.conversionJobFor(book.id));
   const running = $derived(job?.state === "running");
   const queued = $derived(job?.state === "queued");
+  const unreadable = $derived(book.ingest === "failed");
 
   const stem = $derived(book.fileName.replace(/\.[^.]+$/, ""));
   const title = $derived(book.meta?.title?.trim() || stem);
   const subtitle = $derived(book.meta?.authors?.[0] ?? (book.kind === "md" ? "Markdown" : ""));
   const hasCover = $derived(!!book.coverPath && !imgError);
+
+  // The written file, when there is one to reveal: a real conversion, not a
+  // preview (a dry run writes nothing, so there is nothing to show anyone).
+  const writtenPath = $derived(
+    book.result?.kind === "fit" && !book.result.report.dry_run ? book.result.report.output : null,
+  );
+
+  // The failure this card can explain: a conversion that failed, or a book we
+  // could not even read in the first place.
+  const failure = $derived(
+    book.result?.kind === "failed"
+      ? {
+          friendly: book.result.friendly,
+          code: book.result.failure.code,
+          stderr: job?.stderrTail ?? [],
+        }
+      : unreadable && book.ingestError
+        ? book.ingestError
+        : undefined,
+  );
+  const findings = $derived(book.result?.kind === "check" ? book.result.report.findings : undefined);
+  const canExpand = $derived(Boolean(failure || findings));
 
   const initials = $derived(
     stem
@@ -32,10 +58,6 @@
       .join(""),
   );
 
-  function mib(bytes: number): string {
-    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  }
-
   interface Chip {
     label: string;
     tone: "good" | "warn" | "bad" | "neutral";
@@ -45,9 +67,13 @@
   function sizeChip(stats: Stats): Chip {
     if (stats.bytes_in > 0 && stats.bytes_out < stats.bytes_in) {
       const pct = Math.round((1 - stats.bytes_out / stats.bytes_in) * 100);
-      return { label: `-${pct}%`, tone: "good", title: `${mib(stats.bytes_in)} to ${mib(stats.bytes_out)}` };
+      return {
+        label: `-${pct}%`,
+        tone: "good",
+        title: `${formatSize(stats.bytes_in)} to ${formatSize(stats.bytes_out)}`,
+      };
     }
-    return { label: `wrote ${mib(stats.bytes_out)}`, tone: "neutral" };
+    return { label: `wrote ${formatSize(stats.bytes_out)}`, tone: "neutral" };
   }
 
   const toneClass: Record<Chip["tone"], string> = {
@@ -69,6 +95,11 @@
       books.select(book.id);
     }
   }
+
+  function reveal(event: MouseEvent) {
+    event.stopPropagation();
+    if (writtenPath) void revealItemInDir(writtenPath);
+  }
 </script>
 
 {#snippet chip(c: Chip)}
@@ -85,7 +116,9 @@
   onkeydown={onKey}
   class="group relative flex cursor-default flex-col rounded-xl border bg-white text-left transition-shadow hover:shadow-md dark:bg-zinc-900 {selected
     ? 'border-indigo-500 ring-2 ring-indigo-500/60'
-    : 'border-zinc-200 dark:border-zinc-800'}"
+    : unreadable
+      ? 'border-rose-300 dark:border-rose-500/40'
+      : 'border-zinc-200 dark:border-zinc-800'}"
 >
   <!-- Cover -->
   <div class="relative aspect-[2/3] overflow-hidden rounded-t-xl bg-zinc-100 dark:bg-zinc-800">
@@ -96,6 +129,26 @@
         onerror={() => (imgError = true)}
         class="h-full w-full object-cover"
       />
+    {:else if unreadable}
+      <div
+        class="flex h-full w-full flex-col items-center justify-center gap-1.5 bg-rose-50 p-3 text-center dark:bg-rose-950/30"
+      >
+        <svg
+          class="h-6 w-6 text-rose-400 dark:text-rose-500"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.6"
+        >
+          <path d="M12 8v5" stroke-linecap="round" />
+          <circle cx="12" cy="16.5" r="0.9" fill="currentColor" stroke="none" />
+          <path d="M10.6 3.9L2.7 17.6a1.6 1.6 0 001.4 2.4h15.8a1.6 1.6 0 001.4-2.4L13.4 3.9a1.6 1.6 0 00-2.8 0z" stroke-linejoin="round" />
+        </svg>
+        <span class="text-[11px] font-medium text-rose-600 dark:text-rose-300">Could not read</span>
+        <span class="line-clamp-2 text-[10px] leading-tight text-rose-500/80 dark:text-rose-400/70">
+          {stem}
+        </span>
+      </div>
     {:else}
       <div class="flex h-full w-full flex-col items-center justify-center gap-2 p-3 text-center">
         <span class="text-2xl font-semibold tracking-wide text-zinc-400 dark:text-zinc-500">
@@ -145,21 +198,35 @@
       <div class="absolute inset-x-0 bottom-0 h-0.5 animate-pulse bg-indigo-300/70"></div>
     {/if}
 
-    <!-- Remove button, on hover (hidden while this book is busy) -->
+    <!-- Hover actions (hidden while this book is busy) -->
     {#if !running && !queued}
-      <button
-        type="button"
-        title="Remove"
-        onclick={(e) => {
-          e.stopPropagation();
-          books.remove([book.id]);
-        }}
-        class="absolute right-1.5 top-1.5 hidden rounded-full bg-zinc-900/70 p-1 text-white transition-colors hover:bg-rose-600 group-hover:block"
-      >
-        <svg class="h-3.5 w-3.5" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M6 6l8 8M14 6l-8 8" stroke-linecap="round" />
-        </svg>
-      </button>
+      <div class="absolute right-1.5 top-1.5 hidden gap-1 group-hover:flex">
+        {#if writtenPath}
+          <button
+            type="button"
+            title="Show the tailored file in the file manager"
+            onclick={reveal}
+            class="rounded-full bg-zinc-900/70 p-1 text-white transition-colors hover:bg-indigo-600"
+          >
+            <svg class="h-3.5 w-3.5" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7">
+              <path d="M2.5 6.5A1.5 1.5 0 014 5h3.2l1.4 1.8H16A1.5 1.5 0 0117.5 8.3v6.2A1.5 1.5 0 0116 16H4a1.5 1.5 0 01-1.5-1.5v-8z" stroke-linejoin="round" />
+            </svg>
+          </button>
+        {/if}
+        <button
+          type="button"
+          title="Remove from the workbench (the file stays where it is)"
+          onclick={(e) => {
+            e.stopPropagation();
+            books.remove([book.id]);
+          }}
+          class="rounded-full bg-zinc-900/70 p-1 text-white transition-colors hover:bg-rose-600"
+        >
+          <svg class="h-3.5 w-3.5" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M6 6l8 8M14 6l-8 8" stroke-linecap="round" />
+          </svg>
+        </button>
+      </div>
     {/if}
   </div>
 
@@ -172,10 +239,10 @@
       <p class="truncate text-[11px] text-zinc-500 dark:text-zinc-400" title={subtitle}>{subtitle}</p>
     {/if}
 
-    <!-- Result chips -->
-    {#if book.result}
+    <!-- Chips: the result, or the state the book is stuck in -->
+    {#if book.result || unreadable}
       <div class="mt-1.5 flex flex-wrap items-center gap-1">
-        {#if book.result.kind === "fit"}
+        {#if book.result?.kind === "fit"}
           {@render chip(sizeChip(book.result.report.stats))}
           {#if book.result.report.dry_run}
             {@render chip({ label: "preview", tone: "neutral" })}
@@ -183,64 +250,52 @@
           {#if book.result.report.stats.warnings > 0}
             {@render chip({ label: `${book.result.report.stats.warnings} warnings`, tone: "warn" })}
           {/if}
-        {:else if book.result.kind === "check"}
+        {:else if book.result?.kind === "check"}
+          {#if book.result.report.errors > 0}
+            {@render chip({ label: `${book.result.report.errors} errors`, tone: "bad" })}
+          {/if}
+          {#if book.result.report.warnings > 0}
+            {@render chip({ label: `${book.result.report.warnings} warnings`, tone: "warn" })}
+          {/if}
+          {#if book.result.report.errors === 0 && book.result.report.warnings === 0}
+            {@render chip({ label: "clean", tone: "good" })}
+          {/if}
+        {:else if book.result?.kind === "failed"}
+          {@render chip({ label: "failed", tone: "bad" })}
+        {:else if book.result?.kind === "cancelled"}
+          {@render chip({ label: "cancelled", tone: "neutral" })}
+        {:else if unreadable}
+          {@render chip({ label: "could not read", tone: "bad" })}
+        {/if}
+
+        {#if canExpand}
           <button
             type="button"
             onclick={(e) => {
               e.stopPropagation();
-              showFindings = !showFindings;
+              showDetails = !showDetails;
             }}
-            class="flex items-center gap-1"
+            class="ml-auto rounded px-1 py-0.5 text-[11px] font-medium text-zinc-400 hover:text-zinc-600 dark:text-zinc-500 dark:hover:text-zinc-300"
           >
-            {#if book.result.report.errors > 0}
-              {@render chip({ label: `${book.result.report.errors} errors`, tone: "bad" })}
-            {/if}
-            {#if book.result.report.warnings > 0}
-              {@render chip({ label: `${book.result.report.warnings} warnings`, tone: "warn" })}
-            {/if}
-            {#if book.result.report.errors === 0 && book.result.report.warnings === 0}
-              {@render chip({ label: "clean", tone: "good" })}
-            {/if}
+            {showDetails ? "Less" : "Details"}
           </button>
-        {:else if book.result.kind === "failed"}
-          {@render chip({ label: "Failed", tone: "bad", title: book.result.friendly })}
-        {:else if book.result.kind === "cancelled"}
-          {@render chip({ label: "cancelled", tone: "neutral" })}
         {/if}
       </div>
+    {/if}
 
-      {#if book.result.kind === "failed"}
-        <p class="mt-1 line-clamp-2 text-[11px] leading-snug text-rose-600 dark:text-rose-400" title={book.result.friendly}>
-          {book.result.friendly}
-        </p>
-      {/if}
+    {#if failure && !showDetails}
+      <p
+        class="mt-1 line-clamp-2 text-[11px] leading-snug text-rose-600 dark:text-rose-400"
+        title={failure.friendly}
+      >
+        {failure.friendly}
+      </p>
     {/if}
   </div>
 
-  <!-- Findings panel (check results) -->
-  {#if showFindings && book.result?.kind === "check"}
-    <div transition:slide={{ duration: 150 }} class="border-t border-zinc-200 px-2.5 py-2 dark:border-zinc-800">
-      {#if book.result.report.findings.length === 0}
-        <p class="text-[11px] text-zinc-500 dark:text-zinc-400">Nothing to report.</p>
-      {:else}
-        <ul class="flex max-h-40 flex-col gap-1.5 overflow-y-auto">
-          {#each book.result.report.findings as finding (finding.code + finding.message)}
-            <li class="flex items-start gap-1.5 text-[11px] leading-snug">
-              <span
-                class="mt-0.5 h-1.5 w-1.5 shrink-0 rounded-full {finding.severity === 'error'
-                  ? 'bg-rose-500'
-                  : finding.severity === 'warning'
-                    ? 'bg-amber-500'
-                    : 'bg-zinc-400'}"
-              ></span>
-              <span class="min-w-0">
-                <span class="font-mono text-zinc-400 dark:text-zinc-500">{finding.code}</span>
-                <span class="text-zinc-600 dark:text-zinc-300"> {finding.message}</span>
-              </span>
-            </li>
-          {/each}
-        </ul>
-      {/if}
+  {#if showDetails && canExpand}
+    <div transition:slide={{ duration: 150 }}>
+      <CardDetails {findings} {failure} />
     </div>
   {/if}
 </div>

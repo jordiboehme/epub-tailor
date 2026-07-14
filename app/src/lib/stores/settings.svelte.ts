@@ -7,17 +7,12 @@
 // per session, not defaults you want silently remembered into the next launch.
 
 import { Store } from "@tauri-apps/plugin-store";
+import type { WindowGeometry } from "../api/geometry";
+
+export type { WindowGeometry };
 
 const STORE_FILE = "settings.json";
 const AUTOSAVE_DEBOUNCE_MS = 300;
-
-/** A window's last size and position, in physical pixels (see api/window.ts). */
-export interface WindowGeometry {
-  width: number;
-  height: number;
-  x: number;
-  y: number;
-}
 
 class SettingsStore {
   // -- persisted --------------------------------------------------------------

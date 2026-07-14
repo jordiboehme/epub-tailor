@@ -1,10 +1,46 @@
 <script lang="ts">
   import { books } from "../stores/books.svelte";
+  import { isModalOpen, isTextField, shortcutFor } from "../api/keys";
   import BrowseButtons from "./BrowseButtons.svelte";
   import BookGrid from "./BookGrid.svelte";
   import Inspector from "./Inspector.svelte";
   import ActionBar from "./ActionBar.svelte";
+
+  // The workbench's three shortcuts. What a chord means is decided in api/keys
+  // (and unit-tested there); this only reads the event and does the deed.
+  function onKeydown(event: KeyboardEvent) {
+    const intent = shortcutFor({
+      key: event.key,
+      metaKey: event.metaKey,
+      ctrlKey: event.ctrlKey,
+      inTextField: isTextField(event.target),
+      modalOpen: isModalOpen(),
+    });
+    if (intent === null) return;
+
+    switch (intent) {
+      case "select-all":
+        if (books.books.length === 0) return;
+        books.selectAll();
+        break;
+      case "clear-selection":
+        if (books.selectedIds.size === 0) return;
+        books.clearSelection();
+        break;
+      case "remove-selected": {
+        // No confirmation: these are list entries, not files. Nothing on disk
+        // is touched, and dropping the book back in takes one drag.
+        const ids = books.selected.map((b) => b.id);
+        if (ids.length === 0) return;
+        books.remove(ids);
+        break;
+      }
+    }
+    event.preventDefault();
+  }
 </script>
+
+<svelte:window onkeydown={onKeydown} />
 
 {#snippet mark(size: string)}
   <svg class={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">

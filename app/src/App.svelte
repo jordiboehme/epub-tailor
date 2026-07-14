@@ -6,14 +6,54 @@
   import { settings } from "./lib/stores/settings.svelte";
   import { profiles } from "./lib/stores/profiles.svelte";
   import { books } from "./lib/stores/books.svelte";
+  import { restoreGeometry, trackGeometry } from "./lib/api/window";
   import Workbench from "./lib/components/Workbench.svelte";
   import DropZone from "./lib/components/DropZone.svelte";
 
   let dragging = $state(false);
+  let loadWarning = $state<string | null>(null);
+
+  /**
+   * Settings and profiles both load from outside the app (a store file, the
+   * CLI). Either can fail - a corrupt settings.json, a sidecar that will not
+   * start - and neither failure is fatal: the app works on its defaults. So
+   * both are awaited, not fired and forgotten, and a failure says so quietly
+   * instead of becoming an unhandled rejection nobody ever sees.
+   */
+  async function loadStores(): Promise<UnlistenFn | undefined> {
+    const failures: string[] = [];
+
+    try {
+      await settings.load();
+    } catch {
+      failures.push("your settings");
+    }
+
+    try {
+      await profiles.load();
+    } catch {
+      failures.push("the device profiles");
+    }
+
+    // Cosmetic, and never worth a warning of its own: a window that opens at
+    // its default size is a window, and the user has bigger news to read.
+    let untrack: UnlistenFn | undefined;
+    try {
+      await restoreGeometry(settings.windowGeometry);
+      untrack = await trackGeometry((geometry) => (settings.windowGeometry = geometry));
+    } catch {
+      // Ignored on purpose.
+    }
+
+    if (failures.length > 0) {
+      loadWarning = `We could not load ${failures.join(" or ")}. The defaults are in play, and everything still works - but nothing you change now will be remembered.`;
+    }
+    return untrack;
+  }
 
   onMount(() => {
-    void settings.load();
-    void profiles.load();
+    let untrackGeometry: UnlistenFn | undefined;
+    void loadStores().then((fn) => (untrackGeometry = fn));
 
     let unlistenDrag: UnlistenFn | undefined;
     getCurrentWebview()
@@ -53,12 +93,34 @@
     return () => {
       unlistenDrag?.();
       unlistenOpen?.();
+      untrackGeometry?.();
     };
   });
 </script>
 
-<main class="h-full bg-zinc-50 text-zinc-800 dark:bg-zinc-950 dark:text-zinc-200">
-  <Workbench />
+<main class="flex h-full flex-col bg-zinc-50 text-zinc-800 dark:bg-zinc-950 dark:text-zinc-200">
+  {#if loadWarning}
+    <div
+      class="flex shrink-0 items-start gap-2 border-b border-amber-200 bg-amber-50 px-4 py-2 text-[12px] leading-snug text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200"
+    >
+      <span class="min-w-0 flex-1">{loadWarning}</span>
+      <button
+        type="button"
+        aria-label="Dismiss"
+        onclick={() => (loadWarning = null)}
+        class="shrink-0 rounded p-0.5 text-amber-600 hover:bg-amber-100 dark:text-amber-300 dark:hover:bg-amber-500/20"
+      >
+        <svg class="h-3.5 w-3.5" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M6 6l8 8M14 6l-8 8" stroke-linecap="round" />
+        </svg>
+      </button>
+    </div>
+  {/if}
+
+  <div class="min-h-0 flex-1">
+    <Workbench />
+  </div>
+
   {#if dragging}
     <DropZone />
   {/if}

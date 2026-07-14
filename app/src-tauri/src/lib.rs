@@ -42,6 +42,7 @@ pub fn run() {
             commands::list_removable_volumes,
             commands::is_appimage,
             commands::ensure_covers_dir,
+            commands::cache_cover,
             open_files::drain_pending_opens,
         ])
         .setup(|app| {

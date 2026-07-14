@@ -91,7 +91,16 @@ class JobsStore {
     this.#startBatch();
     const outputByInput = new Map(plans.map((p) => [p.input, p.output]));
     for (const book of books) {
-      const output = outputByInput.has(book.path) ? outputByInput.get(book.path)! : null;
+      // `null` means "in place" - a decision the planner makes, never a
+      // fallback we invent. A book with no plan at all is skipped rather than
+      // run: reading a missing entry as `null` would turn a planner bug into a
+      // `--lets-get-dangerous` rewrite of an original the user never offered
+      // up, and for a Markdown book into a flag the `md` command does not even
+      // have. Neither is a mistake worth making quietly.
+      if (!outputByInput.has(book.path)) continue;
+      const output = outputByInput.get(book.path)!;
+      if (output === null && book.kind !== "epub") continue;
+
       const bookEdits = editsByBook[book.id];
       const perBook: RunOptions = bookEdits ? { ...opts, edits: bookEdits } : opts;
       if (book.kind === "md") {
@@ -159,8 +168,18 @@ class JobsStore {
     if (priority === "normal") this.#batchIds = [...this.#batchIds, id];
   }
 
+  /**
+   * Clear the decks for a new batch: keep only what is still queued or
+   * running - a background ingestion included, since one may well be in flight
+   * - and drop every job that has already settled, along with its book
+   * back-reference and its applied-edits entry. Ingestion jobs used to be kept
+   * regardless of state, which meant a long session's `show` jobs (and the
+   * `#books` entries pinning their books) piled up for as long as the app was
+   * open. Nothing needs them once they are done: a settled ingestion has
+   * already written its meta, cover and failure onto the book itself.
+   */
   #startBatch(): void {
-    const kept = this.jobs.filter((j) => j.priority === "low" || !TERMINAL.has(j.state));
+    const kept = this.jobs.filter((j) => !TERMINAL.has(j.state));
     const keptIds = new Set(kept.map((j) => j.id));
     for (const id of [...this.#books.keys()]) {
       if (!keptIds.has(id)) this.#books.delete(id);
@@ -177,8 +196,15 @@ class JobsStore {
     this.#applied.delete(job.id);
     const book = this.#books.get(job.id);
     if (book) {
-      if (job.kind === "show") book.ingest = "failed";
-      else book.result = { kind: "cancelled" };
+      if (job.kind === "show") {
+        book.ingest = "failed";
+        book.ingestError = this.#ingestError(job, {
+          code: "cancelled",
+          message: "Reading this book's metadata was cancelled.",
+        });
+      } else {
+        book.result = { kind: "cancelled" };
+      }
     }
     const handle = this.#handles.get(job.id);
     if (handle) {
@@ -264,6 +290,7 @@ class JobsStore {
           book.meta = normalizeMeta(report);
           if (report.metadata.cover) book.coverPath = report.metadata.cover;
           book.ingest = "done";
+          book.ingestError = undefined;
           job.state = "done";
           return;
         }
@@ -271,8 +298,26 @@ class JobsStore {
         // Fall through to a failed ingest below.
       }
     }
-    if (book) book.ingest = "failed";
+    if (book) {
+      book.ingest = "failed";
+      book.ingestError = this.#ingestError(job, this.#failureOf(job, res));
+    }
     job.state = "failed";
+  }
+
+  /**
+   * The reason an ingestion failed, in the shape the card's details drawer
+   * reads. Written onto the book (not left on the job) because the job is
+   * pruned at the next batch while the card keeps saying "could not read" for
+   * as long as the book is on the workbench - and a card that says so has to
+   * be able to say why.
+   */
+  #ingestError(job: Job, failure: CliFailure): Book["ingestError"] {
+    return {
+      friendly: friendlyError(failure.code, failure.message),
+      code: failure.code,
+      stderr: [...job.stderrTail],
+    };
   }
 
   #settleConvert(job: Job, res: SidecarResult): void {
@@ -332,17 +377,25 @@ class JobsStore {
     this.#applyFailure(job, res);
   }
 
-  #applyFailure(job: Job, res: SidecarResult): void {
-    this.#applied.delete(job.id);
-    let failure: CliFailure;
+  /**
+   * The `{code, message}` behind a non-zero exit: the CLI's own failure
+   * payload when it printed one, and an honest guess from the exit code and
+   * stderr when it did not (a crash, a killed process, output we could not
+   * parse).
+   */
+  #failureOf(job: Job, res: SidecarResult): CliFailure {
     try {
       const parsed = parseReport<unknown>(res.stdout, job.kind);
-      failure = isCliFailure(parsed)
-        ? parsed
-        : { code: "malformed-output", message: res.stderr || `exited with code ${res.code}` };
+      if (isCliFailure(parsed)) return parsed;
+      return { code: "malformed-output", message: res.stderr || `exited with code ${res.code}` };
     } catch {
-      failure = { code: "io-error", message: res.stderr || `exited with code ${res.code}` };
+      return { code: "io-error", message: res.stderr || `exited with code ${res.code}` };
     }
+  }
+
+  #applyFailure(job: Job, res: SidecarResult): void {
+    this.#applied.delete(job.id);
+    const failure = this.#failureOf(job, res);
     job.failure = failure;
     const book = this.#books.get(job.id);
     if (book) {
@@ -364,8 +417,12 @@ class JobsStore {
     job.failure = failure;
     const book = this.#books.get(id);
     if (book) {
-      if (job.kind === "show") book.ingest = "failed";
-      else book.result = { kind: "failed", failure, friendly: friendlyError(failure.code, message) };
+      if (job.kind === "show") {
+        book.ingest = "failed";
+        book.ingestError = this.#ingestError(job, failure);
+      } else {
+        book.result = { kind: "failed", failure, friendly: friendlyError(failure.code, message) };
+      }
     }
     job.state = "failed";
     this.#pump();

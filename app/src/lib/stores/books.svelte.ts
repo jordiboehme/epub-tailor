@@ -12,6 +12,7 @@ import type { TemplateBook } from "../api/templates";
 import type { BookMeta } from "../api/meta";
 import { settings } from "./settings.svelte";
 import { jobs } from "./jobs.svelte";
+import { edits } from "./edits.svelte";
 
 export type { BookMeta };
 
@@ -119,18 +120,26 @@ class BooksStore {
     jobs.enqueueIngest(book, showArgv(book.path, coverOut));
   }
 
+  /**
+   * Take books off the workbench. Nothing on disk is touched - these are list
+   * entries - so this asks no questions. Their staged edits go with them: an
+   * edit to a book that is no longer here has nothing left to be written into.
+   */
   remove(ids: string[]): void {
     const drop = new Set(ids);
     this.books = this.books.filter((b) => !drop.has(b.id));
     const next = new Set(this.selectedIds);
     for (const id of ids) next.delete(id);
     this.selectedIds = next;
+    if (drop.has(this.#anchor ?? "")) this.#anchor = null;
+    edits.clear(ids);
   }
 
   clear(): void {
     this.books = [];
     this.selectedIds = new Set();
     this.#anchor = null;
+    edits.clear();
   }
 
   // -- selection --------------------------------------------------------------

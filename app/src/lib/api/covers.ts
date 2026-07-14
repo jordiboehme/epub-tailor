@@ -30,6 +30,20 @@ export async function coverCachePath(key: string): Promise<string> {
   return join(dir, `${key}.img`);
 }
 
+/**
+ * Copy a cover the user picked from anywhere on disk into the cover cache, and
+ * return the copy's path.
+ *
+ * The webview can only load images from the cache dir (the asset protocol's
+ * scope, see tauri.conf.json), so a path from the user's Pictures folder would
+ * stage happily and then render as nothing at all. Everything downstream - the
+ * preview, the card, the `--cover` flag - gets the cached path instead, and
+ * the CLI reads a copy that is byte-for-byte the image they chose.
+ */
+export async function cacheCover(source: string): Promise<string> {
+  return invoke<string>("cache_cover", { source });
+}
+
 /** The `asset:`-protocol URL a webview can load `absolutePath` from directly. */
 export function coverUrl(absolutePath: string): string {
   return convertFileSrc(absolutePath);

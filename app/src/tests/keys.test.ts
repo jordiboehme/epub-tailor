@@ -37,6 +37,12 @@ describe("shortcutFor", () => {
     expect(shortcutFor(chord({ key: "Escape", inTextField: true }))).toBeNull();
   });
 
+  it("stays out of the way while a modal is up: its Escape is the dialog's", () => {
+    expect(shortcutFor(chord({ key: "Escape", modalOpen: true }))).toBeNull();
+    expect(shortcutFor(chord({ key: "a", metaKey: true, modalOpen: true }))).toBeNull();
+    expect(shortcutFor(chord({ key: "Delete", modalOpen: true }))).toBeNull();
+  });
+
   it("has no opinion about any other key", () => {
     expect(shortcutFor(chord({ key: "Enter" }))).toBeNull();
     expect(shortcutFor(chord({ key: "s", metaKey: true }))).toBeNull();

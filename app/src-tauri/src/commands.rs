@@ -260,13 +260,88 @@ pub fn is_appimage() -> bool {
 /// pulling in the (otherwise unused) fs plugin just to create one directory.
 #[tauri::command]
 pub fn ensure_covers_dir(app: tauri::AppHandle) -> Result<String, String> {
-    let dir = app
+    let dir = covers_dir(&app)?;
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    Ok(dir.display().to_string())
+}
+
+fn covers_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    Ok(app
         .path()
         .app_cache_dir()
         .map_err(|e| e.to_string())?
-        .join("covers");
+        .join("covers"))
+}
+
+/// FNV-1a (32-bit) over `input` - the same small, dependency-free hash
+/// `covers.ts` uses for its own cache keys, so both sides name a cached file
+/// the same way.
+fn fnv1a(input: &str) -> u32 {
+    let mut hash: u32 = 0x811c_9dc5;
+    for byte in input.as_bytes() {
+        hash ^= u32::from(*byte);
+        hash = hash.wrapping_mul(0x0100_0193);
+    }
+    hash
+}
+
+/// The extension a cached copy should carry, lowercased and reduced to plain
+/// ASCII alphanumerics (an extension only ever reaches a filename we build, so
+/// anything stranger is dropped rather than escaped). `img` when the source has
+/// no usable one - the CLI re-encodes a cover under the device profile anyway,
+/// and the app's ingested covers already use that name.
+fn cover_extension(source: &Path) -> String {
+    let ext = source
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| {
+            e.to_ascii_lowercase()
+                .chars()
+                .filter(|c| c.is_ascii_alphanumeric())
+                .collect::<String>()
+        })
+        .unwrap_or_default();
+    if ext.is_empty() { "img".to_string() } else { ext }
+}
+
+/// Copy a user-chosen cover image into the cover cache and return the copy's
+/// path.
+///
+/// The webview may only load images from `$APPCACHE/covers/**` (the asset
+/// protocol's scope in tauri.conf.json), so a cover picked from anywhere else
+/// on disk would stage fine and then silently fail to render - the card would
+/// quietly fall back to its initials. Copying it into the cache first means the
+/// one path the app then carries around (the `--cover` flag's argument, the
+/// staged edit, the card's thumbnail) is a path everything can actually read.
+///
+/// The name is derived from the source path, size and mtime, so re-picking the
+/// same unchanged image lands on the same cached file instead of littering the
+/// cache.
+#[tauri::command]
+pub fn cache_cover(app: tauri::AppHandle, source: String) -> Result<String, String> {
+    let source = PathBuf::from(source);
+    let metadata = std::fs::metadata(&source)
+        .map_err(|e| format!("cannot read {}: {e}", source.display()))?;
+    let modified_ms = metadata
+        .modified()
+        .ok()
+        .and_then(|m| m.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+
+    let key = fnv1a(&format!(
+        "{}|{}|{}",
+        source.display(),
+        metadata.len(),
+        modified_ms
+    ));
+
+    let dir = covers_dir(&app)?;
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    Ok(dir.display().to_string())
+    let target = dir.join(format!("picked-{key:08x}.{}", cover_extension(&source)));
+    std::fs::copy(&source, &target)
+        .map_err(|e| format!("cannot cache {}: {e}", source.display()))?;
+    Ok(target.display().to_string())
 }
 
 #[cfg(test)]
@@ -509,6 +584,25 @@ mod tests {
         // A smoke test: whatever this machine has plugged in, the call must
         // return rather than panic.
         let _ = super::list_removable_volumes();
+    }
+
+    #[test]
+    fn cover_extension_normalizes_or_falls_back_to_img() {
+        use super::cover_extension;
+        assert_eq!(cover_extension(Path::new("/a/cover.PNG")), "png");
+        assert_eq!(cover_extension(Path::new("/a/cover.jpeg")), "jpeg");
+        // No extension, and an extension made of nothing we would put in a
+        // filename, both land on the neutral name the ingested covers use.
+        assert_eq!(cover_extension(Path::new("/a/cover")), "img");
+        assert_eq!(cover_extension(Path::new("/a/cover. ./")), "img");
+    }
+
+    #[test]
+    fn fnv1a_matches_the_reference_vector_covers_ts_hashes_against() {
+        // The canonical FNV-1a 32-bit test vector; covers.ts implements the
+        // same hash in TypeScript, and the two must agree on it.
+        assert_eq!(super::fnv1a("a"), 0xe40c_292c);
+        assert_eq!(super::fnv1a(""), 0x811c_9dc5);
     }
 
     #[test]

@@ -6,7 +6,7 @@
   // "Find online" (single book) and "Write metadata only" (epub books with edits).
 
   import { open } from "@tauri-apps/plugin-dialog";
-  import { coverUrl } from "../api/covers";
+  import { cacheCover, coverUrl } from "../api/covers";
   import type { RunOptions } from "../api/argv";
   import { resolvePlans } from "../api/plan";
   import { books, toTemplateBook } from "../stores/books.svelte";
@@ -31,6 +31,7 @@
   let searchOpen = $state(false);
   let writing = $state(false);
   let coverError = $state(false);
+  let coverFailed = $state<string | null>(null);
 
   // Debounced live staging in single-book mode, one timer per field so fast
   // typing in one box never delays another. Each pending timer keeps its own
@@ -194,7 +195,18 @@
       multiple: false,
       filters: [{ name: "Images", extensions: ["jpg", "jpeg", "png", "gif", "webp"] }],
     });
-    if (typeof selection === "string") edits.stage([single.id], { coverPath: selection });
+    if (typeof selection !== "string") return;
+    const book = single;
+    coverFailed = null;
+    try {
+      // Staged as a copy in the cover cache, not as the path the user picked:
+      // that is the only place the webview is allowed to load an image from,
+      // so it is the only path that can both preview here and ride along as
+      // the `--cover` flag. See api/covers.ts.
+      edits.stage([book.id], { coverPath: await cacheCover(selection) });
+    } catch (err) {
+      coverFailed = `That image could not be read. ${String(err)}`;
+    }
   }
 
   // -- write metadata only ----------------------------------------------------
@@ -317,7 +329,7 @@
                 />
               {:else}
                 <div class="flex h-full w-full items-center justify-center text-[10px] text-zinc-400">
-                  {coverError ? "chosen" : "none"}
+                  {coverError ? "no preview" : "none"}
                 </div>
               {/if}
             </div>
@@ -334,6 +346,9 @@
               {/if}
             </div>
           </div>
+          {#if coverFailed}
+            <p class="text-[11px] leading-snug text-rose-600 dark:text-rose-400">{coverFailed}</p>
+          {/if}
         </div>
       {/if}
     </div>
