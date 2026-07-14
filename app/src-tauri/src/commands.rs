@@ -218,7 +218,8 @@ fn list_removable_volumes_impl() -> Vec<Volume> {
 /// Windows: every drive letter whose type the firmware reports as removable.
 #[cfg(target_os = "windows")]
 fn list_removable_volumes_impl() -> Vec<Volume> {
-    use windows::Win32::Storage::FileSystem::{DRIVE_REMOVABLE, GetDriveTypeW};
+    use windows::Win32::Storage::FileSystem::GetDriveTypeW;
+    use windows::Win32::System::WindowsProgramming::DRIVE_REMOVABLE;
     use windows::core::PCWSTR;
 
     let mut out = Vec::new();

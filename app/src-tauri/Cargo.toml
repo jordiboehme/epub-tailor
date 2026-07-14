@@ -44,4 +44,7 @@ tauri-plugin-updater = "2"
 # Removable-drive detection (list_removable_volumes) on Windows: GetDriveTypeW
 # is the only reliable way to tell a USB stick from a fixed or network drive.
 [target.'cfg(windows)'.dependencies]
-windows = { version = "0.61", features = ["Win32_Storage_FileSystem"] }
+windows = { version = "0.61", features = [
+  "Win32_Storage_FileSystem",
+  "Win32_System_WindowsProgramming",
+] }

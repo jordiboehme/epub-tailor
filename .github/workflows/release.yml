@@ -356,7 +356,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev \
-            libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+            libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf \
+            xdg-utils
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -507,36 +508,49 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
           set -euo pipefail
-          # The key is one line of base64 either way (see the note in the Apple
-          # gate above about $GITHUB_ENV and newlines); a trailing newline picked
-          # up from `gh secret set < file` would otherwise corrupt the file. And
-          # as there, a squeezed secret is no longer the string GitHub registered
-          # and masks, so it is registered again with ::add-mask:: before it is
-          # written anywhere.
+          # The key is passed through VERBATIM. Tauri accepts either one line of
+          # base64 or the raw two-line minisign key file, and squeezing the
+          # whitespace out of it (as the Apple gate above safely does to values
+          # that cannot contain any) silently welds those two lines into one:
+          # the bundler then reports "Missing encoded key in secret key", which
+          # reads like a wrong password and is not. $GITHUB_ENV carries a
+          # multi-line value through its heredoc form, so neither shape needs
+          # touching. Only a trailing newline is trimmed, which `$(...)` already
+          # does for us.
           mask() { if [ -n "$1" ]; then echo "::add-mask::$1"; fi; }
+
+          # A multi-line value has to be masked line by line: GitHub masks
+          # literal strings, and it never sees the whole key as one.
+          mask_lines() { while IFS= read -r line; do mask "$line"; done <<< "$1"; }
 
           if [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
             if [ -z "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}" ] && [ "${{ github.ref_type }}" == "tag" ]; then
               echo "::error::TAURI_SIGNING_PRIVATE_KEY_PASSWORD is not set; a tag build with TAURI_SIGNING_PRIVATE_KEY configured needs its password too, or the bundler fails deep inside minisign with an opaque decrypt error"
               exit 1
             fi
-            signing_key="$(printf '%s' "$TAURI_SIGNING_PRIVATE_KEY" | tr -d '[:space:]')"
             signing_key_password="$(printf '%s' "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}" | tr -d '\r\n')"
-            mask "$signing_key"
+            mask_lines "$TAURI_SIGNING_PRIVATE_KEY"
             mask "$signing_key_password"
             {
-              echo "TAURI_SIGNING_PRIVATE_KEY=$signing_key"
+              echo "TAURI_SIGNING_PRIVATE_KEY<<TAURI_KEY_EOF"
+              printf '%s\n' "$TAURI_SIGNING_PRIVATE_KEY"
+              echo "TAURI_KEY_EOF"
               echo "TAURI_SIGNING_PRIVATE_KEY_PASSWORD=$signing_key_password"
             } >> "$GITHUB_ENV"
           elif [ "${{ github.ref_type }}" != "tag" ]; then
             echo "::notice::TAURI_SIGNING_PRIVATE_KEY is not configured; this dry run signs its updater artifacts with a throwaway key that no released app trusts"
             npx tauri signer generate -w "$RUNNER_TEMP/updater-dry-run.key" -f --ci
-            # Nothing this key signs is ever published, but it is still a private
-            # key printed into a public log if anything ever echoes it.
-            throwaway_key="$(tr -d '[:space:]' < "$RUNNER_TEMP/updater-dry-run.key")"
-            mask "$throwaway_key"
+            # Verbatim, for the reason the real-key branch above spells out: the
+            # generated file is the raw two-line key, and flattening it would
+            # make the bundler reject the key it just made. Nothing this key
+            # signs is ever published, but it is still a private key printed
+            # into a public log if anything ever echoes it.
+            throwaway_key="$(cat "$RUNNER_TEMP/updater-dry-run.key")"
+            mask_lines "$throwaway_key"
             {
-              echo "TAURI_SIGNING_PRIVATE_KEY=$throwaway_key"
+              echo "TAURI_SIGNING_PRIVATE_KEY<<TAURI_KEY_EOF"
+              printf '%s\n' "$throwaway_key"
+              echo "TAURI_KEY_EOF"
               echo "TAURI_SIGNING_PRIVATE_KEY_PASSWORD="
             } >> "$GITHUB_ENV"
           else
