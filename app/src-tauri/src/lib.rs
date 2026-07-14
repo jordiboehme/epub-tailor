@@ -8,7 +8,12 @@ pub fn run() {
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![])
+        .invoke_handler(tauri::generate_handler![
+            commands::expand_inputs,
+            commands::list_removable_volumes,
+            commands::is_appimage,
+            commands::ensure_covers_dir,
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

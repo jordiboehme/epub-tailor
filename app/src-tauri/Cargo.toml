@@ -27,3 +27,8 @@ tauri-plugin-process = "2"
 tauri-plugin-opener = "2"
 serde = { workspace = true }
 serde_json = { workspace = true }
+
+# Removable-drive detection (list_removable_volumes) on Windows: GetDriveTypeW
+# is the only reliable way to tell a USB stick from a fixed or network drive.
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.61", features = ["Win32_Storage_FileSystem"] }

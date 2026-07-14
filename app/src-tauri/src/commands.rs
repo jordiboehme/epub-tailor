@@ -3,3 +3,446 @@
 //! Placeholder for now: the workbench commands (running the sidecar, editing
 //! metadata, fetching covers) arrive in the next task and get registered in
 //! `lib.rs` via `tauri::generate_handler!`.
+
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
+
+use tauri::Manager;
+
+/// One file the workbench can queue: an EPUB or a Markdown source.
+#[derive(serde::Serialize)]
+pub struct InputEntry {
+    pub path: String,
+    /// `"epub"` or `"md"`.
+    pub kind: String,
+    pub size: u64,
+    pub modified_ms: u64,
+}
+
+/// Whether `path`'s extension is one this app converts, ASCII case-insensitive.
+fn classify(path: &Path) -> Option<&'static str> {
+    let ext = path.extension()?.to_str()?;
+    if ext.eq_ignore_ascii_case("epub") {
+        Some("epub")
+    } else if ext.eq_ignore_ascii_case("md") {
+        Some("md")
+    } else {
+        None
+    }
+}
+
+/// Whether an entry name starts a dotfile/dotdir - `.git`, `.DS_Store`, and
+/// AppleDouble `._*` siblings all start with `.`, so one check catches all
+/// three, matching `crates/cli/src/discover.rs`'s convention.
+fn is_dotted(name: &std::ffi::OsStr) -> bool {
+    name.to_string_lossy().starts_with('.')
+}
+
+/// Canonicalize, dedupe and, if `path` still qualifies, push an [`InputEntry`]
+/// for it. Any failure along the way (the entry vanished, permissions,
+/// whatever) just skips this one file rather than failing the batch.
+fn add_entry(path: &Path, seen: &mut HashSet<PathBuf>, out: &mut Vec<InputEntry>) {
+    let Some(kind) = classify(path) else {
+        return;
+    };
+    let Ok(canonical) = std::fs::canonicalize(path) else {
+        return;
+    };
+    if !seen.insert(canonical.clone()) {
+        return;
+    }
+    let Ok(metadata) = std::fs::metadata(path) else {
+        return;
+    };
+    let modified_ms = metadata
+        .modified()
+        .ok()
+        .and_then(|m| m.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    out.push(InputEntry {
+        path: canonical.display().to_string(),
+        kind: kind.to_string(),
+        size: metadata.len(),
+        modified_ms,
+    });
+}
+
+/// Walk `dir` for epub/md files: name-sorted, depth-first, dot entries and
+/// symlinks skipped, subfolders entered only when `recursive`. Mirrors
+/// `crates/cli/src/discover.rs`'s conventions so a folder dropped on the app
+/// discovers the same files the CLI's own batch mode would.
+fn walk_dir(dir: &Path, recursive: bool, seen: &mut HashSet<PathBuf>, out: &mut Vec<InputEntry>) {
+    let Ok(read_dir) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let mut entries: Vec<_> = read_dir.filter_map(Result::ok).collect();
+    entries.sort_by_key(|entry| entry.file_name());
+
+    for entry in entries {
+        if is_dotted(&entry.file_name()) {
+            continue;
+        }
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        // `file_type()` does not traverse links, so a symlink is reported as
+        // one rather than as its target - exactly what "never follow" needs.
+        if file_type.is_symlink() {
+            continue;
+        }
+        let path = entry.path();
+        if file_type.is_dir() {
+            if recursive {
+                walk_dir(&path, recursive, seen, out);
+            }
+        } else if file_type.is_file() {
+            add_entry(&path, seen, out);
+        }
+    }
+}
+
+/// Expand `paths` (files and/or folders, e.g. from a drag-and-drop) into the
+/// concrete epub/md files they name: a file passes through if its extension
+/// matches; a folder is scanned top-level only, unless `recursive`. A
+/// nonexistent path is skipped rather than failing the whole batch - the UI
+/// is expected to have validated the drop already. Entries are deduped by
+/// canonicalized path, so the same file passed twice (directly, and again via
+/// its containing folder) appears once.
+#[tauri::command]
+pub fn expand_inputs(paths: Vec<String>, recursive: bool) -> Result<Vec<InputEntry>, String> {
+    let mut seen = HashSet::new();
+    let mut out = Vec::new();
+
+    for raw in paths {
+        let path = PathBuf::from(raw);
+        // `symlink_metadata` does not follow a symlink, so a nonexistent
+        // target and a symlink are both visible here rather than silently
+        // resolved through.
+        let Ok(meta) = std::fs::symlink_metadata(&path) else {
+            continue;
+        };
+        if meta.file_type().is_symlink() {
+            continue;
+        }
+        if meta.is_dir() {
+            walk_dir(&path, recursive, &mut seen, &mut out);
+        } else if meta.is_file() {
+            add_entry(&path, &mut seen, &mut out);
+        }
+    }
+
+    Ok(out)
+}
+
+/// A removable volume the workbench can offer as a conversion destination.
+#[derive(serde::Serialize)]
+pub struct Volume {
+    pub name: String,
+    pub path: String,
+}
+
+/// macOS: every entry of `/Volumes` except the boot volume, which is really a
+/// symlink back to `/`.
+#[cfg(target_os = "macos")]
+fn list_removable_volumes_impl() -> Vec<Volume> {
+    let Ok(read_dir) = std::fs::read_dir("/Volumes") else {
+        return Vec::new();
+    };
+    let mut out: Vec<Volume> = read_dir
+        .filter_map(Result::ok)
+        .filter(|entry| {
+            std::fs::canonicalize(entry.path())
+                .map(|canonical| canonical != Path::new("/"))
+                .unwrap_or(false)
+        })
+        .map(|entry| Volume {
+            name: entry.file_name().to_string_lossy().to_string(),
+            path: entry.path().display().to_string(),
+        })
+        .collect();
+    out.sort_by(|a, b| a.name.cmp(&b.name));
+    out
+}
+
+/// Linux: the removable-media conventions used by udisks2/most desktop
+/// environments, deduped by canonical path since a distro may populate more
+/// than one of these for the same mount.
+#[cfg(target_os = "linux")]
+fn list_removable_volumes_impl() -> Vec<Volume> {
+    let user = std::env::var("USER").unwrap_or_default();
+    let mut roots = Vec::new();
+    if !user.is_empty() {
+        roots.push(PathBuf::from(format!("/run/media/{user}")));
+        roots.push(PathBuf::from(format!("/media/{user}")));
+    }
+    roots.push(PathBuf::from("/media"));
+
+    let mut seen = HashSet::new();
+    let mut out = Vec::new();
+    for root in roots {
+        let Ok(read_dir) = std::fs::read_dir(&root) else {
+            continue;
+        };
+        for entry in read_dir.filter_map(Result::ok) {
+            let path = entry.path();
+            let canonical = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
+            if !seen.insert(canonical) {
+                continue;
+            }
+            out.push(Volume {
+                name: entry.file_name().to_string_lossy().to_string(),
+                path: path.display().to_string(),
+            });
+        }
+    }
+    out.sort_by(|a, b| a.name.cmp(&b.name));
+    out
+}
+
+/// Windows: every drive letter whose type the firmware reports as removable.
+#[cfg(target_os = "windows")]
+fn list_removable_volumes_impl() -> Vec<Volume> {
+    use windows::Win32::Storage::FileSystem::{DRIVE_REMOVABLE, GetDriveTypeW};
+    use windows::core::PCWSTR;
+
+    let mut out = Vec::new();
+    for letter in b'A'..=b'Z' {
+        let root = format!("{}:\\", letter as char);
+        let wide: Vec<u16> = root.encode_utf16().chain(std::iter::once(0)).collect();
+        // SAFETY: `wide` is a valid, NUL-terminated UTF-16 string that outlives
+        // this call; `GetDriveTypeW` only reads through the pointer.
+        let drive_type = unsafe { GetDriveTypeW(PCWSTR(wide.as_ptr())) };
+        if drive_type == DRIVE_REMOVABLE {
+            out.push(Volume {
+                name: format!("{}:", letter as char),
+                path: root,
+            });
+        }
+    }
+    out
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+fn list_removable_volumes_impl() -> Vec<Volume> {
+    Vec::new()
+}
+
+/// List volumes a book could be copied to (a plugged-in e-reader, an SD card,
+/// ...). Never panics: any per-platform lookup failure just yields an empty
+/// list rather than crashing the app.
+#[tauri::command]
+pub fn list_removable_volumes() -> Vec<Volume> {
+    list_removable_volumes_impl()
+}
+
+/// Whether this build is running as an AppImage (Linux). Relevant to the
+/// updater: an AppImage replaces itself in place rather than going through an
+/// OS installer.
+#[tauri::command]
+pub fn is_appimage() -> bool {
+    std::env::var_os("APPIMAGE").is_some()
+}
+
+/// The cover cache directory (`<app cache dir>/covers`), created if it does
+/// not exist yet. TypeScript's `covers.ts` calls this instead of the app
+/// pulling in the (otherwise unused) fs plugin just to create one directory.
+#[tauri::command]
+pub fn ensure_covers_dir(app: tauri::AppHandle) -> Result<String, String> {
+    let dir = app
+        .path()
+        .app_cache_dir()
+        .map_err(|e| e.to_string())?
+        .join("covers");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    Ok(dir.display().to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::{Path, PathBuf};
+
+    use super::{InputEntry, expand_inputs, is_appimage};
+
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "epub-tailor-app-commands-{name}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create scratch dir");
+        dir
+    }
+
+    fn touch(path: &Path) {
+        std::fs::create_dir_all(path.parent().unwrap()).expect("create parent");
+        std::fs::write(path, b"hello").expect("write file");
+    }
+
+    fn file_names(entries: &[InputEntry]) -> Vec<String> {
+        let mut names: Vec<String> = entries
+            .iter()
+            .map(|e| {
+                Path::new(&e.path)
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .to_string()
+            })
+            .collect();
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn finds_top_level_files_case_insensitively_by_extension() {
+        let dir = scratch("flat");
+        touch(&dir.join("a.epub"));
+        touch(&dir.join("B.MD"));
+        touch(&dir.join("notes.txt"));
+
+        let entries = expand_inputs(vec![dir.display().to_string()], false).expect("expand_inputs");
+        let mut kinds: Vec<(String, String)> = entries
+            .iter()
+            .map(|e| {
+                (
+                    Path::new(&e.path)
+                        .file_name()
+                        .unwrap()
+                        .to_string_lossy()
+                        .to_string(),
+                    e.kind.clone(),
+                )
+            })
+            .collect();
+        kinds.sort();
+        assert_eq!(
+            kinds,
+            vec![
+                ("B.MD".to_string(), "md".to_string()),
+                ("a.epub".to_string(), "epub".to_string()),
+            ]
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn skips_dotfiles_dotdirs_and_appledouble_files() {
+        let dir = scratch("dots");
+        touch(&dir.join(".hidden/secret.epub"));
+        touch(&dir.join("._resource.epub"));
+        touch(&dir.join("visible.epub"));
+
+        let entries = expand_inputs(vec![dir.display().to_string()], true).expect("expand_inputs");
+        assert_eq!(file_names(&entries), vec!["visible.epub"]);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn recursive_walks_nested_dirs_non_recursive_does_not() {
+        let dir = scratch("recurse");
+        touch(&dir.join("top.epub"));
+        touch(&dir.join("sub/deep/nested.epub"));
+
+        let flat = expand_inputs(vec![dir.display().to_string()], false).expect("flat scan");
+        assert_eq!(file_names(&flat), vec!["top.epub"]);
+
+        let deep = expand_inputs(vec![dir.display().to_string()], true).expect("recursive scan");
+        assert_eq!(file_names(&deep), vec!["nested.epub", "top.epub"]);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn never_follows_symlinked_dirs_or_files() {
+        let dir = scratch("symlinks");
+        touch(&dir.join("real/linked.epub"));
+        touch(&dir.join("plain.epub"));
+        std::os::unix::fs::symlink(dir.join("real"), dir.join("linked-dir")).expect("dir link");
+        std::os::unix::fs::symlink(dir.join("plain.epub"), dir.join("alias.epub"))
+            .expect("file link");
+
+        let entries = expand_inputs(vec![dir.display().to_string()], true).expect("expand_inputs");
+        assert_eq!(file_names(&entries), vec!["linked.epub", "plain.epub"]);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn dedupes_a_file_passed_directly_and_via_its_folder() {
+        let dir = scratch("dedupe");
+        touch(&dir.join("dup.epub"));
+
+        let entries = expand_inputs(
+            vec![
+                dir.join("dup.epub").display().to_string(),
+                dir.display().to_string(),
+            ],
+            false,
+        )
+        .expect("expand_inputs");
+        assert_eq!(file_names(&entries), vec!["dup.epub"]);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn skips_nonexistent_paths_silently() {
+        let dir = scratch("missing");
+
+        let entries = expand_inputs(vec![dir.join("nope.epub").display().to_string()], false)
+            .expect("expand_inputs should not error on a missing path");
+        assert!(entries.is_empty());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn collects_size_and_a_recent_modified_time() {
+        let dir = scratch("stat");
+        touch(&dir.join("book.epub"));
+
+        let entries = expand_inputs(vec![dir.display().to_string()], false).expect("expand_inputs");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].size, 5); // "hello"
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+        // Written moments ago; allow generous slack for a slow CI disk.
+        assert!(entries[0].modified_ms > 0);
+        assert!(entries[0].modified_ms <= now_ms);
+        assert!(now_ms - entries[0].modified_ms < 60_000);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn is_appimage_reflects_the_env_var() {
+        // SAFETY: this test crate is single-threaded per test binary process
+        // for env var mutation purposes here; no other test reads APPIMAGE.
+        unsafe {
+            std::env::remove_var("APPIMAGE");
+        }
+        assert!(!is_appimage());
+
+        unsafe {
+            std::env::set_var("APPIMAGE", "/path/to/App.AppImage");
+        }
+        assert!(is_appimage());
+
+        unsafe {
+            std::env::remove_var("APPIMAGE");
+        }
+    }
+
+    #[test]
+    fn list_removable_volumes_does_not_panic() {
+        // A smoke test: whatever this machine has plugged in, the call must
+        // return rather than panic.
+        let _ = super::list_removable_volumes();
+    }
+}
