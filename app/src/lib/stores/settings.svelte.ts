@@ -14,6 +14,26 @@ export type { WindowGeometry };
 const STORE_FILE = "settings.json";
 const AUTOSAVE_DEBOUNCE_MS = 300;
 
+// The numeric settings, with the range each one is only ever allowed to hold.
+// settings.json is a file: it can be hand-edited, truncated by a bad shutdown
+// or simply carry a value from a future version. A parallelism of 0 read back
+// unchecked hands the job pump zero slots forever - a batch stuck at "0 of N"
+// with nothing ever starting - and a split level of 7 is a CLI argument error
+// per Markdown book. Neither is worth a dialog; both are worth a clamp.
+const DEFAULT_PARALLELISM = 3;
+const MIN_PARALLELISM = 1;
+const MAX_PARALLELISM = 8;
+
+const DEFAULT_SPLIT_LEVEL = 1;
+const MIN_SPLIT_LEVEL = 1;
+const MAX_SPLIT_LEVEL = 2;
+
+/** A persisted number, forced into `[min, max]`, or `fallback` if it is not a number at all. */
+function clampInt(value: unknown, min: number, max: number, fallback: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
+  return Math.min(max, Math.max(min, Math.round(value)));
+}
+
 class SettingsStore {
   // -- persisted --------------------------------------------------------------
   /** Selected built-in profile name. */
@@ -29,11 +49,11 @@ class SettingsStore {
   /** Table handling override, or `null` for the profile default. */
   tables = $state<string | null>(null);
   /** Heading level a Markdown book splits chapters on: 1 or 2 (the CLI's default is 1). */
-  mdSplitLevel = $state(1);
+  mdSplitLevel = $state(DEFAULT_SPLIT_LEVEL);
   /** Walk subfolders when a dropped folder is expanded. */
   recursive = $state(true);
   /** How many conversions run at once. */
-  parallelism = $state(3);
+  parallelism = $state(DEFAULT_PARALLELISM);
   /** Where the window was, and how big, when it was last moved or resized. */
   windowGeometry = $state<WindowGeometry | null>(null);
 
@@ -57,9 +77,19 @@ class SettingsStore {
     this.filenameTemplate = (await store.get<string>("filenameTemplate")) ?? this.filenameTemplate;
     this.quality = (await store.get<string | null>("quality")) ?? this.quality;
     this.tables = (await store.get<string | null>("tables")) ?? this.tables;
-    this.mdSplitLevel = (await store.get<number>("mdSplitLevel")) ?? this.mdSplitLevel;
+    this.mdSplitLevel = clampInt(
+      await store.get<number>("mdSplitLevel"),
+      MIN_SPLIT_LEVEL,
+      MAX_SPLIT_LEVEL,
+      DEFAULT_SPLIT_LEVEL,
+    );
     this.recursive = (await store.get<boolean>("recursive")) ?? this.recursive;
-    this.parallelism = (await store.get<number>("parallelism")) ?? this.parallelism;
+    this.parallelism = clampInt(
+      await store.get<number>("parallelism"),
+      MIN_PARALLELISM,
+      MAX_PARALLELISM,
+      DEFAULT_PARALLELISM,
+    );
     this.windowGeometry = (await store.get<WindowGeometry>("windowGeometry")) ?? null;
     this.#store = store;
     this.ready = true;
