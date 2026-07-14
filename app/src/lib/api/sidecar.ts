@@ -18,7 +18,9 @@ export interface SidecarResult {
 }
 
 function spawnOptions(env?: Record<string, string>): SpawnOptions | undefined {
-  return env ? { env } : undefined;
+  // Copied for the same reason as the argv copies below: `env` may one day be
+  // read out of a Svelte $state store too, and a proxy must never reach here.
+  return env ? { env: { ...env } } : undefined;
 }
 
 /** Run the sidecar once, waiting for it to exit. For commands that print one document and stop. */
@@ -26,7 +28,14 @@ export async function runSidecar(
   argv: string[],
   opts?: { env?: Record<string, string> },
 ): Promise<SidecarResult> {
-  const command = Command.sidecar(SIDECAR, argv, spawnOptions(opts?.env));
+  // Callers (e.g. the job store) may hand us a `job.argv` that lives inside a
+  // Svelte 5 `$state` array - Svelte deep-proxies it, and passing that proxy
+  // straight into `Command.sidecar` makes `spawn()`/`execute()` reject with
+  // Svelte's "state_descriptors_fixed" proxy-trap error. Copy into a fresh
+  // plain array here, at the choke point, so a proxy never crosses into the
+  // Tauri IPC layer (elements are primitives, so a shallow copy fully de-proxies).
+  const args = [...argv];
+  const command = Command.sidecar(SIDECAR, args, spawnOptions(opts?.env));
   const output = await command.execute();
   return { code: output.code, stdout: output.stdout, stderr: output.stderr };
 }
@@ -49,7 +58,9 @@ export function spawnSidecar(
   opts?: { env?: Record<string, string>; onStderrLine?: (line: string) => void },
 ): Promise<SidecarHandle> {
   return new Promise((resolve, reject) => {
-    const command = Command.sidecar(SIDECAR, argv, spawnOptions(opts?.env));
+    // See runSidecar: de-proxy argv before it reaches Command.sidecar.
+    const args = [...argv];
+    const command = Command.sidecar(SIDECAR, args, spawnOptions(opts?.env));
 
     const stdoutLines: string[] = [];
     const stderrTail: string[] = [];
