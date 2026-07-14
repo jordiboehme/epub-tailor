@@ -541,9 +541,8 @@ mod tests {
 
     #[test]
     fn xml_and_epub_prefixes_survive_hardening() {
-        let out = round(
-            br#"<html><body><p xml:lang="de" epub:type="pagebreak">x</p></body></html>"#,
-        );
+        let out =
+            round(br#"<html><body><p xml:lang="de" epub:type="pagebreak">x</p></body></html>"#);
         assert!(out.contains(r#"xml:lang="de""#), "got: {out}");
         assert!(out.contains(r#"epub:type="pagebreak""#), "got: {out}");
         assert_strict_xml(&out);

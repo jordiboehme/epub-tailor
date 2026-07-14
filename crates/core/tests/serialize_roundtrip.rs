@@ -137,13 +137,15 @@ fn foreign_strategy() -> impl Strategy<Value = Node> {
                 0..3,
             ),
         )
-            .prop_map(move |(declare_ns, declare_xlink, attrs, children)| Node::Foreign {
-                kind,
-                declare_ns,
-                declare_xlink,
-                attrs,
-                children,
-            })
+            .prop_map(
+                move |(declare_ns, declare_xlink, attrs, children)| Node::Foreign {
+                    kind,
+                    declare_ns,
+                    declare_xlink,
+                    attrs,
+                    children,
+                },
+            )
     })
 }
 

@@ -8,9 +8,7 @@
 mod common;
 
 use common::build_epub;
-use epub_tailor_core::{
-    ConvertOptions, Features, Input, convert, find_invalid_qname, lint_epub,
-};
+use epub_tailor_core::{ConvertOptions, Features, Input, convert, find_invalid_qname, lint_epub};
 
 const CONTAINER_XML: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
 <container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">

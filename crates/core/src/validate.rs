@@ -1357,10 +1357,7 @@ mod tests {
     #[test]
     fn qname_scan_finds_corrupt_colon_xmlns_with_its_line() {
         let text = "<html xmlns=\"http://www.w3.org/1999/xhtml\">\n<body>\n<svg :xmlns=\"http://www.w3.org/2000/svg\"></svg>\n</body></html>";
-        assert_eq!(
-            find_invalid_qname(text),
-            Some((":xmlns".to_string(), 3))
-        );
+        assert_eq!(find_invalid_qname(text), Some((":xmlns".to_string(), 3)));
     }
 
     #[test]
@@ -1385,7 +1382,8 @@ mod tests {
 
     #[test]
     fn qname_scan_steps_over_a_doctype_internal_subset() {
-        let text = "<!DOCTYPE html [ <!ENTITY nbsp \"&#160;\"> ]>\n<html><body><p>ok</p></body></html>";
+        let text =
+            "<!DOCTYPE html [ <!ENTITY nbsp \"&#160;\"> ]>\n<html><body><p>ok</p></body></html>";
         assert_eq!(find_invalid_qname(text), None);
     }
 
