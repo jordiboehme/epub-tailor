@@ -24,10 +24,20 @@ export function coverCacheKey(path: string, size: number, modifiedMs: number): s
   return (hash >>> 0).toString(16).padStart(8, "0");
 }
 
-/** The on-disk path for `key`'s cached cover, creating the cache dir if needed. */
-export async function coverCachePath(key: string): Promise<string> {
+/**
+ * The on-disk path for `key`'s cached cover, creating the cache dir if needed.
+ *
+ * The extension matters whenever the CLI is going to *read* the file back:
+ * `fit --cover` infers the media type it declares in the manifest from the
+ * extension alone (`media_type_for`, crates/cli/src/main.rs), so a cover staged
+ * for an edit has to be named for what it is - `.img` would be embedded as
+ * image/jpeg whatever the bytes really were, which is an invalid EPUB the app's
+ * own Check would then flag. The default is the neutral `.img` used by covers
+ * that only ever go the other way, into the webview, which sniffs the bytes.
+ */
+export async function coverCachePath(key: string, extension = "img"): Promise<string> {
   const dir = await invoke<string>("ensure_covers_dir");
-  return join(dir, `${key}.img`);
+  return join(dir, `${key}.${extension}`);
 }
 
 /**

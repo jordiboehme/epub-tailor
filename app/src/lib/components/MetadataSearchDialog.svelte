@@ -65,6 +65,11 @@
     return `fetched-${ref.replace(/[^a-zA-Z0-9]+/g, "-")}`;
   }
 
+  // Open Library serves its covers as JPEG, and the file this stages is read
+  // back by `fit --cover`, which reads the media type off the extension - so
+  // the cached copy is named .jpg, not the neutral .img (see api/covers).
+  const COVER_EXTENSION = "jpg";
+
   /** Back to the results list, leaving the failed fetch's message behind. */
   function back() {
     chosen = null;
@@ -80,7 +85,9 @@
     accepting = true;
     error = null;
     try {
-      const coverOut = includeCover ? await coverCachePath(coverKey(chosen.ref)) : undefined;
+      const coverOut = includeCover
+        ? await coverCachePath(coverKey(chosen.ref), COVER_EXTENSION)
+        : undefined;
       const outcome = await fetchRecord(chosen.ref, coverOut);
       if (!outcome.ok) {
         error = outcome.message;
