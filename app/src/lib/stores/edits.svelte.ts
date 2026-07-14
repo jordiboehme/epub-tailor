@@ -87,6 +87,20 @@ class EditsStore {
     this.#map = next;
   }
 
+  /**
+   * A plain, de-proxied edits lookup for the given books - the shape runFit
+   * wants. Snapshotting here is the one place a $state proxy is unwrapped before
+   * it can drift toward the sidecar IPC boundary.
+   */
+  snapshotFor(bookIds: string[]): Record<string, StagedEdits> {
+    const out: Record<string, StagedEdits> = {};
+    for (const id of bookIds) {
+      const staged = this.#map.get(id);
+      if (staged) out[id] = $state.snapshot(staged) as StagedEdits;
+    }
+    return out;
+  }
+
   /** Clear the given books' edits, or every book's when no ids are given. */
   clear(bookIds?: string[]): void {
     if (bookIds === undefined) {

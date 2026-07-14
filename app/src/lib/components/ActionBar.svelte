@@ -1,7 +1,6 @@
 <script lang="ts">
   import { resolvePlans } from "../api/plan";
   import type { RunOptions } from "../api/argv";
-  import type { StagedEdits } from "../api/edits";
   import { books, toTemplateBook } from "../stores/books.svelte";
   import { jobs } from "../stores/jobs.svelte";
   import { edits } from "../stores/edits.svelte";
@@ -31,16 +30,6 @@
     return books.selected.length ? [...books.selected] : [...books.books];
   }
 
-  /** A plain, de-proxied per-book edits lookup for the books in this run. */
-  function editsLookup(items: { id: string }[]): Record<string, StagedEdits> {
-    const lookup: Record<string, StagedEdits> = {};
-    for (const item of items) {
-      const staged = edits.get(item.id);
-      if (staged) lookup[item.id] = $state.snapshot(staged) as StagedEdits;
-    }
-    return lookup;
-  }
-
   function check() {
     const items = targets();
     if (items.length === 0) return;
@@ -67,7 +56,7 @@
         appendix,
       });
 
-      jobs.runFit(items, plans, opts, editsLookup(items));
+      jobs.runFit(items, plans, opts, edits.snapshotFor(items.map((b) => b.id)));
     } finally {
       starting = false;
     }

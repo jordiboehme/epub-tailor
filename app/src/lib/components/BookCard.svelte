@@ -4,6 +4,7 @@
   import { books } from "../stores/books.svelte";
   import type { Book } from "../stores/books.svelte";
   import { jobs } from "../stores/jobs.svelte";
+  import { edits } from "../stores/edits.svelte";
   import type { Stats } from "../api/contract";
 
   let { book }: { book: Book } = $props();
@@ -12,6 +13,7 @@
   let showFindings = $state(false);
 
   const selected = $derived(books.selectedIds.has(book.id));
+  const edited = $derived(edits.hasEdits(book.id));
   const job = $derived(jobs.conversionJobFor(book.id));
   const running = $derived(job?.state === "running");
   const queued = $derived(job?.state === "queued");
@@ -105,13 +107,24 @@
       </div>
     {/if}
 
-    {#if book.kind === "md"}
-      <span
-        class="absolute left-1.5 top-1.5 rounded bg-zinc-900/70 px-1 py-0.5 text-[10px] font-medium uppercase tracking-wide text-white"
-      >
-        md
-      </span>
-    {/if}
+    <div class="absolute left-1.5 top-1.5 flex flex-col items-start gap-1">
+      {#if book.kind === "md"}
+        <span class="rounded bg-zinc-900/70 px-1 py-0.5 text-[10px] font-medium uppercase tracking-wide text-white">
+          md
+        </span>
+      {/if}
+      {#if edited}
+        <span
+          title="Has staged metadata edits, written on the next Tailor"
+          class="inline-flex items-center gap-0.5 rounded bg-indigo-600/85 px-1 py-0.5 text-[10px] font-medium text-white"
+        >
+          <svg class="h-2.5 w-2.5" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M13.5 4.5l2 2L8 14l-3 1 1-3 7.5-7.5z" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
+          edited
+        </span>
+      {/if}
+    </div>
 
     <!-- Running veil -->
     {#if running}

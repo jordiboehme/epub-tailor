@@ -4,6 +4,7 @@
   import ProfilePicker from "./ProfilePicker.svelte";
   import OutputPicker from "./OutputPicker.svelte";
   import TemplateField from "./TemplateField.svelte";
+  import MetadataEditor from "./MetadataEditor.svelte";
   import ConfirmDialog from "./ConfirmDialog.svelte";
   import Toggle from "./ui/Toggle.svelte";
   import Select from "./ui/Select.svelte";
@@ -31,6 +32,11 @@
 </script>
 
 <div class="flex flex-col text-sm">
+  <section class="border-b border-zinc-200 px-4 py-4 dark:border-zinc-800">
+    <h3 class="mb-2.5 text-[11px] font-semibold uppercase tracking-wide text-zinc-400">Metadata</h3>
+    <MetadataEditor />
+  </section>
+
   <section class="border-b border-zinc-200 px-4 py-4 dark:border-zinc-800">
     <h3 class="mb-2 text-[11px] font-semibold uppercase tracking-wide text-zinc-400">Profile</h3>
     <ProfilePicker />
