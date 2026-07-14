@@ -56,9 +56,20 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "createUpdaterArtifacts": false,
+    "createUpdaterArtifacts": true,
     "macOS": {
       "minimumSystemVersion": "10.15"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEJCNDg0NDY5ODI0QjIyODQKUldTRUlrdUNhVVJJdStOa0VVNFE5NDZMR3NaTVF0TERZODNRcjdqYjVuSDlvOUc4eWx0TzNUT3cK",
+      "endpoints": [
+        "https://github.com/jordiboehme/epub-tailor/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
     }
   }
 }

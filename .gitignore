@@ -22,3 +22,9 @@ app/dist/
 app/src-tauri/binaries/*
 !app/src-tauri/binaries/.gitkeep
 app/src-tauri/gen/
+
+# updater signing keys. The PUBLIC key belongs in tauri.conf.json (and is in
+# there); the private key and its password are GitHub secrets and must never
+# land in the repo, not even for a minute.
+*.key
+*.key.pub

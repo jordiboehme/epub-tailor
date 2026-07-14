@@ -33,8 +33,13 @@ serde_json = { workspace = true }
 # Windows/Linux file-association launch reach the one process that handles it.
 # Target-gated as the plugin's own docs prescribe - it is a desktop-only plugin,
 # and the `cfg` here is the exact one `lib.rs` gates its registration on.
+#
+# tauri-plugin-updater carries the same gate for the same reason: the updater is
+# a desktop concern (the mobile stores own updates there), and its own install
+# instructions prescribe exactly this cfg.
 [target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]
 tauri-plugin-single-instance = "2"
+tauri-plugin-updater = "2"
 
 # Removable-drive detection (list_removable_volumes) on Windows: GetDriveTypeW
 # is the only reliable way to tell a USB stick from a fixed or network drive.

@@ -29,6 +29,16 @@ pub fn run() {
         }));
     }
 
+    // Desktop-only, with the same cfg its Cargo dependency carries: the updater
+    // pulls the signed `.app.tar.gz`/NSIS/AppImage artifact the release
+    // workflow publishes, and there is no such thing on mobile. Registration is
+    // all the Rust side needs - the check/download/install flow is driven from
+    // the frontend (`UpdateBanner.svelte`).
+    #[cfg(any(target_os = "macos", windows, target_os = "linux"))]
+    {
+        builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
+    }
+
     builder
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())

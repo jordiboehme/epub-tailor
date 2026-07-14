@@ -9,6 +9,7 @@
     "dialog:default",
     "store:default",
     "process:default",
+    "updater:default",
     "opener:allow-reveal-item-in-dir",
     {
       "identifier": "shell:allow-execute",

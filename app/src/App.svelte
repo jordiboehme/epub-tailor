@@ -9,6 +9,7 @@
   import { restoreGeometry, trackGeometry } from "./lib/api/window";
   import Workbench from "./lib/components/Workbench.svelte";
   import DropZone from "./lib/components/DropZone.svelte";
+  import UpdateBanner from "./lib/components/UpdateBanner.svelte";
 
   let dragging = $state(false);
   let loadWarning = $state<string | null>(null);
@@ -99,6 +100,8 @@
 </script>
 
 <main class="flex h-full flex-col bg-zinc-50 text-zinc-800 dark:bg-zinc-950 dark:text-zinc-200">
+  <UpdateBanner />
+
   {#if loadWarning}
     <div
       class="flex shrink-0 items-start gap-2 border-b border-amber-200 bg-amber-50 px-4 py-2 text-[12px] leading-snug text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200"
