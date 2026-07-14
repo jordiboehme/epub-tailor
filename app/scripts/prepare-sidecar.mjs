@@ -56,7 +56,7 @@ function resolveTriple(cargo, childEnv) {
     return { triple: argv[flag + 1], explicit: true };
   }
   if (process.env.TAURI_ENV_TARGET_TRIPLE) {
-    return { triple: process.env.TAURI_ENV_TARGET_TRIPLE, explicit: false };
+    return { triple: process.env.TAURI_ENV_TARGET_TRIPLE, explicit: true };
   }
   const rustc =
     cargo === "cargo" ? "rustc" : join(dirname(cargo), `rustc${exe}`);
