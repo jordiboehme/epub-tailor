@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { mergeDocIntoEdits } from "../lib/api/edits";
+import { mergeDocIntoEdits, mergeEditsIntoMeta } from "../lib/api/edits";
 import type { StagedEdits } from "../lib/api/edits";
+import type { BookMeta } from "../lib/api/meta";
 import type { MetadataDoc } from "../lib/api/contract";
 
 const all = new Set([
@@ -104,5 +105,49 @@ describe("mergeDocIntoEdits", () => {
   it("maps series_index onto seriesIndex and cover onto coverPath", () => {
     const doc: MetadataDoc = { series_index: "3", cover: "/c.img" };
     expect(mergeDocIntoEdits({}, doc, all)).toEqual({ seriesIndex: "3", coverPath: "/c.img" });
+  });
+});
+
+describe("mergeEditsIntoMeta", () => {
+  const base: BookMeta = {
+    title: "Old Title",
+    authors: ["Old Author"],
+    subjects: [],
+    missing: ["title", "publisher", "subjects"],
+  };
+
+  it("overlays the written fields and drops what they filled from missing", () => {
+    const merged = mergeEditsIntoMeta(base, {
+      title: "New Title",
+      publisher: "New Press",
+      subjects: ["Fantasy"],
+    });
+    expect(merged.title).toBe("New Title");
+    expect(merged.publisher).toBe("New Press");
+    expect(merged.subjects).toEqual(["Fantasy"]);
+    expect(merged.missing).toEqual([]);
+  });
+
+  it("keeps a field the edits do not mention", () => {
+    const merged = mergeEditsIntoMeta(base, { publisher: "New Press" });
+    expect(merged.title).toBe("Old Title");
+    expect(merged.authors).toEqual(["Old Author"]);
+    expect(merged.missing).toEqual(["title", "subjects"]);
+  });
+
+  it("builds a sane meta from nothing", () => {
+    const merged = mergeEditsIntoMeta(undefined, { title: "Fresh" });
+    expect(merged.title).toBe("Fresh");
+    expect(merged.authors).toEqual([]);
+    expect(merged.subjects).toEqual([]);
+    expect(merged.missing).toEqual([]);
+  });
+
+  it("does not clear missing for fields with no missing-name (series index, language, cover)", () => {
+    const meta: BookMeta = { authors: [], subjects: [], missing: ["title"] };
+    const merged = mergeEditsIntoMeta(meta, { seriesIndex: "2", language: "en", coverPath: "/c.img" });
+    expect(merged.seriesIndex).toBe("2");
+    expect(merged.language).toBe("en");
+    expect(merged.missing).toEqual(["title"]);
   });
 });
