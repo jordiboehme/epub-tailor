@@ -27,6 +27,49 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y epubcheck
       - run: cargo test --workspace --exclude epub-tailor-app
 
+  # The desktop app, kept in its own job so the matrix above stays quick: this
+  # one needs Node, a webview toolchain and a built frontend before cargo can so
+  # much as look at the crate.
+  app:
+    name: desktop app
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Install Linux webview dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev \
+            libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable branch
+        with:
+          toolchain: stable
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          key: app
+      - run: npm ci
+        working-directory: app
+      - run: npm run check
+        working-directory: app
+      - run: npx vitest run
+        working-directory: app
+      # Two things the Rust crate cannot compile without, and neither is in git:
+      # `tauri::generate_context!` embeds ../dist, and tauri-build resolves the
+      # sidecar under src-tauri/binaries/ (prepare-sidecar builds the CLI and
+      # puts it there). Without them the build script fails before clippy has an
+      # opinion about anything.
+      - run: npm run build
+        working-directory: app
+      - run: npm run prepare-sidecar
+        working-directory: app
+      - run: cargo clippy -p epub-tailor-app --all-targets -- -D warnings
+      - run: cargo test -p epub-tailor-app
+
   deny:
     runs-on: ubuntu-24.04
     steps:
