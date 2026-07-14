@@ -45,7 +45,7 @@ pub use html::{
     serialize_xhtml, transform_chapter,
 };
 pub use markdown::{AssetResolver, FsResolver};
-pub use metadata::{MergeMode, MetadataDoc};
+pub use metadata::{ClearField, MergeMode, MetadataDoc};
 pub use options::{ConvertOptions, CoverImage, TableMode};
 pub use profile::{DeviceCaps, Features, Profile, ProfileError};
 pub use report::{ConvertReport, ConvertStats, Transformation, Warning};
@@ -150,6 +150,17 @@ pub fn convert(input: Input, opts: &ConvertOptions) -> Result<Converted, Convert
             opts.metadata_merge,
             &mut transformations,
             &mut warnings,
+        );
+    }
+    // Explicit clears run after the merge: `--clear` is a flag, and a flag is
+    // the most specific thing the user can say, so a cleared field stays
+    // cleared whatever the document carries - and a `fill` document can never
+    // quietly refill a field the user just asked to remove.
+    if !opts.metadata_clears.is_empty() {
+        metadata::apply_clears(
+            &opts.metadata_clears,
+            &mut book.metadata,
+            &mut transformations,
         );
     }
     // A supplied cover arrives as bytes, not a path: this crate never touches

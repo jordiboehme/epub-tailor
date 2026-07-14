@@ -97,6 +97,87 @@ pub enum MergeMode {
     Replace,
 }
 
+/// A metadata field `--clear` may remove from the book.
+///
+/// Title, language and the identifiers are deliberately absent: a book must
+/// keep a title and a language to stay a valid EPUB, and identifiers key a
+/// reading system's library and reading position - the same reasons [`apply`]
+/// refuses to replace them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClearField {
+    Authors,
+    Series,
+    SeriesIndex,
+    Publisher,
+    Description,
+    Date,
+    Subjects,
+}
+
+/// Remove the named fields from `metadata`, recording a transformation for
+/// each one that actually held a value. Clearing what is not there is a quiet
+/// no-op, so a batch can clear the same field across books that do and do not
+/// have it. Runs *after* [`apply`]: an explicit clear is the most specific
+/// thing the user can say about a field, so it wins over any document.
+pub fn apply_clears(
+    fields: &[ClearField],
+    metadata: &mut Metadata,
+    transformations: &mut Vec<Transformation>,
+) {
+    let cleared = |field: &str, transformations: &mut Vec<Transformation>| {
+        transformations.push(Transformation {
+            kind: "metadata-clear".to_string(),
+            detail: format!("removed {field}"),
+            file: None,
+        });
+    };
+    for field in fields {
+        match field {
+            ClearField::Authors => {
+                if !metadata.authors.is_empty() {
+                    metadata.authors.clear();
+                    cleared("authors", transformations);
+                }
+            }
+            ClearField::Series => {
+                // The index lives inside the series; removing the series
+                // removes it too, which is the only coherent reading.
+                if metadata.series.take().is_some() {
+                    cleared("series", transformations);
+                }
+            }
+            ClearField::SeriesIndex => {
+                if let Some(series) = metadata.series.as_mut()
+                    && series.index.take().is_some()
+                {
+                    cleared("series index", transformations);
+                }
+            }
+            ClearField::Publisher => {
+                if metadata.publisher.take().is_some() {
+                    cleared("publisher", transformations);
+                }
+            }
+            ClearField::Description => {
+                if metadata.description.take().is_some() {
+                    cleared("description", transformations);
+                }
+            }
+            ClearField::Date => {
+                if metadata.date.take().is_some() {
+                    cleared("date", transformations);
+                }
+            }
+            ClearField::Subjects => {
+                if !metadata.subjects.is_empty() {
+                    metadata.subjects.clear();
+                    cleared("subjects", transformations);
+                }
+            }
+        }
+    }
+}
+
 impl MetadataDoc {
     /// Whether this document says anything at all.
     pub fn is_empty(&self) -> bool {

@@ -11,7 +11,7 @@ mod common;
 use std::io::{Cursor, Read};
 
 use common::build_epub;
-use epub_tailor_core::metadata::{MergeMode, MetadataDoc};
+use epub_tailor_core::metadata::{ClearField, MergeMode, MetadataDoc};
 use epub_tailor_core::profile::resolve;
 use epub_tailor_core::{ConvertOptions, Input, convert, read_epub};
 use zip::ZipArchive;
@@ -348,4 +348,78 @@ fn fill_mode_will_not_overwrite_a_publisher_the_book_already_has() {
         Some("Allen & Unwin"),
         "fill mode must not clobber the book's own publisher"
     );
+}
+
+#[test]
+fn clears_remove_fields_and_survive_the_rewrite() {
+    let mut opts = ConvertOptions {
+        features: epub_tailor_core::profile::Features::repair_only(),
+        ..ConvertOptions::default()
+    };
+    opts.metadata_clears = vec![
+        ClearField::Publisher,
+        ClearField::Series,
+        ClearField::Subjects,
+    ];
+
+    let converted =
+        convert(Input::Epub(epub_with_rich_metadata()), &opts).expect("conversion succeeds");
+    let book = read_epub(&converted.epub).expect("reads back").book;
+    assert_eq!(book.metadata.publisher, None);
+    assert!(book.metadata.series.is_none());
+    assert!(book.metadata.subjects.is_empty());
+    // Fields not named stay put.
+    assert_eq!(book.metadata.date.as_deref(), Some("1937-09-21"));
+    assert_eq!(book.metadata.title, "The Rich Book");
+    assert_eq!(book.metadata.authors.len(), 1);
+}
+
+#[test]
+fn clearing_the_series_index_keeps_the_series() {
+    let mut opts = ConvertOptions {
+        features: epub_tailor_core::profile::Features::repair_only(),
+        ..ConvertOptions::default()
+    };
+    opts.metadata_clears = vec![ClearField::SeriesIndex];
+
+    let converted =
+        convert(Input::Epub(epub_with_rich_metadata()), &opts).expect("conversion succeeds");
+    let book = read_epub(&converted.epub).expect("reads back").book;
+    let series = book.metadata.series.expect("the series itself survives");
+    assert_eq!(series.name, "The Hobbit Cycle");
+    assert_eq!(series.index, None);
+}
+
+#[test]
+fn a_clear_beats_the_document() {
+    let mut opts = ConvertOptions {
+        features: epub_tailor_core::profile::Features::repair_only(),
+        ..ConvertOptions::default()
+    };
+    opts.metadata = MetadataDoc::parse("publisher: A New Guess").expect("doc parses");
+    opts.metadata_merge = MergeMode::Replace;
+    opts.metadata_clears = vec![ClearField::Publisher];
+
+    let converted =
+        convert(Input::Epub(epub_with_rich_metadata()), &opts).expect("conversion succeeds");
+    let book = read_epub(&converted.epub).expect("reads back").book;
+    assert_eq!(
+        book.metadata.publisher, None,
+        "an explicit --clear is the most specific thing the user can say; it wins over the document"
+    );
+}
+
+#[test]
+fn clearing_an_absent_field_is_a_quiet_no_op() {
+    let mut opts = ConvertOptions {
+        features: epub_tailor_core::profile::Features::repair_only(),
+        ..ConvertOptions::default()
+    };
+    opts.metadata_clears = vec![ClearField::Publisher, ClearField::Series];
+
+    let converted =
+        convert(Input::Epub(epub_with_bare_metadata()), &opts).expect("conversion succeeds");
+    let book = read_epub(&converted.epub).expect("reads back").book;
+    assert_eq!(book.metadata.publisher, None);
+    assert!(book.metadata.series.is_none());
 }

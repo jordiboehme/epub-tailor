@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::filter::FilterRule;
-use crate::metadata::{MergeMode, MetadataDoc};
+use crate::metadata::{ClearField, MergeMode, MetadataDoc};
 use crate::profile::{DeviceCaps, Features};
 
 /// User-facing knobs controlling how a conversion is performed.
@@ -27,6 +27,9 @@ pub struct ConvertOptions {
     /// Whether [`Self::metadata`] fills only the gaps (the default) or
     /// overwrites.
     pub metadata_merge: MergeMode,
+    /// Fields to remove from the book, applied after [`Self::metadata`] so an
+    /// explicit clear always wins. Empty by default.
+    pub metadata_clears: Vec<ClearField>,
     /// A cover image to embed, already read from disk by the caller. This crate
     /// never opens a file (nor a socket), so a cover arrives as bytes.
     pub cover_image: Option<CoverImage>,
@@ -62,6 +65,7 @@ impl Default for ConvertOptions {
             dry_run: false,
             metadata: MetadataDoc::default(),
             metadata_merge: MergeMode::Fill,
+            metadata_clears: Vec::new(),
             cover_image: None,
             output_stamp: None,
         }
