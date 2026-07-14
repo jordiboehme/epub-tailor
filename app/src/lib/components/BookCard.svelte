@@ -6,6 +6,7 @@
   import type { Book } from "../stores/books.svelte";
   import { jobs } from "../stores/jobs.svelte";
   import { edits } from "../stores/edits.svelte";
+  import { countEdits } from "../api/edits";
   import {
     bookInitials,
     bookSubtitle,
@@ -34,15 +35,17 @@
   });
 
   const selected = $derived(books.selectedIds.has(book.id));
-  const edited = $derived(edits.hasEdits(book.id));
+  const staged = $derived(edits.get(book.id));
+  const edited = $derived(staged !== undefined);
+  const editCount = $derived(staged ? countEdits(staged) : 0);
   const job = $derived(jobs.conversionJobFor(book.id));
   const running = $derived(job?.state === "running");
   const queued = $derived(job?.state === "queued");
   const unreadable = $derived(book.ingest === "failed");
 
   const stem = $derived(stemOf(book.fileName));
-  const title = $derived(bookTitle(book));
-  const subtitle = $derived(bookSubtitle(book));
+  const title = $derived(bookTitle(book, staged));
+  const subtitle = $derived(bookSubtitle(book, staged));
   const initials = $derived(bookInitials(book));
   const hasCover = $derived(!!book.coverPath && !imgError);
 
@@ -143,7 +146,7 @@
           <svg class="h-2.5 w-2.5" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M13.5 4.5l2 2L8 14l-3 1 1-3 7.5-7.5z" stroke-linecap="round" stroke-linejoin="round" />
           </svg>
-          edited
+          edited · {editCount}
         </span>
       {/if}
     </div>
