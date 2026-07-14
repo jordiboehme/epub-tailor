@@ -32,7 +32,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
-use epub_tailor_core::metadata::{MergeMode, MetadataDoc};
+use epub_tailor_core::metadata::{ClearField, MergeMode, MetadataDoc};
 use epub_tailor_core::profile::{self, Profile};
 use epub_tailor_core::{ConvertOptions, Converted, CoverImage, LintFinding, Severity, TableMode};
 
@@ -308,6 +308,17 @@ struct MetadataArgs {
     series: Option<String>,
     #[arg(long, help_heading = "Metadata")]
     series_index: Option<String>,
+
+    /// Remove a field from the book. Repeatable. Runs after `--metadata`, so
+    /// a cleared field stays cleared whatever the document says. The title,
+    /// the language and the identifiers cannot be cleared.
+    #[arg(
+        long = "clear",
+        value_enum,
+        value_name = "FIELD",
+        help_heading = "Metadata"
+    )]
+    clears: Vec<ClearArg>,
 }
 
 #[derive(Clone, Copy, Default, ValueEnum)]
@@ -324,6 +335,33 @@ impl From<MergeArg> for MergeMode {
         match arg {
             MergeArg::Fill => MergeMode::Fill,
             MergeArg::Replace => MergeMode::Replace,
+        }
+    }
+}
+
+/// The fields `--clear` accepts. Mirrors [`ClearField`]; title, language and
+/// the identifiers are deliberately absent (see the core enum's docs).
+#[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum ClearArg {
+    Authors,
+    Series,
+    SeriesIndex,
+    Publisher,
+    Description,
+    Date,
+    Subjects,
+}
+
+impl From<ClearArg> for ClearField {
+    fn from(arg: ClearArg) -> Self {
+        match arg {
+            ClearArg::Authors => ClearField::Authors,
+            ClearArg::Series => ClearField::Series,
+            ClearArg::SeriesIndex => ClearField::SeriesIndex,
+            ClearArg::Publisher => ClearField::Publisher,
+            ClearArg::Description => ClearField::Description,
+            ClearArg::Date => ClearField::Date,
+            ClearArg::Subjects => ClearField::Subjects,
         }
     }
 }
@@ -380,7 +418,36 @@ impl MetadataArgs {
     /// Precedence, lowest to highest: the book, then the document, then the
     /// individual flags. A flag is the most specific thing the user can say, so
     /// it wins.
-    fn resolve(&self) -> Result<(MetadataDoc, MergeMode, Option<CoverImage>), String> {
+    fn resolve(
+        &self,
+    ) -> Result<(MetadataDoc, MergeMode, Option<CoverImage>, Vec<ClearField>), String> {
+        // Clearing a field and setting it in the same run is a contradiction,
+        // not a precedence puzzle: refuse it.
+        let conflicts: [(ClearArg, bool, &str); 7] = [
+            (ClearArg::Authors, !self.authors.is_empty(), "--author"),
+            (ClearArg::Series, self.series.is_some(), "--series"),
+            (
+                ClearArg::SeriesIndex,
+                self.series_index.is_some(),
+                "--series-index",
+            ),
+            (ClearArg::Publisher, self.publisher.is_some(), "--publisher"),
+            (
+                ClearArg::Description,
+                self.description.is_some(),
+                "--description",
+            ),
+            (ClearArg::Date, self.date.is_some(), "--date"),
+            (ClearArg::Subjects, !self.subjects.is_empty(), "--subject"),
+        ];
+        for (clear, has_value, flag) in conflicts {
+            if has_value && self.clears.contains(&clear) {
+                return Err(format!(
+                    "--clear and {flag} name the same field: clear it or set it, not both"
+                ));
+            }
+        }
+
         let mut doc = match self.metadata.as_deref() {
             None => MetadataDoc::default(),
             Some("-") => {
@@ -452,7 +519,12 @@ impl MetadataArgs {
         // The path has been consumed; the doc must not carry it into the model.
         doc.cover = None;
 
-        Ok((doc, self.metadata_merge.into(), cover))
+        Ok((
+            doc,
+            self.metadata_merge.into(),
+            cover,
+            self.clears.iter().map(|&c| c.into()).collect(),
+        ))
     }
 }
 
@@ -571,10 +643,11 @@ fn run_fit_batch(
     };
     let mut opts = common.to_options(&resolved);
     match common.metadata.resolve() {
-        Ok((doc, merge, cover)) => {
+        Ok((doc, merge, cover, clears)) => {
             opts.metadata = doc;
             opts.metadata_merge = merge;
             opts.cover_image = cover;
+            opts.metadata_clears = clears;
         }
         Err(e) => return fail(common.report, "metadata", &e),
     }
@@ -608,10 +681,11 @@ fn run_fit_single(input: &Path, in_place: bool, common: &CommonArgs) -> ExitCode
 
     let mut opts = common.to_options(&resolved);
     match common.metadata.resolve() {
-        Ok((doc, merge, cover)) => {
+        Ok((doc, merge, cover, clears)) => {
             opts.metadata = doc;
             opts.metadata_merge = merge;
             opts.cover_image = cover;
+            opts.metadata_clears = clears;
         }
         Err(e) => return fail(common.report, "metadata", &e),
     }
@@ -669,10 +743,11 @@ fn run_md_batch(
     let mut opts = common.to_options(&resolved);
     opts.split_level = split_level;
     match common.metadata.resolve() {
-        Ok((doc, merge, cover)) => {
+        Ok((doc, merge, cover, clears)) => {
             opts.metadata = doc;
             opts.metadata_merge = merge;
             opts.cover_image = cover;
+            opts.metadata_clears = clears;
         }
         Err(e) => return fail(common.report, "metadata", &e),
     }
@@ -704,10 +779,11 @@ fn run_md_single(input: &Path, split_level: u8, common: &CommonArgs) -> ExitCode
     let mut opts = common.to_options(&resolved);
     opts.split_level = split_level;
     match common.metadata.resolve() {
-        Ok((doc, merge, cover)) => {
+        Ok((doc, merge, cover, clears)) => {
             opts.metadata = doc;
             opts.metadata_merge = merge;
             opts.cover_image = cover;
+            opts.metadata_clears = clears;
         }
         Err(e) => return fail(common.report, "metadata", &e),
     }

@@ -832,3 +832,134 @@ fn lets_get_dangerous_conflicts_with_output() {
         "combining in-place replacement with -o is a usage error"
     );
 }
+
+/// Build a one-chapter EPUB whose front-matter carries a publisher and a
+/// series, so there is something for `--clear` to remove.
+fn book_with_rich_meta_in(dir: &Path, name: &str) -> PathBuf {
+    let md = dir.join(format!("{name}.md"));
+    std::fs::write(
+        &md,
+        "---\ntitle: A Book\nauthor: Jane Author\npublisher: Acme Press\nseries: The Cycle\nseries_index: \"2\"\n---\n\n# One\n\nHello.\n",
+    )
+    .expect("write markdown");
+    let out = dir.join(format!("{name}.epub"));
+    let status = bin()
+        .args(["md", md.to_str().unwrap(), "-o", out.to_str().unwrap()])
+        .output()
+        .expect("failed to run binary");
+    assert!(status.status.success(), "md should build the fixture book");
+    out
+}
+
+#[test]
+fn clear_removes_fields_and_the_report_says_so() {
+    let dir = temp_dir("clear-fields");
+    let book = book_with_rich_meta_in(&dir, "rich");
+    let out = dir.join("out.epub");
+
+    let output = bin()
+        .args([
+            "fit",
+            book.to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+            "--clear",
+            "publisher",
+            "--clear",
+            "series",
+            "--report",
+            "json",
+        ])
+        .output()
+        .expect("failed to run binary");
+    assert!(
+        output.status.success(),
+        "fit failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&output.stdout)).expect("valid JSON");
+    let kinds: Vec<&str> = report["transformations"]
+        .as_array()
+        .expect("transformations array")
+        .iter()
+        .filter_map(|t| t["kind"].as_str())
+        .collect();
+    assert!(
+        kinds.contains(&"metadata-clear"),
+        "the report must record the clears, got kinds: {kinds:?}"
+    );
+
+    // Read the output back through `metadata show` - the tool's own view.
+    let shown = bin()
+        .args([
+            "metadata",
+            "show",
+            out.to_str().unwrap(),
+            "--report",
+            "json",
+        ])
+        .output()
+        .expect("failed to run binary");
+    let json: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&shown.stdout)).expect("valid JSON");
+    assert!(
+        json["metadata"]["publisher"].is_null(),
+        "publisher must be gone"
+    );
+    assert!(json["metadata"]["series"].is_null(), "series must be gone");
+    assert_eq!(json["metadata"]["title"], "A Book", "title is untouched");
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn clear_conflicts_with_setting_the_same_field() {
+    let dir = temp_dir("clear-conflict");
+    let book = book_in(&dir, "book");
+    let out = dir.join("out.epub");
+
+    let output = bin()
+        .args([
+            "fit",
+            book.to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+            "--clear",
+            "series",
+            "--series",
+            "The Cycle",
+        ])
+        .output()
+        .expect("failed to run binary");
+    assert!(
+        !output.status.success(),
+        "clear+set of one field must be refused"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("--series"),
+        "the error should name the conflicting flag, got: {stderr}"
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn clear_refuses_protected_fields() {
+    let dir = temp_dir("clear-protected");
+    let book = book_in(&dir, "book");
+
+    let output = bin()
+        .args(["fit", book.to_str().unwrap(), "--clear", "title"])
+        .output()
+        .expect("failed to run binary");
+    assert!(!output.status.success(), "title must not be clearable");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("invalid value 'title'"),
+        "clap should reject the value with its list, got: {stderr}"
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+}
