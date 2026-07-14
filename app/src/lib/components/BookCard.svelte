@@ -15,6 +15,15 @@
   let imgError = $state(false);
   let showDetails = $state(false);
 
+  $effect(() => {
+    // Reset the load-error flag whenever this card's cover changes. Without it,
+    // a card whose cover failed to load once (an ingest still writing the file,
+    // say) shows its initials for the rest of the session, even after a new
+    // cover has been fetched or picked. Same pattern as MetadataEditor's preview.
+    void book.coverPath;
+    imgError = false;
+  });
+
   const selected = $derived(books.selectedIds.has(book.id));
   const edited = $derived(edits.hasEdits(book.id));
   const job = $derived(jobs.conversionJobFor(book.id));
