@@ -453,13 +453,30 @@ jobs:
             # or a secret pasted from a file therefore has to be flattened -
             # which costs nothing, as none of these values can contain
             # meaningful whitespace. The password keeps its spaces, if any.
+            #
+            # Every squeezed value is then re-registered with ::add-mask::.
+            # GitHub masks the exact strings it holds as secrets, and a value we
+            # transformed is not one of them any more: without this, a p12 that
+            # arrived wrapped at 64 columns would be one accidental `echo` away
+            # from appearing in a public log in full.
             oneline() { printf '%s' "$1" | tr -d '[:space:]'; }
+            mask() { if [ -n "$1" ]; then echo "::add-mask::$1"; fi; }
+
+            certificate="$(oneline "$APPLE_CERTIFICATE_P12")"
+            certificate_password="$(printf '%s' "$APPLE_CERTIFICATE_PASSWORD" | tr -d '\r\n')"
+            team_id="$(oneline "$APPLE_TEAM_ID")"
+            api_key="$(oneline "$APPLE_API_KEY_ID")"
+            api_issuer="$(oneline "$APPLE_API_ISSUER_ID")"
+            for value in "$certificate" "$certificate_password" "$team_id" "$api_key" "$api_issuer"; do
+              mask "$value"
+            done
+
             {
-              echo "APPLE_CERTIFICATE=$(oneline "$APPLE_CERTIFICATE_P12")"
-              echo "APPLE_CERTIFICATE_PASSWORD=$(printf '%s' "$APPLE_CERTIFICATE_PASSWORD" | tr -d '\r\n')"
-              echo "APPLE_TEAM_ID=$(oneline "$APPLE_TEAM_ID")"
-              echo "APPLE_API_KEY=$(oneline "$APPLE_API_KEY_ID")"
-              echo "APPLE_API_ISSUER=$(oneline "$APPLE_API_ISSUER_ID")"
+              echo "APPLE_CERTIFICATE=$certificate"
+              echo "APPLE_CERTIFICATE_PASSWORD=$certificate_password"
+              echo "APPLE_TEAM_ID=$team_id"
+              echo "APPLE_API_KEY=$api_key"
+              echo "APPLE_API_ISSUER=$api_issuer"
               echo "APPLE_API_KEY_PATH=$key"
             } >> "$GITHUB_ENV"
             # APPLE_SIGNING_IDENTITY is deliberately not set: with
@@ -492,21 +509,34 @@ jobs:
           set -euo pipefail
           # The key is one line of base64 either way (see the note in the Apple
           # gate above about $GITHUB_ENV and newlines); a trailing newline picked
-          # up from `gh secret set < file` would otherwise corrupt the file.
+          # up from `gh secret set < file` would otherwise corrupt the file. And
+          # as there, a squeezed secret is no longer the string GitHub registered
+          # and masks, so it is registered again with ::add-mask:: before it is
+          # written anywhere.
+          mask() { if [ -n "$1" ]; then echo "::add-mask::$1"; fi; }
+
           if [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
             if [ -z "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}" ] && [ "${{ github.ref_type }}" == "tag" ]; then
               echo "::error::TAURI_SIGNING_PRIVATE_KEY_PASSWORD is not set; a tag build with TAURI_SIGNING_PRIVATE_KEY configured needs its password too, or the bundler fails deep inside minisign with an opaque decrypt error"
               exit 1
             fi
+            signing_key="$(printf '%s' "$TAURI_SIGNING_PRIVATE_KEY" | tr -d '[:space:]')"
+            signing_key_password="$(printf '%s' "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}" | tr -d '\r\n')"
+            mask "$signing_key"
+            mask "$signing_key_password"
             {
-              echo "TAURI_SIGNING_PRIVATE_KEY=$(printf '%s' "$TAURI_SIGNING_PRIVATE_KEY" | tr -d '[:space:]')"
-              echo "TAURI_SIGNING_PRIVATE_KEY_PASSWORD=$(printf '%s' "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}" | tr -d '\r\n')"
+              echo "TAURI_SIGNING_PRIVATE_KEY=$signing_key"
+              echo "TAURI_SIGNING_PRIVATE_KEY_PASSWORD=$signing_key_password"
             } >> "$GITHUB_ENV"
           elif [ "${{ github.ref_type }}" != "tag" ]; then
             echo "::notice::TAURI_SIGNING_PRIVATE_KEY is not configured; this dry run signs its updater artifacts with a throwaway key that no released app trusts"
             npx tauri signer generate -w "$RUNNER_TEMP/updater-dry-run.key" -f --ci
+            # Nothing this key signs is ever published, but it is still a private
+            # key printed into a public log if anything ever echoes it.
+            throwaway_key="$(tr -d '[:space:]' < "$RUNNER_TEMP/updater-dry-run.key")"
+            mask "$throwaway_key"
             {
-              echo "TAURI_SIGNING_PRIVATE_KEY=$(tr -d '[:space:]' < "$RUNNER_TEMP/updater-dry-run.key")"
+              echo "TAURI_SIGNING_PRIVATE_KEY=$throwaway_key"
               echo "TAURI_SIGNING_PRIVATE_KEY_PASSWORD="
             } >> "$GITHUB_ENV"
           else
