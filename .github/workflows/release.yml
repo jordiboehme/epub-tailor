@@ -290,9 +290,333 @@ jobs:
           path: dist/${{ steps.stage.outputs.name }}.${{ matrix.archive_ext }}
           if-no-files-found: error
 
+  # The desktop app (app/): a Tauri bundle per platform, with the CLI riding
+  # along inside it as a sidecar. Separate from `build` on purpose - it needs
+  # Node, a webview toolchain and the gnu (not musl) Linux targets, and a
+  # broken bundler leg must not take the CLI release down with it.
+  build-app:
+    name: build app (${{ matrix.platform }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-arm64
+            os: macos-latest
+            target: aarch64-apple-darwin
+            family: macos
+            # `app` is not redundant next to `dmg`: the updater artifact
+            # (.app.tar.gz) is produced from the .app bundle, so the target has
+            # to be asked for by name.
+            bundles: app,dmg
+          - platform: macos-intel
+            os: macos-15-intel
+            target: x86_64-apple-darwin
+            family: macos
+            bundles: app,dmg
+          - platform: windows-amd64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            family: windows
+            bundles: nsis
+          - platform: windows-arm64
+            os: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            family: windows
+            bundles: nsis
+          # The CLI ships static musl binaries; the app cannot - it links
+          # against the system webview - so the desktop legs build the gnu
+          # triples, and the sidecar inside the bundle is a gnu build too.
+          - platform: linux-amd64
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            family: linux
+            bundles: appimage,deb
+          - platform: linux-arm64
+            os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            family: linux
+            bundles: appimage,deb
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable branch
+        with:
+          toolchain: stable
+
+      - name: Add release target
+        run: rustup target add ${{ matrix.target }}
+
+      # Tauri's Linux dependencies: the webview itself, the AppImage tooling's
+      # helpers, and patchelf, which the AppImage bundler shells out to.
+      - name: Install Linux webview dependencies
+        if: matrix.family == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev \
+            libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          key: release-app-${{ matrix.target }}
+
+      - name: Resolve release version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The bundler stamps the app with the cargo workspace's version, while
+          # latest.json advertises the tag's. If those two ever disagree, the
+          # updater offers every user a release they are already running - a
+          # loop only a new tag can break. So a tag build insists they match.
+          crate="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)"
+          if [ -z "$crate" ]; then
+            echo "::error::could not read the workspace version from Cargo.toml"
+            exit 1
+          fi
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            tag="${{ github.ref_name }}"
+            version="${tag#v}"
+            if [ "$version" != "$crate" ]; then
+              echo "::error::tag ${tag} does not match the workspace version ${crate}: bump Cargo.toml (and Cargo.lock) or retag, otherwise the updater will offer this release to the people already running it"
+              exit 1
+            fi
+          else
+            # A dry run has no tag, so it packages what the workspace says it is.
+            version="$crate"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Install frontend dependencies
+        working-directory: app
+        run: npm ci
+
+      # tauri.conf.json's beforeBuildCommand runs prepare-sidecar again (with
+      # TAURI_ENV_TARGET_TRIPLE set, so it resolves the same triple), but doing
+      # it up front turns "the CLI does not compile for this target" into its own
+      # red step instead of a failure buried in the bundler's output.
+      - name: Build the CLI sidecar
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build --release -p epub-tailor --target ${{ matrix.target }}
+          node app/scripts/prepare-sidecar.mjs --target ${{ matrix.target }}
+
+      # Same gate as the CLI's `build` job: a tag build must be fully signed, a
+      # secretless workflow_dispatch dry run is allowed to produce an unsigned
+      # bundle, and a half-configured secret set is always an error.
+      #
+      # The Apple variables are exported through $GITHUB_ENV rather than the
+      # build step's `env:` block because Tauri decides whether to sign by
+      # asking whether APPLE_CERTIFICATE *exists*. An `env:` entry fed by a
+      # missing secret exists - it is just empty - and Tauri would then try to
+      # import an empty certificate and fail. Absent has to mean absent.
+      - name: Decide whether to sign and notarize
+        if: matrix.family == 'macos'
+        id: signing
+        shell: bash
+        env:
+          APPLE_CERTIFICATE_P12: ${{ secrets.APPLE_CERTIFICATE_P12 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          missing=()
+          for var in APPLE_CERTIFICATE_P12 APPLE_CERTIFICATE_PASSWORD APPLE_TEAM_ID \
+                     APPLE_API_KEY_P8 APPLE_API_KEY_ID APPLE_API_ISSUER_ID; do
+            [ -n "${!var:-}" ] || missing+=("$var")
+          done
+          if [ "${#missing[@]}" -eq 0 ]; then
+            key="$RUNNER_TEMP/asc-key.p8"
+            printf '%s\n' "$APPLE_API_KEY_P8" > "$key"
+            chmod 600 "$key"
+            # The names on the left are the ones Tauri's bundler reads
+            # (https://v2.tauri.app/reference/environment-variables); the repo's
+            # secrets predate the app and are named for the CLI's notarytool
+            # invocation, hence the remapping.
+            #
+            # Squeezed onto one line each: $GITHUB_ENV's KEY=value form cannot
+            # carry a newline, and Tauri base64-decodes APPLE_CERTIFICATE
+            # strictly, where the CLI job's `base64 --decode` shrugs newlines
+            # off. A p12 exported with `openssl base64` (wrapped at 64 columns)
+            # or a secret pasted from a file therefore has to be flattened -
+            # which costs nothing, as none of these values can contain
+            # meaningful whitespace. The password keeps its spaces, if any.
+            oneline() { printf '%s' "$1" | tr -d '[:space:]'; }
+            {
+              echo "APPLE_CERTIFICATE=$(oneline "$APPLE_CERTIFICATE_P12")"
+              echo "APPLE_CERTIFICATE_PASSWORD=$(printf '%s' "$APPLE_CERTIFICATE_PASSWORD" | tr -d '\r\n')"
+              echo "APPLE_TEAM_ID=$(oneline "$APPLE_TEAM_ID")"
+              echo "APPLE_API_KEY=$(oneline "$APPLE_API_KEY_ID")"
+              echo "APPLE_API_ISSUER=$(oneline "$APPLE_API_ISSUER_ID")"
+              echo "APPLE_API_KEY_PATH=$key"
+            } >> "$GITHUB_ENV"
+            # APPLE_SIGNING_IDENTITY is deliberately not set: with
+            # APPLE_CERTIFICATE present, Tauri imports the .p12 into a throwaway
+            # keychain of its own and infers the Developer ID identity from it.
+            echo "sign=true" >> "$GITHUB_OUTPUT"
+          elif [ "${#missing[@]}" -eq 6 ] && [ "${{ github.ref_type }}" != "tag" ]; then
+            echo "::notice::Apple signing secrets are not configured; this dry run produces an UNSIGNED, unnotarized macOS bundle"
+            echo "sign=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::Apple signing secrets missing (${missing[*]}); a tag build must sign and a partial secret set is always a misconfiguration"
+            exit 1
+          fi
+
+      # The updater key signs the .app.tar.gz / NSIS / AppImage artifacts that
+      # latest.json points at; the app verifies that signature against the public
+      # key baked into tauri.conf.json before installing anything. With
+      # createUpdaterArtifacts on, a build without a private key does not warn -
+      # it fails ("A public key has been found, but no private key") - so a dry
+      # run without the secret gets a throwaway key: it exercises the exact same
+      # bundling path, and nothing it signs is ever published.
+      - name: Resolve the updater signing key
+        shell: bash
+        # For the dry-run branch's `npx tauri`: the pinned CLI lives in app/.
+        working-directory: app
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          # The key is one line of base64 either way (see the note in the Apple
+          # gate above about $GITHUB_ENV and newlines); a trailing newline picked
+          # up from `gh secret set < file` would otherwise corrupt the file.
+          if [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
+            {
+              echo "TAURI_SIGNING_PRIVATE_KEY=$(printf '%s' "$TAURI_SIGNING_PRIVATE_KEY" | tr -d '[:space:]')"
+              echo "TAURI_SIGNING_PRIVATE_KEY_PASSWORD=$(printf '%s' "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}" | tr -d '\r\n')"
+            } >> "$GITHUB_ENV"
+          elif [ "${{ github.ref_type }}" != "tag" ]; then
+            echo "::notice::TAURI_SIGNING_PRIVATE_KEY is not configured; this dry run signs its updater artifacts with a throwaway key that no released app trusts"
+            npx tauri signer generate -w "$RUNNER_TEMP/updater-dry-run.key" -f --ci
+            {
+              echo "TAURI_SIGNING_PRIVATE_KEY=$(tr -d '[:space:]' < "$RUNNER_TEMP/updater-dry-run.key")"
+              echo "TAURI_SIGNING_PRIVATE_KEY_PASSWORD="
+            } >> "$GITHUB_ENV"
+          else
+            echo "::error::TAURI_SIGNING_PRIVATE_KEY is not set; a tag build cannot publish updater artifacts nobody can verify"
+            exit 1
+          fi
+
+      # Signing, notarization and updater signing are all driven by the
+      # environment the two steps above prepared - see them for what is set and
+      # why. Tauri signs the .app and the CLI sidecar nested inside it under the
+      # hardened runtime, notarizes the app and staples the ticket to it.
+      - name: Build the app bundles
+        working-directory: app
+        run: npm run tauri build -- --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
+
+      - name: Stage the bundles
+        id: stage
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ steps.version.outputs.version }}"
+          bundle="target/${{ matrix.target }}/release/bundle"
+          base="EPUB-Tailor-v${version}-${{ matrix.platform }}"
+          mkdir -p dist-app
+
+          # The bundler names its output after the product ("EPUB Tailor_0.4.2
+          # _aarch64.dmg"), spaces and all; the release uses the repo's
+          # convention. Exactly one match is required for every artifact: a
+          # missing .sig quietly dropped here is a hole in latest.json later,
+          # and a hole in latest.json is a platform that can never update again.
+          take() {
+            local pattern="$1"
+            local dest="$2"
+            local found=()
+            while IFS= read -r -d '' f; do found+=("$f"); done \
+              < <(find "$bundle" -type f -name "$pattern" -print0)
+            if [ "${#found[@]}" -ne 1 ]; then
+              echo "::error::expected exactly one file matching '$pattern' under $bundle, found ${#found[@]}"
+              exit 1
+            fi
+            cp "${found[0]}" "dist-app/$dest"
+          }
+
+          case "${{ matrix.family }}" in
+            macos)
+              take '*.dmg' "$base.dmg"
+              take '*.app.tar.gz' "$base.app.tar.gz"
+              take '*.app.tar.gz.sig' "$base.app.tar.gz.sig"
+              echo "dmg=dist-app/$base.dmg" >> "$GITHUB_OUTPUT"
+              ;;
+            windows)
+              take '*-setup.exe' "$base-setup.exe"
+              take '*-setup.exe.sig' "$base-setup.exe.sig"
+              ;;
+            linux)
+              take '*.AppImage' "$base.AppImage"
+              take '*.AppImage.sig' "$base.AppImage.sig"
+              take '*.deb' "$base.deb"
+              ;;
+          esac
+          ls -la dist-app
+
+      # Tauri notarizes and staples the .app, but not the disk image it then
+      # wraps it in - and an unstapled DMG makes Gatekeeper phone home on first
+      # open, or refuse outright if the machine is offline. So the DMG gets its
+      # own trip through notarytool, and `spctl` proves the result the way the
+      # user's Mac will see it.
+      - name: Notarize and staple the DMG
+        if: matrix.family == 'macos' && steps.signing.outputs.sign == 'true'
+        shell: bash
+        env:
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          dmg="${{ steps.stage.outputs.dmg }}"
+          key="$RUNNER_TEMP/asc-key.p8"
+          result="$RUNNER_TEMP/dmg-notarize.json"
+          set +e
+          xcrun notarytool submit "$dmg" \
+            --key "$key" --key-id "$APPLE_API_KEY_ID" --issuer "$APPLE_API_ISSUER_ID" \
+            --wait --timeout 30m --output-format json > "$result"
+          submit_rc=$?
+          set -e
+          cat "$result"
+          status="$(jq -r '.status // "unknown"' "$result")"
+          if [ "$submit_rc" -ne 0 ] || [ "$status" != "Accepted" ]; then
+            echo "::error::DMG notarization failed (notarytool exit $submit_rc, status $status)"
+            submission_id="$(jq -r '.id // empty' "$result")"
+            if [ -n "$submission_id" ]; then
+              xcrun notarytool log "$submission_id" \
+                --key "$key" --key-id "$APPLE_API_KEY_ID" --issuer "$APPLE_API_ISSUER_ID" || true
+            fi
+            exit 1
+          fi
+          xcrun stapler staple "$dmg"
+          xcrun stapler validate "$dmg"
+          spctl -a -t open --context context:primary-signature -vv "$dmg"
+
+      - name: Delete the App Store Connect key
+        if: always() && matrix.family == 'macos'
+        shell: bash
+        run: rm -f "$RUNNER_TEMP/asc-key.p8"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: epub-tailor-app-${{ matrix.platform }}
+          path: dist-app/*
+          if-no-files-found: error
+
   publish:
     name: publish release
-    needs: build
+    needs: [build, build-app]
     runs-on: ubuntu-latest
     # Only a tag push produces a real GitHub Release; workflow_dispatch stops
     # after the build matrix above so it can be used as a dry run.
@@ -311,14 +635,79 @@ jobs:
         with:
           path: downloads
 
-      - name: Collect archives and generate checksums
+      # Everything both matrices produced: the CLI archives (.tar.gz/.zip), the
+      # app bundles (.dmg/.exe/.AppImage/.deb), the updater artifacts
+      # (.app.tar.gz) and their detached signatures (.sig). The checksums cover
+      # the lot - the Homebrew cask reads the DMG's sha256 straight out of this
+      # file, and so can anyone else.
+      - name: Collect artifacts and generate checksums
         run: |
           set -euo pipefail
           mkdir -p release
-          find downloads -type f \( -name '*.tar.gz' -o -name '*.zip' \) -exec cp {} release/ \;
+          find downloads -type f \( \
+            -name '*.tar.gz' -o -name '*.zip' -o -name '*.dmg' -o -name '*.exe' \
+            -o -name '*.AppImage' -o -name '*.deb' -o -name '*.sig' \
+          \) -exec cp {} release/ \;
           cd release
           sha256sum -- * > SHA256SUMS
           ls -la
+
+      # The updater's manifest. Every desktop platform we ship must appear here
+      # with the signature of the artifact it will download: a platform missing
+      # from latest.json can never update itself again, and a published release
+      # is not something you can quietly take back. So a missing artifact or a
+      # missing .sig fails the release outright rather than shipping a hole.
+      #
+      # Schema per https://v2.tauri.app/plugin/updater ("Static JSON File").
+      # The endpoint the app polls is
+      # /releases/latest/download/latest.json, which only ever resolves against
+      # a *published* release - so this file sits harmlessly in the draft until
+      # a human decides the release is real.
+      - name: Generate latest.json for the updater
+        run: |
+          set -euo pipefail
+          tag="${{ github.ref_name }}"
+          version="${tag#v}"
+          base_url="https://github.com/${{ github.repository }}/releases/download/${tag}"
+          missing=0
+          platforms='{}'
+
+          add_platform() {
+            local key="$1"
+            local file="$2"
+            if [ ! -f "release/$file" ] || [ ! -f "release/$file.sig" ]; then
+              echo "::error::updater artifact missing for ${key}: expected release/${file} and release/${file}.sig"
+              missing=1
+              return
+            fi
+            platforms="$(jq -n \
+              --argjson platforms "$platforms" \
+              --arg key "$key" \
+              --arg signature "$(cat "release/$file.sig")" \
+              --arg url "${base_url}/${file}" \
+              '$platforms + { ($key): { signature: $signature, url: $url } }')"
+          }
+
+          add_platform darwin-aarch64 "EPUB-Tailor-v${version}-macos-arm64.app.tar.gz"
+          add_platform darwin-x86_64 "EPUB-Tailor-v${version}-macos-intel.app.tar.gz"
+          add_platform windows-x86_64 "EPUB-Tailor-v${version}-windows-amd64-setup.exe"
+          add_platform windows-aarch64 "EPUB-Tailor-v${version}-windows-arm64-setup.exe"
+          add_platform linux-x86_64 "EPUB-Tailor-v${version}-linux-amd64.AppImage"
+          add_platform linux-aarch64 "EPUB-Tailor-v${version}-linux-arm64.AppImage"
+
+          if [ "$missing" -ne 0 ]; then
+            echo "::error::refusing to publish a latest.json with a hole in it - the platforms listed above would be stuck on their current version forever"
+            exit 1
+          fi
+
+          jq -n \
+            --arg version "$version" \
+            --arg notes "EPUB Tailor ${tag}. The full notes are at https://github.com/${{ github.repository }}/releases/tag/${tag}" \
+            --arg pub_date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --argjson platforms "$platforms" \
+            '{ version: $version, notes: $notes, pub_date: $pub_date, platforms: $platforms }' \
+            > release/latest.json
+          cat release/latest.json
 
       - name: Generate release notes
         uses: orhun/git-cliff-action@f50e11560dce63f7c33227798f90b924471a88b5 # v4.8.0
