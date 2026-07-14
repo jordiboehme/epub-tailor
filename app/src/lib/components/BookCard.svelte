@@ -154,7 +154,7 @@
         <span class="text-2xl font-semibold tracking-wide text-zinc-400 dark:text-zinc-500">
           {initials || "?"}
         </span>
-        <span class="line-clamp-3 text-[11px] leading-tight text-zinc-400 dark:text-zinc-500">
+        <span class="line-clamp-3 text-[11px] leading-tight text-zinc-500 dark:text-zinc-400">
           {title}
         </span>
       </div>
@@ -275,7 +275,7 @@
               e.stopPropagation();
               showDetails = !showDetails;
             }}
-            class="ml-auto rounded px-1 py-0.5 text-[11px] font-medium text-zinc-400 hover:text-zinc-600 dark:text-zinc-500 dark:hover:text-zinc-300"
+            class="ml-auto rounded px-1 py-0.5 text-[11px] font-medium text-zinc-500 hover:text-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-200"
           >
             {showDetails ? "Less" : "Details"}
           </button>

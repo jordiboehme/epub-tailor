@@ -34,7 +34,7 @@
   {#if failure}
     <p class="text-[11px] leading-snug text-zinc-600 dark:text-zinc-300">{failure.friendly}</p>
     <div class="mt-1.5 flex items-center gap-2">
-      <span class="rounded bg-zinc-100 px-1 py-0.5 font-mono text-[10px] text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400">
+      <span class="rounded bg-zinc-100 px-1 py-0.5 font-mono text-[10px] text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400">
         {failure.code}
       </span>
       {#if stderr.length > 0}
@@ -44,16 +44,16 @@
             e.stopPropagation();
             showStderr = !showStderr;
           }}
-          class="text-[10px] font-medium text-zinc-400 hover:text-zinc-600 dark:text-zinc-500 dark:hover:text-zinc-300"
+          class="text-[10px] font-medium text-zinc-500 hover:text-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-200"
         >
-          {showStderr ? "Hide" : "Show"} the details
+          {showStderr ? "Hide what it said" : "What it said"}
         </button>
       {/if}
     </div>
 
     {#if showStderr && stderr.length > 0}
       <pre
-        class="mt-1.5 max-h-32 overflow-auto whitespace-pre-wrap break-words rounded-md bg-zinc-100 p-1.5 font-mono text-[10px] leading-snug text-zinc-500 dark:bg-zinc-950 dark:text-zinc-400">{stderr.join(
+        class="mt-1.5 max-h-32 overflow-auto whitespace-pre-wrap break-words rounded-md bg-zinc-100 p-1.5 font-mono text-[10px] leading-snug text-zinc-600 dark:bg-zinc-950 dark:text-zinc-400">{stderr.join(
           "\n",
         )}</pre>
     {/if}
@@ -66,7 +66,7 @@
           <li class="flex items-start gap-1.5 text-[11px] leading-snug">
             <span class="mt-0.5 h-1.5 w-1.5 shrink-0 rounded-full {dot[finding.severity]}"></span>
             <span class="min-w-0">
-              <span class="font-mono text-zinc-400 dark:text-zinc-500">{finding.code}</span>
+              <span class="font-mono text-zinc-500 dark:text-zinc-500">{finding.code}</span>
               <span class="text-zinc-600 dark:text-zinc-300"> {finding.message}</span>
             </span>
           </li>
