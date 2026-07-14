@@ -5,12 +5,15 @@
 // title and thumbnail without blocking anything the user asked for.
 
 import { invoke } from "@tauri-apps/api/core";
-import type { CheckReport, CliFailure, Creator, FitReport, MetadataShowReport } from "../api/contract";
+import type { CheckReport, CliFailure, FitReport } from "../api/contract";
 import { coverCacheKey, coverCachePath } from "../api/covers";
 import { showArgv } from "../api/argv";
 import type { TemplateBook } from "../api/templates";
+import type { BookMeta } from "../api/meta";
 import { settings } from "./settings.svelte";
 import { jobs } from "./jobs.svelte";
+
+export type { BookMeta };
 
 /** What `expand_inputs` returns for one file. */
 interface InputEntry {
@@ -18,15 +21,6 @@ interface InputEntry {
   kind: "epub" | "md";
   size: number;
   modified_ms: number;
-}
-
-export interface BookMeta {
-  title?: string;
-  authors: string[];
-  series?: string;
-  seriesIndex?: string;
-  /** Field names the book is missing, from `metadata show`. */
-  missing: string[];
 }
 
 /** A book's conversion or check outcome, shaped for the card to render. */
@@ -55,15 +49,6 @@ function baseName(path: string): string {
   return slash >= 0 ? path.slice(slash + 1) : path;
 }
 
-function creatorName(creator: Creator): string {
-  return typeof creator === "string" ? creator : creator.name;
-}
-
-function toList<T>(value: T | T[] | undefined): T[] {
-  if (value === undefined) return [];
-  return Array.isArray(value) ? value : [value];
-}
-
 /** The input stem (file name without its extension). */
 export function stemOf(fileName: string): string {
   return fileName.replace(/\.[^.]+$/, "");
@@ -77,18 +62,6 @@ export function toTemplateBook(book: Book): TemplateBook {
     series: book.meta?.series,
     seriesIndex: book.meta?.seriesIndex,
     originalStem: stemOf(book.fileName),
-  };
-}
-
-/** Turn a `metadata show` report into the compact `BookMeta` a card needs. */
-export function normalizeMeta(report: MetadataShowReport): BookMeta {
-  const doc = report.metadata;
-  return {
-    title: doc.title,
-    authors: toList(doc.authors).map(creatorName),
-    series: doc.series,
-    seriesIndex: doc.series_index,
-    missing: report.missing,
   };
 }
 

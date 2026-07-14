@@ -12,8 +12,8 @@ import type { CheckReport, CliFailure, FitReport, MetadataShowReport } from "../
 import { friendlyError } from "../api/errors";
 import { fitArgv, mdArgv, checkArgv } from "../api/argv";
 import type { RunOptions } from "../api/argv";
+import { normalizeMeta } from "../api/meta";
 import { settings } from "./settings.svelte";
-import { normalizeMeta } from "./books.svelte";
 import type { Book } from "./books.svelte";
 
 /** How many trailing stderr lines a running job keeps for a details view. */
