@@ -73,6 +73,22 @@ brew install jordiboehme/tap/epub-tailor
 
 Windows and Linux: grab a binary from [Releases](https://github.com/jordiboehme/epub-tailor/releases). Prebuilt for macOS (arm64 and Intel), Linux (arm64 and amd64, static) and Windows (amd64 and arm64).
 
+### Or install the app
+
+There is a desktop app now. Same tailor, with a shopfront: drop books in, pick a device, watch them come out fitted. It shows you the covers, lets you fix a wrong title or a missing author before the book is converted (looking the correct one up online if you ask it to), converts a whole pile in one go with a progress bar and a cancel button, and writes the results straight to the e-reader when you plug it in. It is not a reimplementation - the CLI rides along inside the app and does all the work, so what comes out is exactly what the command line would have produced.
+
+macOS, with Homebrew:
+
+```sh
+brew install --cask jordiboehme/tap/epub-tailor-app
+```
+
+Or take the DMG straight from [Releases](https://github.com/jordiboehme/epub-tailor/releases): signed, notarized and stapled, so it opens with a double click and no ceremony.
+
+Windows: the `-setup.exe` installer. It is not code-signed, so Windows will make a face - click *More info*, then *Run anyway*. Linux: the `.AppImage` (`chmod +x` it and run it) or the `.deb`.
+
+The app keeps itself current. When a new version ships it mentions it, quietly, and installs it when you say so. The `.deb` is the one exception: there, apt is in charge and we do not argue with apt.
+
 ## Quickstart
 
 Repair a book (no device tailoring, just hygiene):
