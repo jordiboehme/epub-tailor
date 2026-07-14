@@ -32,7 +32,11 @@ use crate::{ERROR_EXIT_CODE, MetadataCommand, ReportArg, SCHEMA_VERSION, UNREADA
 
 pub fn run(command: MetadataCommand) -> ExitCode {
     match command {
-        MetadataCommand::Show { input, report } => show(&input, report),
+        MetadataCommand::Show {
+            input,
+            cover_out,
+            report,
+        } => show(&input, cover_out.as_deref(), report),
         MetadataCommand::Search {
             input,
             title,
@@ -61,8 +65,15 @@ pub fn run(command: MetadataCommand) -> ExitCode {
     }
 }
 
-/// Read a book's metadata into a document, plus the list of what it lacks.
-fn read_book(input: &Path) -> Result<(MetadataDoc, Vec<&'static str>), String> {
+/// A parsed book's metadata document, the list of fields it lacks, and its
+/// own cover image bytes if it has one.
+type BookRead = (MetadataDoc, Vec<&'static str>, Option<Vec<u8>>);
+
+/// Read a book's metadata into a document, plus the list of what it lacks,
+/// plus its own cover image bytes if it has one. The cover is cloned out of
+/// the already-in-memory book regardless of whether the caller wants it -
+/// cheap, since nothing here re-reads the file.
+fn read_book(input: &Path) -> Result<BookRead, String> {
     let bytes =
         std::fs::read(input).map_err(|e| format!("cannot read {}: {e}", input.display()))?;
     let book = read_epub(&bytes).map_err(|e| e.to_string())?.book;
@@ -85,17 +96,35 @@ fn read_book(input: &Path) -> Result<(MetadataDoc, Vec<&'static str>), String> {
         series_index: m.series.as_ref().and_then(|s| s.index.clone()),
         ..MetadataDoc::default()
     };
-    Ok((doc, missing_fields(m)))
+    let cover = book
+        .cover
+        .as_ref()
+        .and_then(|path| book.resources.get(path))
+        .map(|r| r.data.clone());
+    Ok((doc, missing_fields(m), cover))
 }
 
-fn show(input: &Path, report: ReportArg) -> ExitCode {
-    let (doc, missing) = match read_book(input) {
-        Ok(pair) => pair,
+fn show(input: &Path, cover_out: Option<&Path>, report: ReportArg) -> ExitCode {
+    let (mut doc, missing, cover) = match read_book(input) {
+        Ok(triple) => triple,
         Err(e) => {
             eprintln!("error: {e}");
             return ExitCode::from(UNREADABLE_EXIT_CODE);
         }
     };
+
+    if let Some(path) = cover_out {
+        match cover {
+            None => eprintln!("warning: this book has no cover"),
+            Some(data) => {
+                if let Err(e) = std::fs::write(path, &data) {
+                    eprintln!("error: cannot write {}: {e}", path.display());
+                    return ExitCode::from(ERROR_EXIT_CODE);
+                }
+                doc.cover = Some(path.display().to_string());
+            }
+        }
+    }
 
     match report {
         ReportArg::Json => {

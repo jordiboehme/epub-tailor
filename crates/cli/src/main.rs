@@ -130,6 +130,10 @@ enum MetadataCommand {
     Show {
         /// Path to the EPUB.
         input: PathBuf,
+        /// Also write the book's own cover image to this path, and point the
+        /// document at it.
+        #[arg(long, value_name = "FILE")]
+        cover_out: Option<PathBuf>,
         /// Report format.
         #[arg(long, value_enum, default_value_t = ReportArg::Human)]
         report: ReportArg,
