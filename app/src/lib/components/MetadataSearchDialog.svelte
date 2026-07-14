@@ -65,6 +65,16 @@
     return `fetched-${ref.replace(/[^a-zA-Z0-9]+/g, "-")}`;
   }
 
+  /** Back to the results list, leaving the failed fetch's message behind. */
+  function back() {
+    chosen = null;
+    error = null;
+  }
+
+  // A failure here is shown by the accept step itself (the results list, which
+  // renders `error` in the other branch, is not on screen while a candidate is
+  // chosen - so a silent flip back from "Fetching..." to "Stage these" would be
+  // all the user ever saw of a dropped connection).
   async function accept(fields: Set<string>, includeCover: boolean) {
     if (!chosen) return;
     accepting = true;
@@ -127,8 +137,9 @@
           candidate={chosen}
           {book}
           busy={accepting}
+          {error}
           onaccept={accept}
-          onback={() => (chosen = null)}
+          onback={back}
         />
       {/key}
     {:else}

@@ -17,12 +17,15 @@
     candidate,
     book,
     busy = false,
+    error = null,
     onaccept,
     onback,
   }: {
     candidate: Candidate;
     book: Book;
     busy?: boolean;
+    /** A failed fetch, shown here: the results list this step replaced cannot. */
+    error?: string | null;
     onaccept: (fields: Set<string>, includeCover: boolean) => void;
     onback: () => void;
   } = $props();
@@ -125,6 +128,15 @@
       </label>
     {/if}
   </div>
+
+  {#if error}
+    <div
+      role="alert"
+      class="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-[13px] text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200"
+    >
+      {error}
+    </div>
+  {/if}
 
   <div class="mt-3 flex justify-end gap-2">
     <Button variant="secondary" onclick={onback}>Cancel</Button>
