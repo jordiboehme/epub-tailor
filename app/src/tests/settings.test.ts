@@ -60,9 +60,22 @@ describe("settings.load", () => {
     expect(settings.mdSplitLevel).toBe(2);
   });
 
+  it("remembers the view the user left the workbench in", async () => {
+    stored.set("viewMode", "list");
+    await settings.load();
+    expect(settings.viewMode).toBe("list");
+  });
+
+  it("falls back to the gallery for a view mode that is not a view", async () => {
+    stored.set("viewMode", "View.LIST");
+    await settings.load();
+    expect(settings.viewMode).toBe("grid");
+  });
+
   it("keeps the defaults when nothing is persisted yet", async () => {
     await settings.load();
     expect(settings.parallelism).toBe(3);
     expect(settings.mdSplitLevel).toBe(1);
+    expect(settings.viewMode).toBe("grid");
   });
 });

@@ -34,6 +34,20 @@ function clampInt(value: unknown, min: number, max: number, fallback: number): n
   return Math.min(max, Math.max(min, Math.round(value)));
 }
 
+/** How the workbench shows its books: the cover gallery, or the denser list. */
+export type ViewMode = "grid" | "list";
+
+const DEFAULT_VIEW_MODE: ViewMode = "grid";
+
+/**
+ * A persisted view mode, or the gallery when the file holds anything else -
+ * same reasoning as the clamps above: settings.json is hand-editable, and a
+ * `"View.LIST"` read back unchecked would render neither view.
+ */
+function toViewMode(value: unknown): ViewMode {
+  return value === "grid" || value === "list" ? value : DEFAULT_VIEW_MODE;
+}
+
 class SettingsStore {
   // -- persisted --------------------------------------------------------------
   /** Selected built-in profile name. */
@@ -54,6 +68,8 @@ class SettingsStore {
   recursive = $state(true);
   /** How many conversions run at once. */
   parallelism = $state(DEFAULT_PARALLELISM);
+  /** Whether the books show as a cover gallery or as a list. */
+  viewMode = $state<ViewMode>(DEFAULT_VIEW_MODE);
   /** Where the window was, and how big, when it was last moved or resized. */
   windowGeometry = $state<WindowGeometry | null>(null);
 
@@ -90,6 +106,7 @@ class SettingsStore {
       MAX_PARALLELISM,
       DEFAULT_PARALLELISM,
     );
+    this.viewMode = toViewMode(await store.get("viewMode"));
     this.windowGeometry = (await store.get<WindowGeometry>("windowGeometry")) ?? null;
     this.#store = store;
     this.ready = true;
@@ -107,6 +124,7 @@ class SettingsStore {
       $effect(() => void store.set("mdSplitLevel", this.mdSplitLevel));
       $effect(() => void store.set("recursive", this.recursive));
       $effect(() => void store.set("parallelism", this.parallelism));
+      $effect(() => void store.set("viewMode", this.viewMode));
       $effect(() => void store.set("windowGeometry", $state.snapshot(this.windowGeometry)));
     });
   }
