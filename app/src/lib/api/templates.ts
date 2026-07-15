@@ -41,11 +41,15 @@ export function renderTemplate(template: string, book: TemplateBook): string {
 
 /** Sanitize a rendered filename: strip what filesystems reject, tidy the rest. */
 function sanitizeFilename(name: string): string {
-  let result = name.replace(ILLEGAL_CHARS, "-");
-  // Collapse runs of the same separator - spaces and hyphens independently -
-  // so a run of missing/adjacent tokens does not leave "----" or "    "
-  // behind, without touching a deliberate " - " a template author wrote.
-  result = result.replace(/ {2,}/g, " ").replace(/-{2,}/g, "-");
+  // Illegal characters become a marker first, so the collapse below can tell
+  // a run the substitution created from a separator the data carried - a stem
+  // that came off a disk keeps its exact " -- " or double space, and
+  // "{original}" round-trips. (\x00 is itself in ILLEGAL_CHARS, so a marker
+  // can never arrive in the input.)
+  let result = name.replace(ILLEGAL_CHARS, "\x00");
+  // Any hyphen run the substitution took part in collapses to a single "-";
+  // runs made purely of the name's own hyphens are left alone.
+  result = result.replace(/[-\x00]*\x00[-\x00]*/g, "-");
   result = result.trim();
   // Windows rejects a trailing dot or space; strip them (repeatedly, in case
   // stripping one exposes another).

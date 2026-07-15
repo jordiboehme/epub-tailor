@@ -80,9 +80,17 @@ export function planOutputs(books: PlannedBook[], opts: PlanOptions): OutputPlan
     const dir = opts.outputDir ?? dirOf(book.input);
     let stem = renderTemplate(opts.template, book.template);
 
-    // Would this overwrite the book's own input? Insert the appendix if so.
+    // Would this overwrite the book's own input - or render to the input's
+    // own name up to sanitization? Insert the appendix either way: in the
+    // default "{original}" configuration every book must come out as
+    // "<stem>.<appendix>.epub", even when the sanitizer had to alter a stem
+    // (writing the altered name bare would just be a silent rename).
     const candidate = dir.length > 0 ? `${dir}/${stem}.epub` : `${stem}.epub`;
-    if (sameFileKey(candidate) === sameFileKey(book.input)) {
+    const selfNamed =
+      book.kind === "epub" &&
+      sameFileKey(dir) === sameFileKey(dirOf(book.input)) &&
+      sameFileKey(stem) === sameFileKey(renderTemplate("{original}", book.template));
+    if (sameFileKey(candidate) === sameFileKey(book.input) || selfNamed) {
       stem = `${stem}.${opts.appendix}`;
     }
 

@@ -99,6 +99,31 @@ describe("planOutputs", () => {
     expect(plans[0].output).toBe("/books/Dune.x4.epub");
   });
 
+  it("keeps a double-hyphen stem intact and still inserts the appendix", () => {
+    const plans = planOutputs([epub("/books/Grays Sports Almanac -- 1950-2000.epub")], {
+      template: "{original}",
+      outputDir: null,
+      inPlace: false,
+      appendix: "x4",
+      existsOnDisk: noDisk,
+    });
+    expect(plans[0].output).toBe("/books/Grays Sports Almanac -- 1950-2000.x4.epub");
+  });
+
+  it("inserts the appendix even when sanitization had to alter the stem", () => {
+    // A ":" can live in a stem synced in from another OS; the rendered name
+    // differs from the input then, but it is still the book's own name, so
+    // writing it without the appendix would just be a silent rename.
+    const plans = planOutputs([epub("/books/A:B.epub")], {
+      template: "{original}",
+      outputDir: null,
+      inPlace: false,
+      appendix: "x4",
+      existsOnDisk: noDisk,
+    });
+    expect(plans[0].output).toBe("/books/A-B.x4.epub");
+  });
+
   it("leaves epub books in place but still plans md outputs when in-place is on", () => {
     const plans = planOutputs(
       [epub("/b/A.epub"), md("/b/notes.md")],

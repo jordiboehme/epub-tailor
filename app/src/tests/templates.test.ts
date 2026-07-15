@@ -37,8 +37,26 @@ describe("renderTemplate", () => {
 
   it("sanitizes hostile characters in the substituted values", () => {
     const b = book({ title: "a/b: c?*", authors: [] });
-    // "/", ":", "?", "*" all become "-"; runs of "-" and spaces collapse.
+    // "/", ":", "?", "*" all become "-"; adjacent illegal characters collapse
+    // into a single "-" instead of leaving a run behind.
     expect(renderTemplate("{title}", b)).toBe("a-b- c-");
+  });
+
+  it("round-trips a stem with a double-hyphen separator exactly", () => {
+    // A stem that came off the filesystem is already a legal filename; its
+    // separators are data, not artifacts to tidy.
+    const stem = "Grays Sports Almanac -- 1950-2000";
+    expect(renderTemplate("{original}", book({ originalStem: stem }))).toBe(stem);
+  });
+
+  it("round-trips a stem with a double space exactly", () => {
+    const stem = "A  B";
+    expect(renderTemplate("{original}", book({ originalStem: stem }))).toBe(stem);
+  });
+
+  it("collapses only the runs the substitution itself created", () => {
+    const b = book({ title: "a??b", authors: [] });
+    expect(renderTemplate("{title}", b)).toBe("a-b");
   });
 
   it("falls back to the original stem when sanitization empties the result", () => {
