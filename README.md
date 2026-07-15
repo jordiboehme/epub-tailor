@@ -20,7 +20,7 @@
              · d o n ' t   p a n i c .   i t   f i t s   n o w . ·
 ```
 
-Books, made to measure. EPUB Tailor cleans, fixes and transforms EPUB files, driven by composable JSON profiles: a device profile carries your e-reader's actual measurements (screen, image budgets, CSS limits, which HTML it can render) and the book gets cut to fit them exactly. No profile at all and it simply repairs the book - regenerated packaging, junk files gone, epubcheck-clean output - without touching a hair on its typography.
+Books, made to measure. EPUB Tailor cleans, fixes and transforms EPUB files: driven by your e-reader's actual measurements and capabilities, the book gets cut to fit them exactly.
 
 EPUBs accumulate grime. Vendors leave marker files and watermark blocks in every chapter while conversion tools scatter `META-INF` droppings and duplicate ids, and e-ink firmware quietly bins your fonts, mashes your tables into rubble and draws your crisp SVG diagram as the literal word `[Image]`. This tool deals with all of it.
 
