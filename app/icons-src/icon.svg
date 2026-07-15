@@ -1,0 +1,161 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <!-- EPUB Tailor app icon - master artwork (single source of truth).
+       Edit this file, then run build.sh to regenerate app-icon.png and
+       src-tauri/icons/. Lettering is hand-built vector paths (no fonts). -->
+  <defs>
+    <clipPath id="squircle">
+      <rect x="0" y="0" width="1024" height="1024" rx="232"/>
+    </clipPath>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#14202b"/>
+      <stop offset="1" stop-color="#0a1016"/>
+    </linearGradient>
+    <radialGradient id="bgHalo" cx="0.5" cy="0.42" r="0.6">
+      <stop offset="0" stop-color="#2ad9c5" stop-opacity="0.16"/>
+      <stop offset="1" stop-color="#2ad9c5" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="body" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#24333d"/>
+      <stop offset="1" stop-color="#152028"/>
+    </linearGradient>
+    <linearGradient id="screen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#e9f0e4"/>
+      <stop offset="1" stop-color="#d5e0d2"/>
+    </linearGradient>
+    <linearGradient id="screenShade" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#000000" stop-opacity="0.16"/>
+      <stop offset="1" stop-color="#000000" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="rimL" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#2be8c8"/>
+      <stop offset="0.5" stop-color="#2be8c8" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="rimR" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0.5" stop-color="#37c7f0" stop-opacity="0"/>
+      <stop offset="1" stop-color="#37c7f0"/>
+    </linearGradient>
+    <filter id="blurS" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="6"/>
+    </filter>
+    <filter id="blurM" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="16"/>
+    </filter>
+    <filter id="blurL" x="-70%" y="-70%" width="240%" height="240%">
+      <feGaussianBlur stdDeviation="30"/>
+    </filter>
+    <path id="sparkle" d="M0,-11 C1.6,-3.2 3.2,-1.6 11,0 C3.2,1.6 1.6,3.2 0,11 C-1.6,3.2 -3.2,1.6 -11,0 C-3.2,-1.6 -1.6,-3.2 0,-11 Z"/>
+  </defs>
+
+  <g clip-path="url(#squircle)">
+    <!-- background -->
+    <rect x="0" y="0" width="1024" height="1024" fill="url(#bg)"/>
+    <rect x="0" y="0" width="1024" height="1024" fill="url(#bgHalo)"/>
+
+    <!-- retro horizon grid, faint, mostly peeking around the device -->
+    <g stroke="#2be8c8" stroke-width="2" opacity="0.06" fill="none">
+      <line x1="0" y1="800" x2="1024" y2="800"/>
+      <line x1="0" y1="838" x2="1024" y2="838"/>
+      <line x1="0" y1="884" x2="1024" y2="884"/>
+      <line x1="0" y1="948" x2="1024" y2="948"/>
+      <line x1="397" y1="790" x2="-200" y2="1024"/>
+      <line x1="423" y1="790" x2="-40" y2="1024"/>
+      <line x1="449" y1="790" x2="120" y2="1024"/>
+      <line x1="475" y1="790" x2="280" y2="1024"/>
+      <line x1="500" y1="790" x2="440" y2="1024"/>
+      <line x1="526" y1="790" x2="600" y2="1024"/>
+      <line x1="552" y1="790" x2="760" y2="1024"/>
+      <line x1="578" y1="790" x2="920" y2="1024"/>
+      <line x1="604" y1="790" x2="1080" y2="1024"/>
+    </g>
+
+    <!-- starfield -->
+    <g fill="#ffffff">
+      <circle cx="150" cy="182" r="2.6" opacity="0.75"/>
+      <circle cx="206" cy="342" r="1.9" opacity="0.5"/>
+      <circle cx="128" cy="522" r="2.1" opacity="0.6"/>
+      <circle cx="172" cy="700" r="1.7" opacity="0.4"/>
+      <circle cx="304" cy="118" r="1.9" opacity="0.55"/>
+      <circle cx="700" cy="104" r="2.1" opacity="0.6"/>
+      <circle cx="862" cy="152" r="2.3" opacity="0.7"/>
+      <circle cx="902" cy="304" r="1.7" opacity="0.45"/>
+      <circle cx="878" cy="560" r="2.4" opacity="0.65"/>
+      <circle cx="856" cy="722" r="1.8" opacity="0.45"/>
+      <circle cx="222" cy="245" r="1.4" opacity="0.35"/>
+      <circle cx="820" cy="430" r="1.4" opacity="0.35"/>
+    </g>
+    <use href="#sparkle" x="0" y="0" transform="translate(140,262)" fill="#cffdf4" opacity="0.9"/>
+    <use href="#sparkle" x="0" y="0" transform="translate(884,424) scale(0.8)" fill="#cfeeff" opacity="0.85"/>
+
+    <!-- rim bloom (widest glow), under the body so it spills outward -->
+    <g fill="none">
+      <rect x="262" y="162" width="500" height="700" rx="56" stroke="url(#rimL)" stroke-width="16" filter="url(#blurL)" opacity="0.35"/>
+      <rect x="262" y="162" width="500" height="700" rx="56" stroke="url(#rimR)" stroke-width="16" filter="url(#blurL)" opacity="0.35"/>
+    </g>
+
+    <!-- device body -->
+    <rect x="262" y="162" width="500" height="700" rx="56" fill="url(#body)"/>
+
+    <!-- screen glow bleeding onto the bezel -->
+    <rect x="292" y="200" width="440" height="560" rx="24" fill="#e2fff2" opacity="0.35" filter="url(#blurM)"/>
+
+    <!-- rim light: mid glow + crisp line -->
+    <g fill="none">
+      <rect x="262" y="162" width="500" height="700" rx="56" stroke="url(#rimL)" stroke-width="9" filter="url(#blurS)" opacity="0.9"/>
+      <rect x="262" y="162" width="500" height="700" rx="56" stroke="url(#rimR)" stroke-width="9" filter="url(#blurS)" opacity="0.9"/>
+      <rect x="262" y="162" width="500" height="700" rx="56" stroke="url(#rimL)" stroke-width="4.5" opacity="0.95"/>
+      <rect x="262" y="162" width="500" height="700" rx="56" stroke="url(#rimR)" stroke-width="4.5" opacity="0.95"/>
+    </g>
+
+    <!-- bezel top sheen -->
+    <path d="M330,166.5 L694,166.5" stroke="#ffffff" stroke-opacity="0.07" stroke-width="2.5" stroke-linecap="round"/>
+
+    <!-- e-ink screen -->
+    <rect x="302" y="210" width="420" height="540" rx="18" fill="url(#screen)"/>
+    <rect x="302" y="210" width="420" height="46" rx="18" fill="url(#screenShade)"/>
+    <rect x="303.5" y="211.5" width="417" height="537" rx="17" fill="none" stroke="#000000" stroke-opacity="0.22" stroke-width="3"/>
+
+    <!-- DON'T (hand-built monoline glyphs, box 90x120, stroke 30, advance 110) -->
+    <g transform="translate(368,350) scale(0.62)" fill="none" stroke="#1e2a28" stroke-width="30" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M15,15 L15,105 L42,105 C68,105 75,84 75,60 C75,36 68,15 42,15 L15,15 Z"/>
+      <g transform="translate(110,0)">
+        <ellipse cx="45" cy="60" rx="30" ry="45"/>
+      </g>
+      <g transform="translate(220,0)">
+        <path d="M15,105 L15,15 L75,105 L75,15"/>
+      </g>
+      <g transform="translate(330,0)">
+        <path d="M14,12 L8,40" stroke-width="26"/>
+      </g>
+      <g transform="translate(374,0)">
+        <path d="M8,15 L82,15 M45,15 L45,105"/>
+      </g>
+    </g>
+
+    <!-- PANIC -->
+    <g transform="translate(348,466) scale(0.62)" fill="none" stroke="#1e2a28" stroke-width="30" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M15,105 L15,15 L46,15 C68,15 74,28 74,42 C74,56 68,69 46,69 L15,69"/>
+      <g transform="translate(110,0)">
+        <path d="M10,105 L45,15 L80,105 M25,72 L65,72"/>
+      </g>
+      <g transform="translate(220,0)">
+        <path d="M15,105 L15,15 L75,105 L75,15"/>
+      </g>
+      <g transform="translate(330,0)">
+        <path d="M25,15 L65,15 M45,15 L45,105 M25,105 L65,105"/>
+      </g>
+      <g transform="translate(440,0)">
+        <path d="M73,32 C66,20 57,15 45,15 C22,15 15,36 15,60 C15,84 22,105 45,105 C57,105 66,100 73,88"/>
+      </g>
+    </g>
+
+    <!-- banner-echo text bars -->
+    <g fill="#1e2a28" opacity="0.28">
+      <rect x="362" y="596" width="300" height="16" rx="8"/>
+      <rect x="382" y="634" width="260" height="16" rx="8"/>
+    </g>
+
+    <!-- home dot -->
+    <circle cx="512" cy="806" r="11" fill="#2be8c8" opacity="0.55" filter="url(#blurS)"/>
+    <circle cx="512" cy="806" r="9" fill="#2be8c8" opacity="0.9"/>
+  </g>
+</svg>
