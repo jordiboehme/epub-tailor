@@ -6,7 +6,7 @@ members = ["crates/core", "crates/cli", "xtask", "app/src-tauri"]
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/jordiboehme/epub-tailor"
-version = "0.6.0"
+version = "0.6.1"
 
 [workspace.dependencies]
 thiserror = "2"
@@ -51,7 +51,7 @@ ureq = { version = "3", default-features = false, features = ["rustls", "json", 
 time = { version = "0.3", features = ["formatting"] }
 proptest = "1"
 insta = "1"
-epub-tailor-core = { path = "crates/core", version = "0.6.0" }
+epub-tailor-core = { path = "crates/core", version = "0.6.1" }
 
 [workspace.lints.clippy]
 # Intentionally empty: keep clippy's default lint levels.
