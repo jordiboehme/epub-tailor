@@ -37,10 +37,10 @@ function clampInt(value: unknown, min: number, max: number, fallback: number): n
 /** How the workbench shows its books: the cover gallery, or the denser list. */
 export type ViewMode = "grid" | "list";
 
-const DEFAULT_VIEW_MODE: ViewMode = "grid";
+const DEFAULT_VIEW_MODE: ViewMode = "list";
 
 /**
- * A persisted view mode, or the gallery when the file holds anything else -
+ * A persisted view mode, or the list when the file holds anything else -
  * same reasoning as the clamps above: settings.json is hand-editable, and a
  * `"View.LIST"` read back unchecked would render neither view.
  */
