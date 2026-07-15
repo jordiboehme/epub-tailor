@@ -45,7 +45,7 @@ export const TONE_CLASS: Record<Tone, string> = {
   good: "bg-emerald-100 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300",
   warn: "bg-amber-100 text-amber-700 dark:bg-amber-500/15 dark:text-amber-300",
   bad: "bg-rose-100 text-rose-700 dark:bg-rose-500/15 dark:text-rose-300",
-  neutral: "bg-zinc-200 text-zinc-600 dark:bg-zinc-700 dark:text-zinc-300",
+  neutral: "bg-ink-200 text-ink-600 dark:bg-ink-700 dark:text-ink-300",
 };
 
 /**
@@ -110,13 +110,24 @@ export function fileInitials(file: BookFile): string {
 }
 
 /**
- * The findings to show for a file: an explicit check's, or - when the user
- * never ran one - whatever the automatic check-on-add turned up. The explicit
- * result wins because the user asked for it, possibly against a device
- * profile; the automatic probe only ever speaks `epub`.
+ * The findings to show for a file: an explicit check's, a fit's own warnings,
+ * or - failing both - whatever the automatic check-on-add turned up. The
+ * explicit results win because the user asked for them, possibly against a
+ * device profile; the automatic probe only ever speaks `epub`. A fit's
+ * warnings wear the `Finding` shape so the same drawer shows them; they have
+ * no lint code, and the inner file rides along in the message - unless the
+ * message already names it - because the drawer never renders `path`.
  */
 export function findingsOf(file: BookFile): Finding[] | undefined {
   if (file.result?.kind === "check") return file.result.report.findings;
+  if (file.result?.kind === "fit" && file.result.report.warnings.length > 0) {
+    return file.result.report.warnings.map((w) => ({
+      severity: "warning" as const,
+      code: "",
+      message: w.file && !w.message.includes(w.file) ? `${w.message} (${w.file})` : w.message,
+      path: w.file,
+    }));
+  }
   return file.cleanup && file.cleanup.findings.length > 0 ? file.cleanup.findings : undefined;
 }
 
@@ -167,6 +178,11 @@ export function failureOf(file: BookFile): Failure | undefined {
   return file.ingest === "failed" && file.ingestError ? file.ingestError : undefined;
 }
 
+/** "1 warning" / "3 warnings" - the label every counting chip uses. */
+function counted(count: number, noun: string): string {
+  return `${count} ${noun}${count === 1 ? "" : "s"}`;
+}
+
 function sizeChip(stats: Stats): Chip {
   if (stats.bytes_in > 0 && stats.bytes_out < stats.bytes_in) {
     const pct = Math.round((1 - stats.bytes_out / stats.bytes_in) * 100);
@@ -195,7 +211,7 @@ export function chipsFor(file: BookFile): Chip[] {
       id: "needs-cleanup",
       label: "needs cleanup",
       tone: "warn",
-      title: `${count} finding${count === 1 ? "" : "s"} from the automatic check`,
+      title: `${counted(count, "finding")} from the automatic check`,
     });
   }
 
@@ -205,14 +221,19 @@ export function chipsFor(file: BookFile): Chip[] {
       chips.push({ label: "preview", tone: "neutral" });
     }
     if (file.result.report.stats.warnings > 0) {
-      chips.push({ label: `${file.result.report.stats.warnings} warnings`, tone: "warn" });
+      const messages = file.result.report.warnings.map((w) => w.message).join("\n");
+      chips.push({
+        label: counted(file.result.report.stats.warnings, "warning"),
+        tone: "warn",
+        title: messages || undefined,
+      });
     }
   } else if (file.result?.kind === "check") {
     if (file.result.report.errors > 0) {
-      chips.push({ label: `${file.result.report.errors} errors`, tone: "bad" });
+      chips.push({ label: counted(file.result.report.errors, "error"), tone: "bad" });
     }
     if (file.result.report.warnings > 0) {
-      chips.push({ label: `${file.result.report.warnings} warnings`, tone: "warn" });
+      chips.push({ label: counted(file.result.report.warnings, "warning"), tone: "warn" });
     }
     if (file.result.report.errors === 0 && file.result.report.warnings === 0) {
       chips.push({ label: "clean", tone: "good" });

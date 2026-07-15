@@ -212,6 +212,60 @@ describe("findingsOf", () => {
   it("says nothing for a clean automatic check", () => {
     expect(findingsOf(makeFile({ cleanup: checkReport() }))).toBeUndefined();
   });
+
+  it("shapes a fit report's warnings as findings", () => {
+    const book = makeFile({
+      result: {
+        kind: "fit",
+        report: fitReport({
+          warnings: [
+            { message: "could not parse the CSS in style.css; dropped it", file: "style.css" },
+            { message: "cover image is enormous", file: "cover.jpg" },
+            { message: "empty chapter", file: null },
+          ],
+          stats: stats({ warnings: 3 }),
+        }),
+      },
+    });
+    expect(findingsOf(book)).toEqual([
+      // The message already names the file, so nothing is appended.
+      {
+        severity: "warning",
+        code: "",
+        message: "could not parse the CSS in style.css; dropped it",
+        path: "style.css",
+      },
+      { severity: "warning", code: "", message: "cover image is enormous (cover.jpg)", path: "cover.jpg" },
+      { severity: "warning", code: "", message: "empty chapter", path: null },
+    ]);
+  });
+
+  it("falls back to the automatic check when a fit had no warnings", () => {
+    const findings = [{ severity: "info" as const, code: "I1", message: "m", path: null }];
+    const book = makeFile({
+      result: { kind: "fit", report: fitReport() },
+      cleanup: checkReport({ findings, warnings: 1 }),
+    });
+    expect(findingsOf(book)).toBe(findings);
+    expect(findingsOf(makeFile({ result: { kind: "fit", report: fitReport() } }))).toBeUndefined();
+  });
+
+  it("prefers a fit's own warnings over the automatic check", () => {
+    const auto = [{ severity: "info" as const, code: "I1", message: "auto", path: null }];
+    const book = makeFile({
+      result: {
+        kind: "fit",
+        report: fitReport({
+          warnings: [{ message: "empty chapter", file: null }],
+          stats: stats({ warnings: 1 }),
+        }),
+      },
+      cleanup: checkReport({ findings: auto, warnings: 1 }),
+    });
+    expect(findingsOf(book)).toEqual([
+      { severity: "warning", code: "", message: "empty chapter", path: null },
+    ]);
+  });
 });
 
 describe("needsCleanup", () => {
@@ -336,24 +390,61 @@ describe("chipsFor", () => {
     ]);
   });
 
-  it("adds a warnings chip alongside the size chip", () => {
+  it("adds a warnings chip alongside the size chip, its messages in the title", () => {
     const book = makeFile({
       result: {
         kind: "fit",
-        report: fitReport({ stats: stats({ bytes_in: 1000, bytes_out: 500, warnings: 3 }) }),
+        report: fitReport({
+          warnings: [
+            { message: "could not parse the CSS in style.css; dropped it", file: "style.css" },
+            { message: "cover image is enormous", file: null },
+            { message: "empty chapter", file: "ch3.xhtml" },
+          ],
+          stats: stats({ bytes_in: 1000, bytes_out: 500, warnings: 3 }),
+        }),
       },
     });
     expect(chipsFor(book)).toEqual([
       { label: "-50%", tone: "good", title: "1000 B to 500 B" },
-      { label: "3 warnings", tone: "warn" },
+      {
+        label: "3 warnings",
+        tone: "warn",
+        title:
+          "could not parse the CSS in style.css; dropped it\ncover image is enormous\nempty chapter",
+      },
     ]);
+  });
+
+  it("singularizes a lone fit warning", () => {
+    const book = makeFile({
+      result: {
+        kind: "fit",
+        report: fitReport({
+          warnings: [{ message: "empty chapter", file: null }],
+          stats: stats({ bytes_in: 1000, bytes_out: 500, warnings: 1 }),
+        }),
+      },
+    });
+    expect(chipsFor(book)).toContainEqual({
+      label: "1 warning",
+      tone: "warn",
+      title: "empty chapter",
+    });
   });
 
   it("shows errors and warnings for a check", () => {
     const book = makeFile({ result: { kind: "check", report: checkReport({ errors: 2, warnings: 1 }) } });
     expect(chipsFor(book)).toEqual([
       { label: "2 errors", tone: "bad" },
-      { label: "1 warnings", tone: "warn" },
+      { label: "1 warning", tone: "warn" },
+    ]);
+  });
+
+  it("singularizes a lone check error", () => {
+    const book = makeFile({ result: { kind: "check", report: checkReport({ errors: 1, warnings: 2 }) } });
+    expect(chipsFor(book)).toEqual([
+      { label: "1 error", tone: "bad" },
+      { label: "2 warnings", tone: "warn" },
     ]);
   });
 

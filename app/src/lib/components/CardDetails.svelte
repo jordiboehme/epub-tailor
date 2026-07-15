@@ -26,17 +26,17 @@
   const dot: Record<Finding["severity"], string> = {
     error: "bg-rose-500",
     warning: "bg-amber-500",
-    info: "bg-zinc-400",
+    info: "bg-ink-400",
   };
 
   const stderr = $derived((failure?.stderr ?? []).filter((line) => line.trim().length > 0));
 </script>
 
-<div class="border-t border-zinc-200 {padding} dark:border-zinc-800">
+<div class="border-t border-ink-200 {padding} dark:border-ink-800">
   {#if failure}
-    <p class="text-[11px] leading-snug text-zinc-600 dark:text-zinc-300">{failure.friendly}</p>
+    <p class="text-[11px] leading-snug text-ink-600 dark:text-ink-300">{failure.friendly}</p>
     <div class="mt-1.5 flex items-center gap-2">
-      <span class="rounded bg-zinc-100 px-1 py-0.5 font-mono text-[10px] text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400">
+      <span class="rounded bg-ink-100 px-1 py-0.5 font-mono text-[10px] text-ink-600 dark:bg-ink-800 dark:text-ink-400">
         {failure.code}
       </span>
       {#if stderr.length > 0}
@@ -46,7 +46,7 @@
             e.stopPropagation();
             showStderr = !showStderr;
           }}
-          class="text-[10px] font-medium text-zinc-500 hover:text-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-200"
+          class="text-[10px] font-medium text-ink-500 hover:text-ink-700 dark:text-ink-400 dark:hover:text-ink-200"
         >
           {showStderr ? "Hide what it said" : "What it said"}
         </button>
@@ -55,21 +55,23 @@
 
     {#if showStderr && stderr.length > 0}
       <pre
-        class="mt-1.5 max-h-32 overflow-auto whitespace-pre-wrap break-words rounded-md bg-zinc-100 p-1.5 font-mono text-[10px] leading-snug text-zinc-600 dark:bg-zinc-950 dark:text-zinc-400">{stderr.join(
+        class="mt-1.5 max-h-32 overflow-auto whitespace-pre-wrap break-words rounded-md bg-ink-100 p-1.5 font-mono text-[10px] leading-snug text-ink-600 dark:bg-ink-950 dark:text-ink-400">{stderr.join(
           "\n",
         )}</pre>
     {/if}
   {:else if findings}
     {#if findings.length === 0}
-      <p class="text-[11px] text-zinc-500 dark:text-zinc-400">Nothing to report.</p>
+      <p class="text-[11px] text-ink-500 dark:text-ink-400">Nothing to report.</p>
     {:else}
       <ul class="flex max-h-40 flex-col gap-1.5 overflow-y-auto">
         {#each findings as finding (finding.code + finding.message)}
           <li class="flex items-start gap-1.5 text-[11px] leading-snug">
             <span class="mt-0.5 h-1.5 w-1.5 shrink-0 rounded-full {dot[finding.severity]}"></span>
             <span class="min-w-0">
-              <span class="font-mono text-zinc-500 dark:text-zinc-500">{finding.code}</span>
-              <span class="text-zinc-600 dark:text-zinc-300"> {finding.message}</span>
+              {#if finding.code}
+                <span class="font-mono text-ink-500 dark:text-ink-500">{finding.code}</span>
+              {/if}
+              <span class="text-ink-600 dark:text-ink-300"> {finding.message}</span>
             </span>
           </li>
         {/each}
