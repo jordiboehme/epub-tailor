@@ -9,7 +9,9 @@
 use std::path::Path;
 use std::sync::{Mutex, PoisonError};
 
-use tauri::{AppHandle, Emitter, Manager, State, Url};
+#[cfg(target_os = "macos")]
+use tauri::Url;
+use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::commands::classify;
 
@@ -62,7 +64,9 @@ pub fn resolve_argv(argv: &[String], cwd: &str) -> Vec<String> {
 
 /// Convert the `file://` URLs macOS hands the app via `RunEvent::Opened` into
 /// plain paths, dropping anything that is not a `file://` URL or whose
-/// extension does not qualify.
+/// extension does not qualify. macOS-only like the event that feeds it, so
+/// the other platforms' clippy does not see an uncallable function.
+#[cfg(target_os = "macos")]
 pub fn urls_to_paths(urls: &[Url]) -> Vec<String> {
     urls.iter()
         .filter_map(|url| url.to_file_path().ok())

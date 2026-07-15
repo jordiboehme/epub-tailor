@@ -1,7 +1,11 @@
 mod commands;
 mod open_files;
 
-use tauri::{Manager, RunEvent};
+use tauri::Manager;
+// Only macOS delivers opened files as a run event; elsewhere the import
+// would be dead weight that clippy rightly rejects.
+#[cfg(target_os = "macos")]
+use tauri::RunEvent;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
