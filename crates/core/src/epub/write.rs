@@ -27,12 +27,18 @@ use crate::html::escape::{escape_attr, escape_text};
 ///
 /// `stamp` is the provenance marker written as
 /// `<meta property="tailor:fitted">` (with its prefix declaration); `None`
-/// leaves the OPF byte-identical to an unstamped write.
+/// leaves the OPF byte-identical to an unstamped write. `stamp_profile` names
+/// the profile behind the stamp as a sibling `<meta property="tailor:profile">`;
+/// it is ignored without a `stamp`.
 ///
 /// # Errors
 /// Returns [`ConvertError::Io`] if a template fails to render or a ZIP entry
 /// cannot be written (neither is expected for well-formed model data).
-pub fn write_epub(book: &Book, stamp: Option<&str>) -> Result<Vec<u8>, ConvertError> {
+pub fn write_epub(
+    book: &Book,
+    stamp: Option<&str>,
+    stamp_profile: Option<&str>,
+) -> Result<Vec<u8>, ConvertError> {
     let opf_dir = parent_dir(&book.opf_path);
     let nav_path = book
         .nav_path
@@ -168,6 +174,7 @@ pub fn write_epub(book: &Book, stamp: Option<&str>) -> Result<Vec<u8>, ConvertEr
         series_index: series.index.unwrap_or_default(),
         modified: now_utc_iso8601(),
         stamp: stamp.unwrap_or_default().to_string(),
+        stamp_profile: stamp.and(stamp_profile).unwrap_or_default().to_string(),
         cover_id,
         ncx_id,
         items,
@@ -273,6 +280,9 @@ struct OpfTemplate {
     /// The `tailor:fitted` provenance value; empty writes no stamp and no
     /// prefix declaration, keeping the OPF byte-identical to pre-stamp output.
     stamp: String,
+    /// The `tailor:profile` value naming the fitting profile; only ever
+    /// non-empty together with [`Self::stamp`].
+    stamp_profile: String,
     cover_id: String,
     ncx_id: String,
     items: Vec<OpfItem>,
@@ -686,6 +696,10 @@ mod tests {
     /// Write a hand-built `Book` carrying `language` and return its regenerated
     /// OPF text, for pinning the last-resort `dc:language` guard and the stamp.
     fn opf_for(language: &str, stamp: Option<&str>) -> String {
+        opf_for_stamped(language, stamp, None)
+    }
+
+    fn opf_for_stamped(language: &str, stamp: Option<&str>, stamp_profile: Option<&str>) -> String {
         use std::io::Read;
 
         let opf_path = "OEBPS/content.opf".to_string();
@@ -714,7 +728,7 @@ mod tests {
             nav_path: None,
             ncx_path: None,
         };
-        let bytes = write_epub(&book, stamp).expect("write should succeed");
+        let bytes = write_epub(&book, stamp, stamp_profile).expect("write should succeed");
 
         let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).expect("output is a valid zip");
         let mut opf = String::new();
@@ -765,6 +779,32 @@ mod tests {
         let unstamped = opf_for("en", None);
         assert!(!unstamped.contains("prefix="), "got: {unstamped}");
         assert!(!unstamped.contains("tailor:fitted"), "got: {unstamped}");
+    }
+
+    #[test]
+    fn profile_template_matches_the_probe_constant() {
+        let profiled = opf_for_stamped("en", Some("x4 1.2.3"), Some("x4"));
+        assert!(
+            profiled.contains(crate::epub::stamp::PROFILE_PROPERTY),
+            "got: {profiled}"
+        );
+        assert!(
+            profiled.contains(r#"<meta property="tailor:profile">x4</meta>"#),
+            "got: {profiled}"
+        );
+
+        // A profile is only provenance detail on the stamp: without a stamp it
+        // must not appear, keeping unstamped output byte-identical.
+        let profile_only = opf_for_stamped("en", None, Some("x4"));
+        assert!(
+            !profile_only.contains("tailor:profile"),
+            "got: {profile_only}"
+        );
+        assert!(
+            !profile_only.contains("tailor:fitted"),
+            "got: {profile_only}"
+        );
+        assert!(!profile_only.contains("prefix="), "got: {profile_only}");
     }
 
     #[test]

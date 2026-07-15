@@ -57,6 +57,9 @@
     <meta property="dcterms:modified">{{ modified }}</meta>
 {%- if !stamp.is_empty() %}
     <meta property="tailor:fitted">{{ stamp }}</meta>
+{%- if !stamp_profile.is_empty() %}
+    <meta property="tailor:profile">{{ stamp_profile }}</meta>
+{%- endif %}
 {%- endif %}
 {%- if !cover_id.is_empty() %}
     <meta name="cover" content="{{ cover_id }}"/>

@@ -38,6 +38,10 @@ pub struct ConvertOptions {
     /// product from a source. `None` writes nothing. Set by `fit`, never by
     /// `md` - a Markdown conversion produces a source, not a fitted book.
     pub output_stamp: Option<String>,
+    /// The name of the profile that fitted the book, written next to the
+    /// stamp as `<meta property="tailor:profile">`. Only meaningful with
+    /// [`Self::output_stamp`]; ignored when the stamp is `None`.
+    pub output_profile: Option<String>,
 }
 
 /// A cover image handed to [`crate::convert`] as bytes.
@@ -68,6 +72,7 @@ impl Default for ConvertOptions {
             metadata_clears: Vec::new(),
             cover_image: None,
             output_stamp: None,
+            output_profile: None,
         }
     }
 }

@@ -35,8 +35,8 @@ use kuchikiki::{NodeData, NodeRef};
 pub use crate::image::{ImageOutcome, ImageRole, OutFormat, process_image};
 pub use css::{FilteredCss, filter_css, filter_inline_style};
 pub use epub::{
-    Book, Creator, Identifier, Metadata, ReadEpub, Resource, Series, TocEntry, read_epub,
-    read_stamp, relative_href, write_epub,
+    Book, Creator, Identifier, Metadata, ReadEpub, Resource, Series, StampInfo, TocEntry,
+    read_epub, read_stamp, read_stamp_info, relative_href, write_epub,
 };
 pub use error::ConvertError;
 pub use filter::{FilterAction, FilterRule, FilterTarget};
@@ -543,7 +543,11 @@ pub fn convert(input: Input, opts: &ConvertOptions) -> Result<Converted, Convert
 
     let chapter_count = book.spine.len() as u32;
     ensure_output_wellformed(&book)?;
-    let epub = write_epub(&book, opts.output_stamp.as_deref())?;
+    let epub = write_epub(
+        &book,
+        opts.output_stamp.as_deref(),
+        opts.output_profile.as_deref(),
+    )?;
     let bytes_out = epub.len() as u64;
 
     // Our own output must never carry a structural error the device would

@@ -13,6 +13,19 @@ use crate::epub::read::parse_container;
 pub const STAMP_PREFIX_IRI: &str = "https://github.com/jordiboehme/epub-tailor#";
 /// The `property` of the provenance `<meta>`.
 pub const STAMP_PROPERTY: &str = "tailor:fitted";
+/// The `property` of the sibling `<meta>` naming the profile that fitted the
+/// book. Written next to [`STAMP_PROPERTY`], never on its own.
+pub const PROFILE_PROPERTY: &str = "tailor:profile";
+
+/// What the provenance stamp says about a fitted book.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StampInfo {
+    /// The `tailor:fitted` value, `"<appendix> <version>"`.
+    pub fitted: String,
+    /// The `tailor:profile` value, the name of the profile that fitted the
+    /// book. `None` on files stamped before the profile meta existed.
+    pub profile: Option<String>,
+}
 
 /// Cheap probe: the provenance stamp a previous `fit` wrote into `bytes`,
 /// if any. Unzips only `META-INF/container.xml` and the OPF, never the full
@@ -21,6 +34,13 @@ pub const STAMP_PROPERTY: &str = "tailor:fitted";
 /// unstamped, and whatever is actually wrong with it surfaces later, from
 /// the code path that can report it properly.
 pub fn read_stamp(bytes: &[u8]) -> Option<String> {
+    read_stamp_info(bytes).map(|info| info.fitted)
+}
+
+/// [`read_stamp`], plus the profile meta written next to the stamp. A file
+/// without the `tailor:fitted` meta yields `None` even if a stray profile
+/// meta is present: the stamp is what marks a product.
+pub fn read_stamp_info(bytes: &[u8]) -> Option<StampInfo> {
     let mut archive = ZipArchive::new(Cursor::new(bytes)).ok()?;
     let container = read_entry(&mut archive, "META-INF/container.xml")?;
     let opf_path = parse_container(&container).ok()?;
@@ -34,12 +54,18 @@ pub fn read_stamp(bytes: &[u8]) -> Option<String> {
     })?;
 
     let doc = roxmltree::Document::parse(&opf).ok()?;
-    doc.descendants()
-        .find(|n| n.has_tag_name("meta") && n.attribute("property") == Some(STAMP_PROPERTY))
-        .and_then(|n| n.text())
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(str::to_string)
+    let meta_value = |property: &str| {
+        doc.descendants()
+            .find(|n| n.has_tag_name("meta") && n.attribute("property") == Some(property))
+            .and_then(|n| n.text())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+    };
+    Some(StampInfo {
+        fitted: meta_value(STAMP_PROPERTY)?,
+        profile: meta_value(PROFILE_PROPERTY),
+    })
 }
 
 fn read_entry(archive: &mut ZipArchive<Cursor<&[u8]>>, name: &str) -> Option<String> {

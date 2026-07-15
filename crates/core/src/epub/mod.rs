@@ -8,5 +8,5 @@ pub mod write;
 
 pub use model::{Book, Creator, Identifier, Metadata, Resource, Series, TocEntry};
 pub use read::{ReadEpub, read_epub};
-pub use stamp::read_stamp;
+pub use stamp::{StampInfo, read_stamp, read_stamp_info};
 pub use write::{relative_href, write_epub};

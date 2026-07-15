@@ -456,5 +456,8 @@ fn cleared_fields_leave_no_empty_elements_in_the_opf() {
             "a cleared field must leave no element behind, found {gone}"
         );
     }
-    assert!(opf.contains("<dc:title>The Rich Book</dc:title>"), "kept fields still written");
+    assert!(
+        opf.contains("<dc:title>The Rich Book</dc:title>"),
+        "kept fields still written"
+    );
 }
