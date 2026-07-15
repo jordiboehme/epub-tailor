@@ -20,21 +20,37 @@
              · d o n ' t   p a n i c .   i t   f i t s   n o w . ·
 ```
 
-Books, made to measure. `epub-tailor` cleans, fixes and transforms EPUB files, driven by composable JSON profiles: a device profile carries your e-reader's actual measurements (screen, image budgets, CSS limits, which HTML it can render) and the book gets cut to fit them exactly. No profile at all and it simply repairs the book - regenerated packaging, junk files gone, epubcheck-clean output - without touching a hair on its typography.
+Books, made to measure. EPUB Tailor cleans, fixes and transforms EPUB files, driven by composable JSON profiles: a device profile carries your e-reader's actual measurements (screen, image budgets, CSS limits, which HTML it can render) and the book gets cut to fit them exactly. No profile at all and it simply repairs the book - regenerated packaging, junk files gone, epubcheck-clean output - without touching a hair on its typography.
 
-EPUBs accumulate grime. Vendors leave marker files and watermark blocks in every chapter while conversion tools scatter `META-INF` droppings and duplicate ids, and e-ink firmware quietly bins your fonts, mashes your tables into rubble and draws your crisp SVG diagram as the literal word `[Image]`. This tool deals with all of it, and never touches your original file.\*
+EPUBs accumulate grime. Vendors leave marker files and watermark blocks in every chapter while conversion tools scatter `META-INF` droppings and duplicate ids, and e-ink firmware quietly bins your fonts, mashes your tables into rubble and draws your crisp SVG diagram as the literal word `[Image]`. This tool deals with all of it.
 
-\* Unless you pass `--lets-get-dangerous`, which replaces the original in place - and now works on folders and several files too, each book staged in a temp file and renamed at the end, so even a failed run cannot eat your book. But you did ask for it by name.
+It comes as a desktop app for macOS, Windows and Linux, and as a command line for the terminal people. Same tailor either way - the app carries the CLI inside and drives it, so what comes out of one is exactly what would have come out of the other.
 
 ## TL;DR
 
-You bought an Xteink X4, a lovely little slab of e-ink. You copied your favorite EPUB onto it and opened something else entirely: the fonts are gone, every numbered list is bullets and the diagram in chapter 3 is missing. So are a few paragraphs, and you would never have noticed. This fixes it:
+You bought an Xteink X4, a lovely little slab of e-ink. You copied your favorite EPUB onto it and opened something else entirely: the fonts are gone, every numbered list is bullets and the diagram in chapter 3 is missing. So are a few paragraphs, and you would never have noticed.
+
+Open EPUB Tailor, drop the book in, pick your device, press Fit. Out comes `my-book.x4.epub`, rewritten into exactly what the device can render, ready to copy over. Your original file is never touched.
+
+## The app
+
+Drop books in - one or a whole library. You get covers and a proper list, and every book shows its files: the original plus every fitted copy it already has, each one a row you can act on.
+
+**Edit** works like a tag editor: fix a wrong title, a missing author or a bare series field, or look the whole record up online and take what is right. Saving writes into the original file itself, and a safety copy goes to the Trash first - undo, as designed by your operating system. A book with structural problems wears a small "needs cleanup" chip; click it and the problem is gone.
+
+**Fit** is the conversion: pick a device profile, queue a pile of books, watch them come out fitted, with live per-file progress and a cancel button that works. Fitting always writes a copy and never touches the original, then remembers which profile made it so a rerun skips what is already done.
+
+macOS, with Homebrew:
 
 ```sh
-epub-tailor fit my-book.epub --profile x4
+brew install --cask jordiboehme/tap/epub-tailor-app
 ```
 
-Out comes `my-book.x4.epub`, rewritten into exactly what the device can render, ready to copy over. Your original file is never touched.
+Or take the DMG straight from [Releases](https://github.com/jordiboehme/epub-tailor/releases): signed, notarized and stapled, so it opens with a double click and no ceremony.
+
+Windows: the `-setup.exe` installer. It is not code-signed, so Windows will make a face - click *More info*, then *Run anyway*. Linux: the `.AppImage` (`chmod +x` it and run it) or the `.deb`.
+
+The app keeps itself current. When a new version ships it mentions it, quietly, and installs it when you say so. The `.deb` is the one exception: there, apt is in charge and we do not argue with apt.
 
 ## What it does
 
@@ -63,7 +79,9 @@ Out comes `my-book.x4.epub`, rewritten into exactly what the device can render, 
 - Rescues and scopes chapter `<style>` blocks the firmware would otherwise ignore or misapply.
 - Splits oversized chapters at heading boundaries before they stall the indexer.
 
-## Install
+## The command line
+
+The same engine, undressed. Everything the app does lives in one binary that scripts, pipes, reports in JSON and processes a folder of a thousand books without drawing a single pixel - the pro option, and the only option if your books live on a headless NAS.
 
 macOS, with Homebrew:
 
@@ -73,21 +91,11 @@ brew install jordiboehme/tap/epub-tailor
 
 Windows and Linux: grab a binary from [Releases](https://github.com/jordiboehme/epub-tailor/releases). Prebuilt for macOS (arm64 and Intel), Linux (arm64 and amd64, static) and Windows (amd64 and arm64).
 
-### Or install the app
-
-There is a desktop app now. Same tailor, with a shopfront: drop books in, pick a device, watch them come out fitted. It shows you the covers, lets you fix a wrong title or a missing author before the book is converted (looking the correct one up online if you ask it to), converts a whole pile in one go with a progress bar plus a cancel button and writes the results straight to the e-reader when you plug it in. It is not a reimplementation - the CLI rides along inside the app and does all the work, so what comes out is exactly what the command line would have produced.
-
-macOS, with Homebrew:
+The TL;DR, without the app:
 
 ```sh
-brew install --cask jordiboehme/tap/epub-tailor-app
+epub-tailor fit my-book.epub --profile x4
 ```
-
-Or take the DMG straight from [Releases](https://github.com/jordiboehme/epub-tailor/releases): signed, notarized and stapled, so it opens with a double click and no ceremony.
-
-Windows: the `-setup.exe` installer. It is not code-signed, so Windows will make a face - click *More info*, then *Run anyway*. Linux: the `.AppImage` (`chmod +x` it and run it) or the `.deb`.
-
-The app keeps itself current. When a new version ships it mentions it, quietly, and installs it when you say so. The `.deb` is the one exception: there, apt is in charge and we do not argue with apt.
 
 ## Quickstart
 
@@ -131,7 +139,7 @@ Or point any of them at a folder - your whole library, with `-r`:
 epub-tailor fit books/ --profile x4 -r
 ```
 
-Every `.epub` under `books/` gets fitted (`.md` files for `md`), one line per file plus a summary, and one bad book never stops the rest. Add `--lets-get-dangerous` and each book is replaced in place instead of copied - your whole library, tailored where it stands.
+Every `.epub` under `books/` gets fitted (`.md` files for `md`), one line per file plus a summary, and one bad book never stops the rest. Add `--lets-get-dangerous` and each book is replaced in place instead of copied - your whole library, tailored where it stands, each book staged in a temp file and renamed at the end so even a failed run cannot eat it. But you did ask for it by name.
 
 Reruns are idempotent, three ways. Every book `fit` produces carries an invisible provenance marker in its OPF (`<meta property="tailor:fitted">`), and folder scans - `fit` and `check`, copy mode and in place - skip marked books. A file ending in a known profile appendix (`.x4.epub`, `.kindle.epub`, `.tailored.epub`) is skipped by name alone, and in copy mode a book whose output already exists is skipped too. So after adding books, a rerun only does the new ones. `--force` overrides all three rules, a book legitimately *named* `travel.kindle.epub` being the classic reason to need it. `md` output is never marked - it is a source, not a fitted book. Books fitted by 0.3.0 or earlier carry no marker yet, so an in-place scan re-fits each of them exactly once and marks it; from then on reruns skip. `--dry-run` shows the whole plan without writing a byte.
 
