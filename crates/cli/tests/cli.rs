@@ -101,6 +101,68 @@ fn metadata_show_reports_what_the_book_lacks() {
     assert!(missing.contains(&"description".to_string()));
     assert!(missing.contains(&"publisher".to_string()));
     assert!(!missing.contains(&"title".to_string()), "it has a title");
+    assert!(
+        json["fitted"].is_null(),
+        "a plain source carries no fit stamp, got: {}",
+        json["fitted"]
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn metadata_show_reports_the_fit_stamp_of_a_produced_copy() {
+    let dir = temp_dir("meta-show-fitted");
+    let book = book_in(&dir, "source");
+    let out = dir.join("source.tailored.epub");
+
+    let fit = bin()
+        .args([
+            "fit",
+            book.to_str().unwrap(),
+            "--profile",
+            "epub",
+            "-o",
+            out.to_str().unwrap(),
+        ])
+        .output()
+        .expect("failed to run binary");
+    assert!(
+        fit.status.success(),
+        "fit failed: {}",
+        String::from_utf8_lossy(&fit.stderr)
+    );
+
+    let output = bin()
+        .args([
+            "metadata",
+            "show",
+            out.to_str().unwrap(),
+            "--report",
+            "json",
+        ])
+        .output()
+        .expect("failed to run binary");
+    assert!(output.status.success());
+
+    let json: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&output.stdout)).expect("valid JSON");
+    let fitted = &json["fitted"];
+    // The `epub` profile has no appendix of its own, so the stamp's first
+    // token falls back to the default appendix while the profile meta keeps
+    // the real profile name - exactly the distinction the app needs.
+    assert_eq!(fitted["appendix"], "tailored", "got: {fitted}");
+    assert_eq!(fitted["profile"], "epub", "got: {fitted}");
+    assert_eq!(
+        fitted["version"],
+        env!("CARGO_PKG_VERSION"),
+        "got: {fitted}"
+    );
+    assert_eq!(
+        fitted["stamp"],
+        format!("tailored {}", env!("CARGO_PKG_VERSION")),
+        "got: {fitted}"
+    );
 
     std::fs::remove_dir_all(&dir).ok();
 }

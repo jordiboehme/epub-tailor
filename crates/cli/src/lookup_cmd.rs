@@ -65,17 +65,26 @@ pub fn run(command: MetadataCommand) -> ExitCode {
     }
 }
 
-/// A parsed book's metadata document, the list of fields it lacks, and its
-/// own cover image bytes if it has one.
-type BookRead = (MetadataDoc, Vec<&'static str>, Option<Vec<u8>>);
+/// A parsed book's metadata document, the list of fields it lacks, its own
+/// cover image bytes if it has one, and its provenance stamp if it is a
+/// previously fitted copy.
+type BookRead = (
+    MetadataDoc,
+    Vec<&'static str>,
+    Option<Vec<u8>>,
+    Option<epub_tailor_core::StampInfo>,
+);
 
 /// Read a book's metadata into a document, plus the list of what it lacks,
 /// plus its own cover image bytes if it has one. The cover is cloned out of
 /// the already-in-memory book regardless of whether the caller wants it -
-/// cheap, since nothing here re-reads the file.
+/// cheap, since nothing here re-reads the file. The provenance stamp is
+/// probed from the same in-memory bytes, so a caller (the app's ingest)
+/// learns copy-ness without a second read.
 fn read_book(input: &Path) -> Result<BookRead, String> {
     let bytes =
         std::fs::read(input).map_err(|e| format!("cannot read {}: {e}", input.display()))?;
+    let stamp = epub_tailor_core::read_stamp_info(&bytes);
     let book = read_epub(&bytes).map_err(|e| e.to_string())?.book;
     let m = &book.metadata;
 
@@ -101,12 +110,30 @@ fn read_book(input: &Path) -> Result<BookRead, String> {
         .as_ref()
         .and_then(|path| book.resources.get(path))
         .map(|r| r.data.clone());
-    Ok((doc, missing_fields(m), cover))
+    Ok((doc, missing_fields(m), cover, stamp))
+}
+
+/// The `fitted` JSON value for a probed stamp: the raw stamp text, its
+/// appendix/version halves, and the profile name when the file carries one
+/// (files fitted before the profile meta existed do not).
+fn fitted_json(stamp: Option<&epub_tailor_core::StampInfo>) -> serde_json::Value {
+    match stamp {
+        None => serde_json::Value::Null,
+        Some(info) => {
+            let mut parts = info.fitted.splitn(2, ' ');
+            serde_json::json!({
+                "stamp": info.fitted,
+                "appendix": parts.next(),
+                "version": parts.next(),
+                "profile": info.profile,
+            })
+        }
+    }
 }
 
 fn show(input: &Path, cover_out: Option<&Path>, report: ReportArg) -> ExitCode {
-    let (mut doc, missing, cover) = match read_book(input) {
-        Ok(triple) => triple,
+    let (mut doc, missing, cover, stamp) = match read_book(input) {
+        Ok(read) => read,
         Err(e) => {
             eprintln!("error: {e}");
             return ExitCode::from(UNREADABLE_EXIT_CODE);
@@ -132,6 +159,7 @@ fn show(input: &Path, cover_out: Option<&Path>, report: ReportArg) -> ExitCode {
                 "schema": SCHEMA_VERSION,
                 "metadata": doc,
                 "missing": missing,
+                "fitted": fitted_json(stamp.as_ref()),
             });
             println!(
                 "{}",
@@ -156,6 +184,12 @@ fn show(input: &Path, cover_out: Option<&Path>, report: ReportArg) -> ExitCode {
                     "Look it up with: epub-tailor metadata search {}",
                     input.display()
                 );
+            }
+            if let Some(info) = &stamp {
+                match &info.profile {
+                    Some(profile) => println!("\nFitted by: {} ({})", profile, info.fitted),
+                    None => println!("\nFitted: {}", info.fitted),
+                }
             }
         }
     }

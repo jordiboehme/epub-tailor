@@ -652,6 +652,7 @@ fn run_fit_batch(
         Err(e) => return fail(common.report, "metadata", &e),
     }
     opts.output_stamp = Some(stamp_value(&resolved));
+    opts.output_profile = Some(resolved.name.clone());
     let cfg = batch::ConvertBatch {
         kind: batch::JobKind::Fit,
         input_extension: "epub",
@@ -690,6 +691,7 @@ fn run_fit_single(input: &Path, in_place: bool, common: &CommonArgs) -> ExitCode
         Err(e) => return fail(common.report, "metadata", &e),
     }
     opts.output_stamp = Some(stamp_value(&resolved));
+    opts.output_profile = Some(resolved.name.clone());
     let converted = match batch::convert_file(input, batch::JobKind::Fit, &opts) {
         Ok(converted) => converted,
         Err(e) => return fail(common.report, &e.code, &e.message),
