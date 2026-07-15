@@ -14,6 +14,17 @@ use crate::report::{Transformation, Warning};
 /// Words strictly longer than this many bytes are hard-cut by the device.
 const MAX_WORD_BYTES: usize = 200;
 
+/// Sanitize (strip XML-invalid characters and any BOM) and NFC-normalize one
+/// string. Equal to the input when it is already clean.
+pub(crate) fn clean_string(s: &str) -> String {
+    let sanitized = sanitize(s);
+    if is_nfc(&sanitized) {
+        sanitized
+    } else {
+        sanitized.nfc().collect()
+    }
+}
+
 /// NFC-normalize and sanitize every text node in `doc`, and warn about words
 /// the device will hard-cut.
 pub(crate) fn unicode_hygiene(
@@ -29,12 +40,7 @@ pub(crate) fn unicode_hygiene(
     for node in doc.inclusive_descendants() {
         let Some(cell) = node.as_text() else { continue };
         let original = cell.borrow().clone();
-        let sanitized = sanitize(&original);
-        let normalized = if is_nfc(&sanitized) {
-            sanitized
-        } else {
-            sanitized.nfc().collect::<String>()
-        };
+        let normalized = clean_string(&original);
         if normalized != original {
             *cell.borrow_mut() = normalized.clone();
             changed = true;
@@ -84,6 +90,21 @@ mod tests {
         let mut warnings = Vec::new();
         unicode_hygiene(&doc, &mut report, &mut warnings, "ch.xhtml");
         (serialize(&doc), report, warnings)
+    }
+
+    #[test]
+    fn clean_string_precomposes_decomposed_text() {
+        assert_eq!(clean_string("cafe\u{301}"), "café");
+    }
+
+    #[test]
+    fn clean_string_is_identity_on_clean_input() {
+        assert_eq!(clean_string("café"), "café");
+    }
+
+    #[test]
+    fn clean_string_strips_bom_and_control_chars() {
+        assert_eq!(clean_string("a\u{FEFF}b\u{0007}c"), "abc");
     }
 
     #[test]

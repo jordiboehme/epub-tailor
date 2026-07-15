@@ -30,6 +30,7 @@ pub use serialize::serialize_xhtml;
 
 pub(crate) use dom::find_body;
 pub(crate) use serialize::serialize_fragment;
+pub(crate) use text::clean_string;
 
 pub(crate) use anchors::cap_ids;
 pub use anchors::{AliasMap, apply_anchor_aliases, apply_toc_aliases};

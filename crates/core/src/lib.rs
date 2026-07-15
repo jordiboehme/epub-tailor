@@ -541,6 +541,14 @@ pub fn convert(input: Input, opts: &ConvertOptions) -> Result<Converted, Convert
         resource.media_type = "application/xhtml+xml".to_string();
     }
 
+    // The writer regenerates the OPF, nav document and NCX from
+    // `book.metadata` and `book.toc`, which chapter-text hygiene never sees -
+    // normalize them under the same feature, or a decomposed TOC title keeps
+    // the `encoding` lint finding alive through every repair run.
+    if opts.features.unicode_hygiene {
+        normalize_model_strings(&mut book, &mut transformations);
+    }
+
     let chapter_count = book.spine.len() as u32;
     ensure_output_wellformed(&book)?;
     let epub = write_epub(
@@ -646,6 +654,100 @@ fn ensure_output_wellformed(book: &Book) -> Result<(), ConvertError> {
         }
     }
     Ok(())
+}
+
+/// NFC-normalize and sanitize every model string the writer regenerates into
+/// the OPF, nav document and NCX: metadata display fields and TOC titles.
+/// Without this, chapter-text hygiene alone never converges - a decomposed
+/// TOC title or `dc:title` reappears verbatim in the regenerated files and
+/// `lint_epub` flags them again after every repair run.
+///
+/// Deliberately untouched: the unique identifier (reading systems key their
+/// library and bookmarks off its exact bytes) and every href/path (they must
+/// keep byte-matching zip entry names and fragment ids).
+fn normalize_model_strings(book: &mut Book, transformations: &mut Vec<Transformation>) {
+    fn clean(s: &mut String) -> bool {
+        let cleaned = html::clean_string(s);
+        if cleaned == *s {
+            return false;
+        }
+        *s = cleaned;
+        true
+    }
+    fn clean_opt(s: &mut Option<String>) -> bool {
+        s.as_mut().is_some_and(clean)
+    }
+    fn clean_creators(creators: &mut [Creator]) -> bool {
+        let mut changed = false;
+        for creator in creators {
+            changed |= clean(&mut creator.name);
+            changed |= clean_opt(&mut creator.file_as);
+            changed |= clean_opt(&mut creator.role);
+        }
+        changed
+    }
+
+    let m = &mut book.metadata;
+    let mut changed_fields: Vec<&str> = Vec::new();
+    if clean(&mut m.title) {
+        changed_fields.push("title");
+    }
+    if clean_creators(&mut m.authors) {
+        changed_fields.push("authors");
+    }
+    if clean_creators(&mut m.contributors) {
+        changed_fields.push("contributors");
+    }
+    if clean(&mut m.language) {
+        changed_fields.push("language");
+    }
+    if m.identifiers.iter_mut().fold(false, |changed, id| {
+        changed | clean(&mut id.value) | clean_opt(&mut id.scheme)
+    }) {
+        changed_fields.push("identifiers");
+    }
+    if clean_opt(&mut m.description) {
+        changed_fields.push("description");
+    }
+    if clean_opt(&mut m.publisher) {
+        changed_fields.push("publisher");
+    }
+    if m.subjects.iter_mut().fold(false, |c, s| c | clean(s)) {
+        changed_fields.push("subjects");
+    }
+    if clean_opt(&mut m.date) {
+        changed_fields.push("date");
+    }
+    if clean_opt(&mut m.rights) {
+        changed_fields.push("rights");
+    }
+    if m.series
+        .as_mut()
+        .is_some_and(|s| clean(&mut s.name) | clean_opt(&mut s.index))
+    {
+        changed_fields.push("series");
+    }
+    for field in changed_fields {
+        transformations.push(Transformation {
+            kind: "metadata-nfc".to_string(),
+            detail: format!("normalized {field} to NFC and stripped invalid characters"),
+            file: None,
+        });
+    }
+
+    let mut toc_changed = 0usize;
+    for entry in &mut book.toc {
+        if clean(&mut entry.title) {
+            toc_changed += 1;
+        }
+    }
+    if toc_changed > 0 {
+        transformations.push(Transformation {
+            kind: "toc-nfc".to_string(),
+            detail: format!("normalized {toc_changed} table-of-contents title(s) to NFC"),
+            file: None,
+        });
+    }
 }
 
 /// Remove every embedded font resource from `book`, returning the set of
@@ -1570,6 +1672,158 @@ mod tests {
     fn non_xhtml_resources_are_not_gated() {
         let book = gate_book(b"not xml at all { }", "text/css");
         ensure_output_wellformed(&book).expect("non-XHTML resources are not XML-checked");
+    }
+
+    /// A book whose metadata and TOC carry the given strings, for exercising
+    /// model-string normalization.
+    fn model_book(metadata: crate::epub::model::Metadata, toc: Vec<TocEntry>) -> Book {
+        let mut book = gate_book(
+            br#"<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml"><body><p>ok</p></body></html>"#,
+            "application/xhtml+xml",
+        );
+        book.metadata = metadata;
+        book.toc = toc;
+        book
+    }
+
+    #[test]
+    fn normalize_model_strings_precomposes_metadata_and_toc_titles() {
+        use crate::epub::model::{Creator, Metadata, Series};
+
+        let mut book = model_book(
+            Metadata {
+                title: "Die Ru\u{308}ckkehr der Jediritter".to_string(),
+                authors: vec![Creator {
+                    name: "Bjo\u{308}rn Borg".to_string(),
+                    file_as: Some("Borg, Bjo\u{308}rn".to_string()),
+                    role: None,
+                }],
+                subjects: vec!["Ma\u{308}rchen".to_string()],
+                series: Some(Series {
+                    name: "Jediritter-Bu\u{308}cher".to_string(),
+                    index: Some("2".to_string()),
+                }),
+                ..Metadata::default()
+            },
+            vec![
+                TocEntry {
+                    title: "U\u{308}ber Endor".to_string(),
+                    href: "OEBPS/text/chapter1.xhtml".to_string(),
+                    level: 1,
+                },
+                TocEntry {
+                    title: "Clean entry".to_string(),
+                    href: "OEBPS/text/chapter1.xhtml#s2".to_string(),
+                    level: 1,
+                },
+            ],
+        );
+
+        let mut transformations = Vec::new();
+        normalize_model_strings(&mut book, &mut transformations);
+
+        assert_eq!(book.metadata.title, "Die Rückkehr der Jediritter");
+        assert_eq!(book.metadata.authors[0].name, "Björn Borg");
+        assert_eq!(
+            book.metadata.authors[0].file_as.as_deref(),
+            Some("Borg, Björn")
+        );
+        assert_eq!(book.metadata.subjects[0], "Märchen");
+        assert_eq!(
+            book.metadata.series.as_ref().unwrap().name,
+            "Jediritter-Bücher"
+        );
+        assert_eq!(book.toc[0].title, "Über Endor");
+        assert_eq!(book.toc[1].title, "Clean entry");
+
+        let metadata_details: Vec<&str> = transformations
+            .iter()
+            .filter(|t| t.kind == "metadata-nfc")
+            .map(|t| t.detail.as_str())
+            .collect();
+        for field in ["title", "authors", "subjects", "series"] {
+            assert!(
+                metadata_details.iter().any(|d| d.contains(field)),
+                "a metadata-nfc transformation must name {field}, got: {metadata_details:?}"
+            );
+        }
+        assert_eq!(
+            metadata_details.len(),
+            4,
+            "one push per changed field, got: {metadata_details:?}"
+        );
+
+        let toc_details: Vec<&str> = transformations
+            .iter()
+            .filter(|t| t.kind == "toc-nfc")
+            .map(|t| t.detail.as_str())
+            .collect();
+        assert_eq!(toc_details.len(), 1, "got: {toc_details:?}");
+        assert!(
+            toc_details[0].contains("1 table-of-contents title"),
+            "got: {toc_details:?}"
+        );
+    }
+
+    #[test]
+    fn normalize_model_strings_never_touches_identifier_or_hrefs() {
+        use crate::epub::model::Metadata;
+
+        // A decomposed unique identifier stays byte-exact: reading systems key
+        // bookmarks off it. Hrefs must keep matching zip entry names.
+        let identifier = "urn:custom:u\u{308}nique";
+        let href = "OEBPS/text/u\u{308}ber.xhtml";
+        let mut book = model_book(
+            Metadata {
+                title: "Clean Title".to_string(),
+                identifier: Some(identifier.to_string()),
+                ..Metadata::default()
+            },
+            vec![TocEntry {
+                title: "Clean entry".to_string(),
+                href: href.to_string(),
+                level: 1,
+            }],
+        );
+
+        let mut transformations = Vec::new();
+        normalize_model_strings(&mut book, &mut transformations);
+
+        assert_eq!(book.metadata.identifier.as_deref(), Some(identifier));
+        assert_eq!(book.toc[0].href, href);
+        assert!(
+            transformations.is_empty(),
+            "nothing normalizable changed, got: {transformations:?}"
+        );
+    }
+
+    #[test]
+    fn normalize_model_strings_is_a_noop_on_an_nfc_book() {
+        use crate::epub::model::{Creator, Metadata};
+
+        let mut book = model_book(
+            Metadata {
+                title: "Käpt'n Blaubär".to_string(),
+                authors: vec![Creator::new("Jane Author")],
+                description: Some("Eine Gutenachtgeschichte.".to_string()),
+                ..Metadata::default()
+            },
+            vec![TocEntry {
+                title: "Über Bord".to_string(),
+                href: "OEBPS/text/chapter1.xhtml".to_string(),
+                level: 1,
+            }],
+        );
+        let before_title = book.metadata.title.clone();
+
+        let mut transformations = Vec::new();
+        normalize_model_strings(&mut book, &mut transformations);
+
+        assert_eq!(book.metadata.title, before_title);
+        assert!(
+            transformations.is_empty(),
+            "an already-NFC book records nothing, got: {transformations:?}"
+        );
     }
 
     /// The generated helper stylesheet must already be device-conformant: the
