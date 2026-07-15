@@ -1,36 +1,28 @@
 <script lang="ts">
-  // The Inspector's Metadata section. Every field stages live to the whole
-  // selection - one book or many - after a short debounce; its checkbox is a
-  // pure reflection of what is staged, and unchecking it reverts the field.
-  // Plus the two escape hatches - "Find online" (single book) and "Write
-  // metadata only" (epub books with edits).
+  // The Metadata section of Edit mode's Inspector. Every field stages live to
+  // the whole selection - one file or many - after a short debounce; its
+  // checkbox is a pure reflection of what is staged, and unchecking it
+  // reverts the field. Writing belongs to the ActionBar's "Save changes",
+  // which saves staged edits into the selected files themselves.
 
   import { open } from "@tauri-apps/plugin-dialog";
   import { cacheCover, coverUrl } from "../api/covers";
-  import type { RunOptions } from "../api/argv";
-  import { resolvePlans } from "../api/plan";
-  import { books, toTemplateBook } from "../stores/books.svelte";
-  import type { Book } from "../stores/books.svelte";
+  import { books } from "../stores/books.svelte";
+  import type { BookFile } from "../stores/books.svelte";
   import { edits } from "../stores/edits.svelte";
-  import type { StagedEdits } from "../api/edits";
   import { CLEARABLE_FIELDS } from "../api/edits";
-  import { jobs } from "../stores/jobs.svelte";
-  import { profiles } from "../stores/profiles.svelte";
-  import { settings } from "../stores/settings.svelte";
   import MetadataField from "./MetadataField.svelte";
   import MetadataSearchDialog from "./MetadataSearchDialog.svelte";
   import Button from "./ui/Button.svelte";
 
-  const selected = $derived(books.selected);
+  const selected = $derived(books.selectedFiles);
   const single = $derived(selected.length === 1 ? selected[0] : null);
   const isMulti = $derived(selected.length > 1);
-  const ids = $derived(selected.map((b) => b.id));
+  const ids = $derived(selected.map((f) => f.id));
 
   let searchOpen = $state(false);
-  let writing = $state(false);
   let coverError = $state(false);
   let coverFailed = $state<string | null>(null);
-  let writeFailed = $state<string | null>(null);
 
   // Debounced live staging in single-book mode, one timer per field so fast
   // typing in one box never delays another. Each pending timer keeps its own
@@ -88,15 +80,15 @@
     | "subjects";
   const LIST_KEYS: ReadonlySet<FieldKey> = new Set<FieldKey>(["authors", "subjects"]);
 
-  /** The book's own value for a field, flattened to the textbox's shape. */
-  function bookText(book: Book, key: FieldKey): string {
-    const own = book.meta?.[key];
+  /** The file's own value for a field, flattened to the textbox's shape. */
+  function bookText(file: BookFile, key: FieldKey): string {
+    const own = file.meta?.[key];
     return Array.isArray(own) ? own.join("\n") : (own ?? "");
   }
 
   /** The staged entry for a field: undefined (none), null (a clear), or text. */
-  function stagedText(book: Book, key: FieldKey): string | null | undefined {
-    const staged = edits.get(book.id)?.[key];
+  function stagedText(file: BookFile, key: FieldKey): string | null | undefined {
+    const staged = edits.get(file.id)?.[key];
     if (staged === undefined || staged === null) return staged;
     return Array.isArray(staged) ? staged.join("\n") : staged;
   }
@@ -119,7 +111,7 @@
    */
   function stageField(key: FieldKey, raw: string): void {
     const targets = [...ids];
-    const anyOwn = selected.some((b) => bookText(b, key).trim().length > 0);
+    const anyOwn = selected.some((f) => bookText(f, key).trim().length > 0);
     debounce(key, () => {
       const empty = LIST_KEYS.has(key)
         ? parseLines(raw).length === 0
@@ -141,7 +133,7 @@
 
   /** Everything one MetadataField needs, derived from the whole selection. */
   function fieldProps(key: FieldKey) {
-    const staged = selected.map((b) => stagedText(b, key));
+    const staged = selected.map((f) => stagedText(f, key));
     const stagedCount = staged.filter((v) => v !== undefined).length;
     const first = staged.find((v) => v !== undefined);
     const agree = stagedCount === selected.length && staged.every((v) => v === first);
@@ -152,7 +144,7 @@
           ? ("checked" as const)
           : ("indeterminate" as const);
 
-    const shown = selected.map((b, i) => (staged[i] === undefined ? bookText(b, key) : staged[i]));
+    const shown = selected.map((f, i) => (staged[i] === undefined ? bookText(f, key) : staged[i]));
     const same = shown.every((v) => v === shown[0]);
     return {
       check,
@@ -182,77 +174,31 @@
       filters: [{ name: "Images", extensions: ["jpg", "jpeg", "png", "gif", "webp"] }],
     });
     if (typeof selection !== "string") return;
-    const book = single;
+    const file = single;
     coverFailed = null;
     try {
       // Staged as a copy in the cover cache, not as the path the user picked:
       // that is the only place the webview is allowed to load an image from,
       // so it is the only path that can both preview here and ride along as
       // the `--cover` flag. See api/covers.ts.
-      edits.stage([book.id], { coverPath: await cacheCover(selection) });
+      edits.stage([file.id], { coverPath: await cacheCover(selection) });
     } catch (err) {
       coverFailed = `That image could not be read. ${String(err)}`;
     }
   }
 
-  // -- write metadata only ----------------------------------------------------
-
-  // Metadata is written under the plain `epub` profile - a repair, not a device
-  // conversion - so both the run and the name it may have to fall back on come
-  // from that profile and not from whatever device is selected. With `x4`
-  // active, an appendix taken from the picker would write "Book.x4.epub": a
-  // filename promising a conversion the file did not get.
-  const WRITE_PROFILE = "epub";
-
-  const epubEditable = $derived(selected.filter((b) => b.kind === "epub" && edits.hasEdits(b.id)));
-  const mdOnlySelection = $derived(selected.length > 0 && selected.every((b) => b.kind === "md"));
-  const canWrite = $derived(epubEditable.length > 0 && !writing && !jobs.active);
-
-  async function writeMetadataOnly() {
-    edits.flushPending();
-    const items = epubEditable;
-    if (items.length === 0) return;
-    writing = true;
-    writeFailed = null;
-    try {
-      const appendix = profiles.builtinAppendix(WRITE_PROFILE);
-      const opts: RunOptions = {
-        profiles: [WRITE_PROFILE],
-        quality: null,
-        tables: null,
-        dryRun: false,
-      };
-      const planned = items.map((b) => ({ input: b.path, kind: b.kind, template: toTemplateBook(b) }));
-      const plans = await resolvePlans(planned, {
-        template: settings.filenameTemplate,
-        outputDir: settings.outputDir,
-        inPlace: settings.inPlace,
-        appendix,
-      });
-      jobs.runFit(items, plans, opts, edits.snapshotFor(items.map((b) => b.id)));
-    } catch (err) {
-      // Planning asks the OS what already sits on disk; a rejection there used
-      // to leave the button unpressed-looking and the edits unwritten, silently.
-      writeFailed = `Nothing was written: we could not work out where these books would go. ${String(err)}`;
-    } finally {
-      writing = false;
-    }
-  }
-
-  const writeLabel = $derived(
-    epubEditable.length > 0 ? `Write metadata (${epubEditable.length})` : "Write metadata",
-  );
+  const mdOnlySelection = $derived(selected.length > 0 && selected.every((f) => f.kind === "md"));
 </script>
 
 {#if selected.length === 0}
   <p class="text-[12px] leading-snug text-zinc-500 dark:text-zinc-400">
-    Select a book to edit its metadata, or fetch it from Open Library.
+    Select a file to edit its metadata, or fetch it from Open Library.
   </p>
 {:else}
   {#key single ? single.id : `multi:${ids.join(",")}`}
     {#if isMulti}
       <p class="mb-2.5 text-[11px] text-zinc-500 dark:text-zinc-400">
-        Editing {selected.length} books - a change stages to all of them as you type.
+        Editing {selected.length} files - a change stages to all of them as you type.
       </p>
     {/if}
 
@@ -324,7 +270,7 @@
         variant="secondary"
         size="sm"
         disabled={selected.length !== 1}
-        title={selected.length !== 1 ? "Select one book to look it up" : undefined}
+        title={selected.length !== 1 ? "Select one file to look it up" : undefined}
         onclick={() => (searchOpen = true)}
       >
         <svg class="h-3.5 w-3.5" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5">
@@ -334,21 +280,9 @@
         Find online...
       </Button>
 
-      <Button variant="primary" size="sm" disabled={!canWrite} onclick={writeMetadataOnly}>
-        {writeLabel}
-      </Button>
-
-      {#if writeFailed}
-        <p class="text-[11px] leading-snug text-rose-600 dark:text-rose-400">{writeFailed}</p>
-      {/if}
-
       {#if mdOnlySelection}
         <p class="text-[11px] leading-snug text-zinc-500 dark:text-zinc-400">
-          Markdown books get their metadata when you Tailor them - there is nothing to write in place.
-        </p>
-      {:else if epubEditable.length === 0}
-        <p class="text-[11px] leading-snug text-zinc-500 dark:text-zinc-400">
-          Edit a field, or fetch a record, and this writes it without a device conversion.
+          Markdown books get their metadata when you Fit them - there is nothing to save in place.
         </p>
       {/if}
     </div>
@@ -356,5 +290,5 @@
 {/if}
 
 {#if searchOpen && single}
-  <MetadataSearchDialog book={single} onclose={() => (searchOpen = false)} />
+  <MetadataSearchDialog file={single} onclose={() => (searchOpen = false)} />
 {/if}

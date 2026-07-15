@@ -5,33 +5,47 @@
 
 import { describe, expect, it } from "vitest";
 import {
-  bookAuthors,
-  bookByline,
-  bookInitials,
-  bookSeries,
-  bookSubtitle,
-  bookTitle,
-  bookYear,
+  fileAuthors,
+  fileByline,
+  fileInitials,
+  fileSeries,
+  fileSubtitle,
+  fileTitle,
+  fileYear,
   chipsFor,
+  copyBadge,
   effectiveMeta,
   failureOf,
   findingsOf,
+  needsCleanup,
   TONE_CLASS,
-  writtenPathOf,
 } from "../lib/api/book-view";
-import type { Book, BookMeta } from "../lib/stores/books.svelte";
-import type { CheckReport, FitReport, Stats } from "../lib/api/contract";
+import type { BookFile, BookMeta } from "../lib/stores/books.svelte";
+import type { CheckReport, FitReport, FittedStamp, Stats } from "../lib/api/contract";
 import type { StagedEdits } from "../lib/api/edits";
 
-function makeBook(overrides: Partial<Book> = {}): Book {
+function makeFile(overrides: Partial<BookFile> = {}): BookFile {
   return {
     id: "1",
     path: "/tmp/book.epub",
     kind: "epub",
     fileName: "book.epub",
+    role: "original",
+    profile: null,
+    appendix: null,
     size: 100,
     modifiedMs: 0,
     ingest: "done",
+    ...overrides,
+  };
+}
+
+function fitted(overrides: Partial<FittedStamp> = {}): FittedStamp {
+  return {
+    stamp: "x4 0.4.2",
+    appendix: "x4",
+    version: "0.4.2",
+    profile: "x4",
     ...overrides,
   };
 }
@@ -79,128 +93,179 @@ function checkReport(overrides: Partial<CheckReport> = {}): CheckReport {
   };
 }
 
-describe("bookTitle", () => {
+describe("fileTitle", () => {
   it("uses the metadata title when present", () => {
-    const book = makeBook({ meta: meta({ title: "Real Title" }) });
-    expect(bookTitle(book)).toBe("Real Title");
+    const book = makeFile({ meta: meta({ title: "Real Title" }) });
+    expect(fileTitle(book)).toBe("Real Title");
   });
 
   it("falls back to the file name's stem when there is no title", () => {
-    const book = makeBook({ fileName: "some-book.epub" });
-    expect(bookTitle(book)).toBe("some-book");
+    const book = makeFile({ fileName: "some-book.epub" });
+    expect(fileTitle(book)).toBe("some-book");
   });
 
   it("falls back to the stem when the metadata title is blank", () => {
-    const book = makeBook({ fileName: "some-book.epub", meta: meta({ title: "   " }) });
-    expect(bookTitle(book)).toBe("some-book");
+    const book = makeFile({ fileName: "some-book.epub", meta: meta({ title: "   " }) });
+    expect(fileTitle(book)).toBe("some-book");
   });
 });
 
-describe("bookSubtitle", () => {
+describe("fileSubtitle", () => {
   it("uses the first author", () => {
-    const book = makeBook({ meta: meta({ authors: ["Jane Author", "Other Writer"] }) });
-    expect(bookSubtitle(book)).toBe("Jane Author");
+    const book = makeFile({ meta: meta({ authors: ["Jane Author", "Other Writer"] }) });
+    expect(fileSubtitle(book)).toBe("Jane Author");
   });
 
   it("labels a markdown book with no author", () => {
-    const book = makeBook({ kind: "md", fileName: "notes.md" });
-    expect(bookSubtitle(book)).toBe("Markdown");
+    const book = makeFile({ kind: "md", fileName: "notes.md" });
+    expect(fileSubtitle(book)).toBe("Markdown");
   });
 
   it("is empty for an epub with no author", () => {
-    expect(bookSubtitle(makeBook())).toBe("");
+    expect(fileSubtitle(makeFile())).toBe("");
   });
 });
 
-describe("bookSeries", () => {
+describe("fileSeries", () => {
   it("pairs the series with its position", () => {
-    const book = makeBook({ meta: meta({ series: "Dune", seriesIndex: "2" }) });
-    expect(bookSeries(book)).toBe("Dune #2");
+    const book = makeFile({ meta: meta({ series: "Dune", seriesIndex: "2" }) });
+    expect(fileSeries(book)).toBe("Dune #2");
   });
 
   it("is the series alone when there is no position", () => {
-    expect(bookSeries(makeBook({ meta: meta({ series: "Dune" }) }))).toBe("Dune");
+    expect(fileSeries(makeFile({ meta: meta({ series: "Dune" }) }))).toBe("Dune");
   });
 
   it("ignores a blank position", () => {
-    const book = makeBook({ meta: meta({ series: "Dune", seriesIndex: "  " }) });
-    expect(bookSeries(book)).toBe("Dune");
+    const book = makeFile({ meta: meta({ series: "Dune", seriesIndex: "  " }) });
+    expect(fileSeries(book)).toBe("Dune");
   });
 
   it("is empty when the book has no series", () => {
-    expect(bookSeries(makeBook({ meta: meta({ series: "   " }) }))).toBe("");
-    expect(bookSeries(makeBook())).toBe("");
+    expect(fileSeries(makeFile({ meta: meta({ series: "   " }) }))).toBe("");
+    expect(fileSeries(makeFile())).toBe("");
   });
 });
 
-describe("bookByline", () => {
+describe("fileByline", () => {
   it("joins the author and the series", () => {
-    const book = makeBook({
+    const book = makeFile({
       meta: meta({ authors: ["Frank Herbert"], series: "Dune", seriesIndex: "2" }),
     });
-    expect(bookByline(book)).toBe("Frank Herbert · Dune #2");
+    expect(fileByline(book)).toBe("Frank Herbert · Dune #2");
   });
 
   it("is the author alone when there is no series", () => {
-    expect(bookByline(makeBook({ meta: meta({ authors: ["Jane Author"] }) }))).toBe("Jane Author");
+    expect(fileByline(makeFile({ meta: meta({ authors: ["Jane Author"] }) }))).toBe("Jane Author");
   });
 
   it("is the series alone when there is no author", () => {
-    expect(bookByline(makeBook({ meta: meta({ series: "Dune" }) }))).toBe("Dune");
+    expect(fileByline(makeFile({ meta: meta({ series: "Dune" }) }))).toBe("Dune");
   });
 
   it("is empty when the book has neither", () => {
-    expect(bookByline(makeBook())).toBe("");
+    expect(fileByline(makeFile())).toBe("");
   });
 });
 
-describe("bookInitials", () => {
+describe("fileInitials", () => {
   it("takes the first letter of a one-word stem", () => {
-    expect(bookInitials(makeBook({ fileName: "Dune.epub" }))).toBe("D");
+    expect(fileInitials(makeFile({ fileName: "Dune.epub" }))).toBe("D");
   });
 
   it("takes the first letters of up to two words of a multi-word stem", () => {
-    expect(bookInitials(makeBook({ fileName: "The Great Gatsby.epub" }))).toBe("TG");
-  });
-});
-
-describe("writtenPathOf", () => {
-  it("is null on a dry run", () => {
-    const book = makeBook({
-      result: { kind: "fit", report: fitReport({ dry_run: true, output: null }) },
-    });
-    expect(writtenPathOf(book)).toBeNull();
-  });
-
-  it("is the output path for a real conversion", () => {
-    const book = makeBook({
-      result: { kind: "fit", report: fitReport({ output: "/tmp/x.epub" }) },
-    });
-    expect(writtenPathOf(book)).toBe("/tmp/x.epub");
-  });
-
-  it("is null when there is no fit result at all", () => {
-    expect(writtenPathOf(makeBook())).toBeNull();
+    expect(fileInitials(makeFile({ fileName: "The Great Gatsby.epub" }))).toBe("TG");
   });
 });
 
 describe("findingsOf", () => {
+  const finding = { severity: "warning" as const, code: "W1", message: "m", path: null };
+
   it("returns the check report's findings", () => {
-    const findings = [{ severity: "warning" as const, code: "W1", message: "m", path: null }];
-    const book = makeBook({
+    const findings = [finding];
+    const book = makeFile({
       result: { kind: "check", report: checkReport({ findings, warnings: 1 }) },
     });
     expect(findingsOf(book)).toBe(findings);
   });
 
   it("is undefined outside a check result", () => {
-    expect(findingsOf(makeBook())).toBeUndefined();
+    expect(findingsOf(makeFile())).toBeUndefined();
+  });
+
+  it("falls back to the automatic check's findings", () => {
+    const findings = [finding];
+    const book = makeFile({ cleanup: checkReport({ findings, warnings: 1 }) });
+    expect(findingsOf(book)).toBe(findings);
+  });
+
+  it("prefers an explicit check over the automatic one", () => {
+    const explicit = [finding];
+    const auto = [{ ...finding, code: "AUTO" }];
+    const book = makeFile({
+      result: { kind: "check", report: checkReport({ findings: explicit, warnings: 1 }) },
+      cleanup: checkReport({ findings: auto, warnings: 1 }),
+    });
+    expect(findingsOf(book)).toBe(explicit);
+  });
+
+  it("says nothing for a clean automatic check", () => {
+    expect(findingsOf(makeFile({ cleanup: checkReport() }))).toBeUndefined();
+  });
+});
+
+describe("needsCleanup", () => {
+  const finding = { severity: "warning" as const, code: "W1", message: "m", path: null };
+
+  it("is true only when the automatic check found something", () => {
+    expect(needsCleanup(makeFile())).toBe(false);
+    expect(needsCleanup(makeFile({ cleanup: checkReport() }))).toBe(false);
+    expect(
+      needsCleanup(makeFile({ cleanup: checkReport({ findings: [finding], warnings: 1 }) })),
+    ).toBe(true);
+  });
+});
+
+describe("copyBadge", () => {
+  const APPENDIXES = ["x4", "tailored"];
+
+  it("badges a copy-named file, preferring the stamp's profile for the text", () => {
+    const book = makeFile({ fileName: "Dune.x4.epub", fitted: fitted() });
+    expect(copyBadge(book, APPENDIXES)).toBe("x4");
+  });
+
+  it("badges a copy-named file even without a stamp, from the appendix", () => {
+    expect(copyBadge(makeFile({ fileName: "Dune.x4.epub" }), APPENDIXES)).toBe("x4");
+  });
+
+  it("never badges a normally-named file, whatever its stamp says", () => {
+    // A stamp proves the file was fitted, not that it is a copy: a book
+    // fitted *in place* (the old "Replace originals", or the CLI) carries a
+    // device-profile stamp and is still the user's only original.
+    expect(copyBadge(makeFile({ fitted: fitted() }), APPENDIXES)).toBeNull();
+    expect(
+      copyBadge(makeFile({ fitted: fitted({ profile: null }) }), APPENDIXES),
+    ).toBeNull();
+    expect(copyBadge(makeFile(), APPENDIXES)).toBeNull();
+  });
+
+  it("falls back to the parsed appendix when the stamp names the repair profile", () => {
+    // A cleaned copy gets re-stamped with `epub`; its name still says x4.
+    const book = makeFile({
+      fileName: "Dune.x4.epub",
+      fitted: fitted({ profile: "epub", appendix: "tailored" }),
+    });
+    expect(copyBadge(book, APPENDIXES)).toBe("x4");
+  });
+
+  it("ignores unknown appendixes", () => {
+    expect(copyBadge(makeFile({ fileName: "Dune.x5.epub" }), APPENDIXES)).toBeNull();
   });
 });
 
 describe("failureOf", () => {
   it("shapes a failed conversion", () => {
-    const book = makeBook({
+    const book = makeFile({
       result: {
         kind: "failed",
         failure: { code: "E_BAD", message: "boom" },
@@ -216,7 +281,7 @@ describe("failureOf", () => {
   });
 
   it("shapes a failed ingest", () => {
-    const book = makeBook({
+    const book = makeFile({
       ingest: "failed",
       ingestError: { friendly: "Could not open it.", code: "E_IO", stderr: [] },
     });
@@ -228,38 +293,38 @@ describe("failureOf", () => {
   });
 
   it("is undefined for a failed ingest with no recorded error", () => {
-    expect(failureOf(makeBook({ ingest: "failed" }))).toBeUndefined();
+    expect(failureOf(makeFile({ ingest: "failed" }))).toBeUndefined();
   });
 
   it("is undefined when nothing failed", () => {
-    expect(failureOf(makeBook())).toBeUndefined();
+    expect(failureOf(makeFile())).toBeUndefined();
   });
 });
 
 describe("chipsFor", () => {
   it("shows a shrink percentage with a from-to size title", () => {
-    const book = makeBook({
+    const book = makeFile({
       result: { kind: "fit", report: fitReport({ stats: stats({ bytes_in: 1000, bytes_out: 500 }) }) },
     });
     expect(chipsFor(book)).toEqual([{ label: "-50%", tone: "good", title: "1000 B to 500 B" }]);
   });
 
   it("shows a wrote-size chip when the output grew", () => {
-    const book = makeBook({
+    const book = makeFile({
       result: { kind: "fit", report: fitReport({ stats: stats({ bytes_in: 500, bytes_out: 800 }) }) },
     });
     expect(chipsFor(book)).toEqual([{ label: "wrote 800 B", tone: "neutral" }]);
   });
 
   it("shows a wrote-size chip when the output is the same size", () => {
-    const book = makeBook({
+    const book = makeFile({
       result: { kind: "fit", report: fitReport({ stats: stats({ bytes_in: 500, bytes_out: 500 }) }) },
     });
     expect(chipsFor(book)).toEqual([{ label: "wrote 500 B", tone: "neutral" }]);
   });
 
   it("adds a preview chip on a dry run", () => {
-    const book = makeBook({
+    const book = makeFile({
       result: {
         kind: "fit",
         report: fitReport({ dry_run: true, output: null, stats: stats({ bytes_in: 1000, bytes_out: 500 }) }),
@@ -272,7 +337,7 @@ describe("chipsFor", () => {
   });
 
   it("adds a warnings chip alongside the size chip", () => {
-    const book = makeBook({
+    const book = makeFile({
       result: {
         kind: "fit",
         report: fitReport({ stats: stats({ bytes_in: 1000, bytes_out: 500, warnings: 3 }) }),
@@ -285,7 +350,7 @@ describe("chipsFor", () => {
   });
 
   it("shows errors and warnings for a check", () => {
-    const book = makeBook({ result: { kind: "check", report: checkReport({ errors: 2, warnings: 1 }) } });
+    const book = makeFile({ result: { kind: "check", report: checkReport({ errors: 2, warnings: 1 }) } });
     expect(chipsFor(book)).toEqual([
       { label: "2 errors", tone: "bad" },
       { label: "1 warnings", tone: "warn" },
@@ -293,29 +358,63 @@ describe("chipsFor", () => {
   });
 
   it("shows clean when a check finds nothing", () => {
-    const book = makeBook({ result: { kind: "check", report: checkReport() } });
+    const book = makeFile({ result: { kind: "check", report: checkReport() } });
     expect(chipsFor(book)).toEqual([{ label: "clean", tone: "good" }]);
   });
 
+  it("flags a book the automatic check wants cleaned", () => {
+    const finding = { severity: "warning" as const, code: "W1", message: "m", path: null };
+    const book = makeFile({ cleanup: checkReport({ findings: [finding], warnings: 1 }) });
+    expect(chipsFor(book)).toEqual([
+      {
+        id: "needs-cleanup",
+        label: "needs cleanup",
+        tone: "warn",
+        title: "1 finding from the automatic check",
+      },
+    ]);
+  });
+
+  it("keeps the cleanup flag next to a fit result but not over a check or failure", () => {
+    const finding = { severity: "warning" as const, code: "W1", message: "m", path: null };
+    const cleanup = checkReport({ findings: [finding], warnings: 1 });
+
+    const fitted = makeFile({ cleanup, result: { kind: "fit", report: fitReport() } });
+    expect(chipsFor(fitted)).toContainEqual(expect.objectContaining({ label: "needs cleanup" }));
+
+    // An explicit check shows its own findings; a failure has bigger problems.
+    const checked = makeFile({ cleanup, result: { kind: "check", report: checkReport() } });
+    expect(chipsFor(checked)).not.toContainEqual(
+      expect.objectContaining({ label: "needs cleanup" }),
+    );
+    const failed = makeFile({
+      cleanup,
+      result: { kind: "failed", failure: { code: "x", message: "m" }, friendly: "f", stderr: [] },
+    });
+    expect(chipsFor(failed)).not.toContainEqual(
+      expect.objectContaining({ label: "needs cleanup" }),
+    );
+  });
+
   it("shows failed", () => {
-    const book = makeBook({
+    const book = makeFile({
       result: { kind: "failed", failure: { code: "E", message: "m" }, friendly: "f", stderr: [] },
     });
     expect(chipsFor(book)).toEqual([{ label: "failed", tone: "bad" }]);
   });
 
   it("shows cancelled", () => {
-    const book = makeBook({ result: { kind: "cancelled" } });
+    const book = makeFile({ result: { kind: "cancelled" } });
     expect(chipsFor(book)).toEqual([{ label: "cancelled", tone: "neutral" }]);
   });
 
   it("shows could not read for a book that failed ingestion", () => {
-    const book = makeBook({ ingest: "failed" });
+    const book = makeFile({ ingest: "failed" });
     expect(chipsFor(book)).toEqual([{ label: "could not read", tone: "bad" }]);
   });
 
   it("is empty when there is nothing to report yet", () => {
-    expect(chipsFor(makeBook())).toEqual([]);
+    expect(chipsFor(makeFile())).toEqual([]);
   });
 });
 
@@ -326,7 +425,7 @@ describe("TONE_CLASS", () => {
 });
 
 describe("staged-aware display helpers", () => {
-  const book = makeBook({
+  const book = makeFile({
     meta: meta({
       title: "Dune Messiah",
       authors: ["Frank Herbert", "Brian Herbert"],
@@ -337,35 +436,35 @@ describe("staged-aware display helpers", () => {
   });
 
   it("without staged edits everything reads from the book", () => {
-    expect(bookTitle(book)).toBe("Dune Messiah");
-    expect(bookAuthors(book)).toBe("Frank Herbert, Brian Herbert");
-    expect(bookSeries(book)).toBe("Dune #2");
-    expect(bookYear(book)).toBe("1969");
+    expect(fileTitle(book)).toBe("Dune Messiah");
+    expect(fileAuthors(book)).toBe("Frank Herbert, Brian Herbert");
+    expect(fileSeries(book)).toBe("Dune #2");
+    expect(fileYear(book)).toBe("1969");
   });
 
   it("staged values win over the book's own", () => {
     const staged: StagedEdits = { title: "Dune II", date: "1970" };
-    expect(bookTitle(book, staged)).toBe("Dune II");
-    expect(bookYear(book, staged)).toBe("1970");
-    expect(bookSeries(book, staged)).toBe("Dune #2");
+    expect(fileTitle(book, staged)).toBe("Dune II");
+    expect(fileYear(book, staged)).toBe("1970");
+    expect(fileSeries(book, staged)).toBe("Dune #2");
   });
 
   it("a staged series clear hides the series and its index", () => {
-    expect(bookSeries(book, { series: null })).toBe("");
+    expect(fileSeries(book, { series: null })).toBe("");
   });
 
   it("a staged authors clear empties the author line", () => {
-    expect(bookAuthors(book, { authors: null })).toBe("");
-    expect(bookSubtitle(book, { authors: null })).toBe("");
+    expect(fileAuthors(book, { authors: null })).toBe("");
+    expect(fileSubtitle(book, { authors: null })).toBe("");
   });
 
-  it("bookYear finds the year inside a fuller date and stays quiet without one", () => {
-    expect(bookYear(makeBook({ meta: meta({ date: "September 1937" }) }))).toBe("1937");
-    expect(bookYear(makeBook({ meta: meta({}) }))).toBe("");
+  it("fileYear finds the year inside a fuller date and stays quiet without one", () => {
+    expect(fileYear(makeFile({ meta: meta({ date: "September 1937" }) }))).toBe("1937");
+    expect(fileYear(makeFile({ meta: meta({}) }))).toBe("");
   });
 
   it("effectiveMeta without staged edits is the book's own meta object", () => {
     expect(effectiveMeta(book)).toBe(book.meta);
-    expect(effectiveMeta(makeBook({}))).toBeUndefined();
+    expect(effectiveMeta(makeFile({}))).toBeUndefined();
   });
 });

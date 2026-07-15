@@ -357,6 +357,92 @@ pub fn cache_cover(app: tauri::AppHandle, source: String) -> Result<String, Stri
     Ok(target.display().to_string())
 }
 
+/// The sibling path an in-place write's safety copy is staged at:
+/// `<stem> (backup).<ext>`, numbered `(backup 2)`, `(backup 3)`, ... until a
+/// free name is found. The copy stays on the original's volume so the OS
+/// trash can take it (and restore it next to the original). Pure - existence
+/// is injected - so the naming is testable without touching disk.
+fn backup_sibling(path: &Path, exists: impl Fn(&Path) -> bool) -> PathBuf {
+    let stem = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or_default();
+    let ext = path.extension().and_then(|e| e.to_str());
+    let sibling = |marker: &str| {
+        let name = match ext {
+            Some(ext) => format!("{stem} ({marker}).{ext}"),
+            None => format!("{stem} ({marker})"),
+        };
+        path.with_file_name(name)
+    };
+    let mut candidate = sibling("backup");
+    let mut n = 2u32;
+    while exists(&candidate) {
+        candidate = sibling(&format!("backup {n}"));
+        n += 1;
+    }
+    candidate
+}
+
+/// Move a file to the OS trash. On macOS this deliberately uses the
+/// NSFileManager API instead of the crate's default Finder AppleScript: the
+/// Finder route pops a "wants to control Finder" permission dialog the first
+/// time - a scary ask in the middle of a save - and all it buys is the
+/// Trash's "Put Back" menu entry. Dragging the file back out works either way.
+fn move_to_trash(path: &Path) -> Result<(), trash::Error> {
+    #[cfg(target_os = "macos")]
+    {
+        use trash::TrashContext;
+        use trash::macos::{DeleteMethod, TrashContextExtMacos};
+        let mut ctx = TrashContext::default();
+        ctx.set_delete_method(DeleteMethod::NsFileManager);
+        ctx.delete(path)
+    }
+    #[cfg(not(target_os = "macos"))]
+    trash::delete(path)
+}
+
+/// How [`backup_to_trash`] preserved the safety copy.
+#[derive(serde::Serialize)]
+pub struct BackupOutcome {
+    /// `"trash"` - the copy is in the OS trash - or `"file"` - the volume has
+    /// no trash, so the copy stays as a plain sibling file.
+    pub method: String,
+    /// The sibling name the copy was staged under (its restore name in the
+    /// trash, or where it still sits when `method` is `"file"`).
+    pub backup_path: String,
+}
+
+/// Preserve a copy of `path` before an in-place write rewrites it: copy it to
+/// a `<stem> (backup).epub` sibling, then move that sibling to the OS trash.
+/// On a volume without a trash the sibling is kept in place and reported as
+/// `method: "file"`. An `Err` means nothing was preserved - the caller must
+/// not proceed with the overwrite.
+#[tauri::command]
+pub fn backup_to_trash(path: String) -> Result<BackupOutcome, String> {
+    let original = PathBuf::from(&path);
+    let backup = backup_sibling(&original, |p| p.exists());
+    std::fs::copy(&original, &backup)
+        .map_err(|e| format!("cannot back up {}: {e}", original.display()))?;
+    let method = match move_to_trash(&backup) {
+        Ok(()) => "trash",
+        // Typically a volume with no trash directory (some network/exFAT
+        // mounts): the sibling copy is still a valid backup, just visible.
+        Err(_) => "file",
+    };
+    Ok(BackupOutcome {
+        method: method.to_string(),
+        backup_path: backup.display().to_string(),
+    })
+}
+
+/// Move a file to the OS trash - used when the user deletes a tracked copy
+/// from a book card. Never deletes permanently.
+#[tauri::command]
+pub fn trash_file(path: String) -> Result<(), String> {
+    move_to_trash(Path::new(&path)).map_err(|e| format!("cannot move {path} to the trash: {e}"))
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::{Path, PathBuf};
@@ -618,6 +704,31 @@ mod tests {
         // into a different set of filenames (see the note on `fnv1a`).
         assert_eq!(super::fnv1a("a"), 0xe40c_292c);
         assert_eq!(super::fnv1a(""), 0x811c_9dc5);
+    }
+
+    #[test]
+    fn backup_sibling_names_the_copy_next_to_the_original() {
+        let name = super::backup_sibling(Path::new("/books/Dune.epub"), |_| false);
+        assert_eq!(name, PathBuf::from("/books/Dune (backup).epub"));
+    }
+
+    #[test]
+    fn backup_sibling_numbers_taken_names() {
+        let taken = ["/books/Dune (backup).epub", "/books/Dune (backup 2).epub"];
+        let name = super::backup_sibling(Path::new("/books/Dune.epub"), |p| {
+            taken.contains(&p.to_str().unwrap())
+        });
+        assert_eq!(name, PathBuf::from("/books/Dune (backup 3).epub"));
+    }
+
+    #[test]
+    fn backup_sibling_keeps_multi_dot_stems_and_odd_extensions() {
+        let name = super::backup_sibling(Path::new("/b/My.Novel.x4.epub"), |_| false);
+        assert_eq!(name, PathBuf::from("/b/My.Novel.x4 (backup).epub"));
+
+        // No extension: the marker just lands at the end of the name.
+        let bare = super::backup_sibling(Path::new("/b/README"), |_| false);
+        assert_eq!(bare, PathBuf::from("/b/README (backup)"));
     }
 
     #[test]

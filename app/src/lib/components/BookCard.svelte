@@ -1,84 +1,73 @@
 <script lang="ts">
-  import { slide } from "svelte/transition";
-  import { revealItemInDir } from "@tauri-apps/plugin-opener";
+  // One book, one card: a virtual folder of files. The header - cover, title,
+  // author - comes from the ORIGINAL file (files[0]), and clicking the body
+  // selects exactly that file; the file list below carries the per-file
+  // state (chips, details, actions). Everything it says about a file comes
+  // from api/book-view, the same helpers the list row consumes.
   import { coverUrl } from "../api/covers";
   import { books, stemOf } from "../stores/books.svelte";
   import type { Book } from "../stores/books.svelte";
   import { jobs } from "../stores/jobs.svelte";
   import { edits } from "../stores/edits.svelte";
+  import { profiles } from "../stores/profiles.svelte";
   import { countEdits } from "../api/edits";
-  import {
-    bookInitials,
-    bookSubtitle,
-    bookTitle,
-    chipsFor,
-    failureOf,
-    findingsOf,
-    TONE_CLASS,
-    writtenPathOf,
-  } from "../api/book-view";
-  import type { Chip } from "../api/book-view";
-  import CardDetails from "./CardDetails.svelte";
+  import { knownAppendixes } from "../api/copies";
+  import { copyBadge, fileInitials, fileSubtitle, fileTitle } from "../api/book-view";
+  import FileList from "./FileList.svelte";
 
   let { book }: { book: Book } = $props();
 
   let imgError = $state(false);
-  let showDetails = $state(false);
+
+  const original = $derived(book.files[0]);
 
   $effect(() => {
     // Reset the load-error flag whenever this card's cover changes. Without it,
     // a card whose cover failed to load once (an ingest still writing the file,
     // say) shows its initials for the rest of the session, even after a new
     // cover has been fetched or picked. Same pattern as MetadataEditor's preview.
-    void book.coverPath;
+    void original.coverPath;
     imgError = false;
   });
 
-  const selected = $derived(books.selectedIds.has(book.id));
-  const staged = $derived(edits.get(book.id));
+  // The body stands for the original: its selected look means "the file this
+  // body represents is a target", never "something inside is selected" - the
+  // highlighted file row carries that signal.
+  const selected = $derived(books.selectedFileIds.has(original.id));
+  const staged = $derived(edits.get(original.id));
   const edited = $derived(staged !== undefined);
   const editCount = $derived(staged ? countEdits(staged) : 0);
-  const job = $derived(jobs.conversionJobFor(book.id));
+  const job = $derived(jobs.conversionJobFor(original.id));
   const running = $derived(job?.state === "running");
   const queued = $derived(job?.state === "queued");
-  const unreadable = $derived(book.ingest === "failed");
+  const unreadable = $derived(original.ingest === "failed");
+  const anyBusy = $derived(
+    book.files.some((f) => {
+      const state = jobs.conversionJobFor(f.id)?.state;
+      return state === "running" || state === "queued";
+    }),
+  );
 
-  const stem = $derived(stemOf(book.fileName));
-  const title = $derived(bookTitle(book, staged));
-  const subtitle = $derived(bookSubtitle(book, staged));
-  const initials = $derived(bookInitials(book));
-  const hasCover = $derived(!!book.coverPath && !imgError);
-
-  const writtenPath = $derived(writtenPathOf(book));
-  const failure = $derived(failureOf(book));
-  const findings = $derived(findingsOf(book));
-  const canExpand = $derived(Boolean(failure || findings));
-  const chips = $derived(chipsFor(book));
+  const stem = $derived(stemOf(original.fileName));
+  const title = $derived(fileTitle(original, staged));
+  const subtitle = $derived(fileSubtitle(original, staged));
+  const initials = $derived(fileInitials(original));
+  const hasCover = $derived(!!original.coverPath && !imgError);
+  const badge = $derived(copyBadge(original, knownAppendixes(profiles.builtins)));
 
   function onClick(event: MouseEvent) {
-    if (event.shiftKey) books.range(book.id);
-    else if (event.metaKey || event.ctrlKey) books.toggle(book.id);
-    else books.select(book.id);
+    if (event.shiftKey) books.range(original.id);
+    else if (event.metaKey || event.ctrlKey) books.toggle(original.id);
+    else books.select(original.id);
   }
 
   function onKey(event: KeyboardEvent) {
     if (event.key === "Enter" || event.key === " ") {
       event.preventDefault();
-      books.select(book.id);
+      books.select(original.id);
     }
   }
-
-  function reveal(event: MouseEvent) {
-    event.stopPropagation();
-    if (writtenPath) void revealItemInDir(writtenPath);
-  }
 </script>
-
-{#snippet chip(c: Chip)}
-  <span class="rounded-md px-1.5 py-0.5 text-[11px] font-medium {TONE_CLASS[c.tone]}" title={c.title}>
-    {c.label}
-  </span>
-{/snippet}
 
 <div
   role="button"
@@ -96,7 +85,7 @@
   <div class="relative aspect-[2/3] overflow-hidden rounded-t-xl bg-zinc-100 dark:bg-zinc-800">
     {#if hasCover}
       <img
-        src={coverUrl(book.coverPath!)}
+        src={coverUrl(original.coverPath!)}
         alt={"Cover of " + title}
         onerror={() => (imgError = true)}
         class="h-full w-full object-cover"
@@ -133,14 +122,22 @@
     {/if}
 
     <div class="absolute left-1.5 top-1.5 flex flex-col items-start gap-1">
-      {#if book.kind === "md"}
+      {#if original.kind === "md"}
         <span class="rounded bg-zinc-900/70 px-1 py-0.5 text-[10px] font-medium uppercase tracking-wide text-white">
           md
         </span>
       {/if}
+      {#if badge}
+        <span
+          title="A copy produced by EPUB Tailor ({badge})"
+          class="rounded bg-zinc-900/70 px-1 py-0.5 text-[10px] font-medium text-white"
+        >
+          copy · {badge}
+        </span>
+      {/if}
       {#if edited}
         <span
-          title="Has staged metadata edits, written on the next Tailor"
+          title="Has staged metadata edits, written on the next save"
           class="inline-flex items-center gap-0.5 rounded bg-indigo-600/85 px-1 py-0.5 text-[10px] font-medium text-white"
         >
           <svg class="h-2.5 w-2.5" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2">
@@ -151,7 +148,7 @@
       {/if}
     </div>
 
-    <!-- Running veil -->
+    <!-- Running veil (the original's own job; per-file jobs show on their rows) -->
     {#if running}
       <div class="absolute inset-0 flex items-center justify-center bg-zinc-950/40 backdrop-blur-[1px]">
         <svg class="h-7 w-7 animate-spin text-white" viewBox="0 0 24 24" fill="none">
@@ -166,28 +163,16 @@
       <div class="absolute right-1.5 top-1.5 rounded bg-zinc-900/60 px-1.5 py-0.5 text-[10px] text-white">
         queued
       </div>
-    {:else if book.ingest === "pending"}
+    {:else if original.ingest === "pending"}
       <div class="absolute inset-x-0 bottom-0 h-0.5 animate-pulse bg-indigo-300/70"></div>
     {/if}
 
-    <!-- Hover actions (hidden while this book is busy) -->
-    {#if !running && !queued}
+    <!-- Hover action: remove the book. Hidden while any of its files is busy. -->
+    {#if !anyBusy}
       <div class="absolute right-1.5 top-1.5 hidden gap-1 group-hover:flex">
-        {#if writtenPath}
-          <button
-            type="button"
-            title="Show the tailored file in the file manager"
-            onclick={reveal}
-            class="rounded-full bg-zinc-900/70 p-1 text-white transition-colors hover:bg-indigo-600"
-          >
-            <svg class="h-3.5 w-3.5" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7">
-              <path d="M2.5 6.5A1.5 1.5 0 014 5h3.2l1.4 1.8H16A1.5 1.5 0 0117.5 8.3v6.2A1.5 1.5 0 0116 16H4a1.5 1.5 0 01-1.5-1.5v-8z" stroke-linejoin="round" />
-            </svg>
-          </button>
-        {/if}
         <button
           type="button"
-          title="Remove from the workbench (the file stays where it is)"
+          title="Remove from the workbench (the files stay where they are)"
           onclick={(e) => {
             e.stopPropagation();
             books.remove([book.id]);
@@ -211,41 +196,8 @@
       <p class="truncate text-[11px] text-zinc-500 dark:text-zinc-400" title={subtitle}>{subtitle}</p>
     {/if}
 
-    <!-- Chips: the result, or the state the book is stuck in -->
-    {#if chips.length > 0}
-      <div class="mt-1.5 flex flex-wrap items-center gap-1">
-        {#each chips as c}
-          {@render chip(c)}
-        {/each}
-
-        {#if canExpand}
-          <button
-            type="button"
-            onclick={(e) => {
-              e.stopPropagation();
-              showDetails = !showDetails;
-            }}
-            class="ml-auto rounded px-1 py-0.5 text-[11px] font-medium text-zinc-500 hover:text-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-200"
-          >
-            {showDetails ? "Less" : "Details"}
-          </button>
-        {/if}
-      </div>
-    {/if}
-
-    {#if failure && !showDetails}
-      <p
-        class="mt-1 line-clamp-2 text-[11px] leading-snug text-rose-600 dark:text-rose-400"
-        title={failure.friendly}
-      >
-        {failure.friendly}
-      </p>
-    {/if}
-  </div>
-
-  {#if showDetails && canExpand}
-    <div transition:slide={{ duration: 150 }}>
-      <CardDetails {findings} {failure} />
+    <div class="mt-1.5 border-t border-zinc-100 pt-1.5 dark:border-zinc-800">
+      <FileList {book} />
     </div>
-  {/if}
+  </div>
 </div>

@@ -9,23 +9,23 @@
   import type { Candidate } from "../api/contract";
   import { fetchRecord, searchOnline } from "../api/lookup";
   import { coverCachePath } from "../api/covers";
-  import type { Book } from "../stores/books.svelte";
+  import type { BookFile } from "../stores/books.svelte";
   import { edits } from "../stores/edits.svelte";
   import Button from "./ui/Button.svelte";
   import CandidateCard from "./CandidateCard.svelte";
   import AcceptStep from "./AcceptStep.svelte";
 
-  let { book, onclose }: { book: Book; onclose: () => void } = $props();
+  let { file, onclose }: { file: BookFile; onclose: () => void } = $props();
 
-  const isEpub = $derived(book.kind === "epub");
+  const isEpub = $derived(file.kind === "epub");
 
   // Seed the query once from the book (epub only); the fields are the user's to
   // edit afterwards, so this never re-runs when the book's own metadata changes.
   let query = $state(
     untrack(() => ({
-      title: book.kind === "epub" ? (book.meta?.title ?? "") : "",
-      author: book.kind === "epub" ? (book.meta?.authors?.[0] ?? "") : "",
-      isbn: book.kind === "epub" ? (book.meta?.isbn ?? "") : "",
+      title: file.kind === "epub" ? (file.meta?.title ?? "") : "",
+      author: file.kind === "epub" ? (file.meta?.authors?.[0] ?? "") : "",
+      isbn: file.kind === "epub" ? (file.meta?.isbn ?? "") : "",
     })),
   );
 
@@ -46,7 +46,7 @@
     candidates = null;
     chosen = null;
     const outcome = await searchOnline({
-      input: isEpub ? book.path : undefined,
+      input: isEpub ? file.path : undefined,
       title: query.title.trim() || undefined,
       author: query.author.trim() || undefined,
       isbn: query.isbn.trim() || undefined,
@@ -95,7 +95,7 @@
       }
       const fieldSet = new Set(fields);
       if (includeCover) fieldSet.add("cover");
-      edits.applyDoc(book.id, outcome.doc, fieldSet);
+      edits.applyDoc(file.id, outcome.doc, fieldSet);
       onclose();
     } finally {
       accepting = false;
@@ -142,7 +142,7 @@
       {#key chosen.ref}
         <AcceptStep
           candidate={chosen}
-          {book}
+          {file}
           busy={accepting}
           {error}
           onaccept={accept}

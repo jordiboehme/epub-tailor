@@ -1,8 +1,8 @@
-// The two-pass output planner, resolving batch and on-disk collisions. Lifted
-// out of the ActionBar so both "Tailor" and "Write metadata only" share exactly
-// one planning path. Uses the `paths_exist` command, so it lives with covers.ts
-// among the api/ modules that legitimately touch Tauri (the pure name math it
-// wraps is planOutputs, tested on its own in outputs.test.ts).
+// The two-pass output planner, resolving batch and on-disk collisions - the
+// one planning path every Fit-mode run goes through. Uses the `paths_exist`
+// command, so it lives with covers.ts among the api/ modules that legitimately
+// touch Tauri (the pure name math it wraps is planOutputs, tested on its own
+// in outputs.test.ts).
 
 import { invoke } from "@tauri-apps/api/core";
 import { planOutputs } from "./outputs";
@@ -21,7 +21,7 @@ export async function resolvePlans(
   opts: PlanSettings,
 ): Promise<OutputPlan[]> {
   const draft = planOutputs(planned, { ...opts, existsOnDisk: () => false });
-  const candidates = draft.map((p) => p.output).filter((o): o is string => o !== null);
+  const candidates = draft.map((p) => p.output);
 
   const existing = new Set<string>();
   if (candidates.length > 0) {

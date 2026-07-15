@@ -2,9 +2,9 @@
 // (`settings.json` in the app data dir). Loaded once at startup; changes to the
 // persisted fields are written back on a debounce by the store's own autoSave.
 //
-// Two fields are deliberately session-only - `dryRun` and `inPlace` always
-// start off, because "preview" and "replace originals" are decisions you make
-// per session, not defaults you want silently remembered into the next launch.
+// One field is deliberately session-only - `dryRun` always starts off, because
+// "preview" is a decision you make per session, not a default you want
+// silently remembered into the next launch.
 
 import { Store } from "@tauri-apps/plugin-store";
 import type { WindowGeometry } from "../api/geometry";
@@ -48,6 +48,20 @@ function toViewMode(value: unknown): ViewMode {
   return value === "grid" || value === "list" ? value : DEFAULT_VIEW_MODE;
 }
 
+/**
+ * What the workbench is for right now: Edit (metadata, always written into
+ * the original) or Fit (device conversion, always a copy). The mode decides
+ * the write behavior - there is no in-place toggle anywhere else.
+ */
+export type AppMode = "edit" | "fit";
+
+const DEFAULT_MODE: AppMode = "fit";
+
+/** A persisted mode, or Fit when the file holds anything else. */
+function toMode(value: unknown): AppMode {
+  return value === "edit" || value === "fit" ? value : DEFAULT_MODE;
+}
+
 class SettingsStore {
   // -- persisted --------------------------------------------------------------
   /** Selected built-in profile name. */
@@ -70,14 +84,14 @@ class SettingsStore {
   parallelism = $state(DEFAULT_PARALLELISM);
   /** Whether the books show as a cover gallery or as a list. */
   viewMode = $state<ViewMode>(DEFAULT_VIEW_MODE);
+  /** Whether the workbench is in Edit (in place) or Fit (copy) mode. */
+  mode = $state<AppMode>(DEFAULT_MODE);
   /** Where the window was, and how big, when it was last moved or resized. */
   windowGeometry = $state<WindowGeometry | null>(null);
 
   // -- session-only (never persisted) -----------------------------------------
-  /** Analyze without writing (Preview only). Always starts off. */
+  /** Analyze without writing (Preview only, Fit mode). Always starts off. */
   dryRun = $state(false);
-  /** Rewrite originals in place. Always starts off. */
-  inPlace = $state(false);
 
   /** True once `load()` has read the persisted values. */
   ready = $state(false);
@@ -107,6 +121,7 @@ class SettingsStore {
       DEFAULT_PARALLELISM,
     );
     this.viewMode = toViewMode(await store.get("viewMode"));
+    this.mode = toMode(await store.get("mode"));
     this.windowGeometry = (await store.get<WindowGeometry>("windowGeometry")) ?? null;
     this.#store = store;
     this.ready = true;
@@ -125,6 +140,7 @@ class SettingsStore {
       $effect(() => void store.set("recursive", this.recursive));
       $effect(() => void store.set("parallelism", this.parallelism));
       $effect(() => void store.set("viewMode", this.viewMode));
+      $effect(() => void store.set("mode", this.mode));
       $effect(() => void store.set("windowGeometry", $state.snapshot(this.windowGeometry)));
     });
   }

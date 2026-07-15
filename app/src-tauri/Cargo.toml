@@ -27,6 +27,10 @@ tauri-plugin-process = "2"
 tauri-plugin-opener = "2"
 serde = { workspace = true }
 serde_json = { workspace = true }
+# Safety net for in-place writes: `backup_to_trash` parks a copy of the
+# original in the OS trash before the CLI rewrites it, and `trash_file` is how
+# a tracked copy is deleted from a card - never permanently.
+trash = "5"
 
 # Forwards a second launch's argv/cwd to the already-running instance (see
 # `open_files.rs`) instead of spawning a duplicate window; also lets a

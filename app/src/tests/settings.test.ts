@@ -77,5 +77,18 @@ describe("settings.load", () => {
     expect(settings.parallelism).toBe(3);
     expect(settings.mdSplitLevel).toBe(1);
     expect(settings.viewMode).toBe("grid");
+    expect(settings.mode).toBe("fit");
+  });
+
+  it("remembers the mode the user left the workbench in", async () => {
+    stored.set("mode", "edit");
+    await settings.load();
+    expect(settings.mode).toBe("edit");
+  });
+
+  it("falls back to Fit for a mode that is not a mode", async () => {
+    stored.set("mode", "Mode.EDIT");
+    await settings.load();
+    expect(settings.mode).toBe("fit");
   });
 });

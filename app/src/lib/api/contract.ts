@@ -193,10 +193,27 @@ export interface MetadataDoc {
   cover?: string;
 }
 
+/**
+ * The provenance stamp `metadata show` found in a previously fitted book
+ * (crates/cli/src/lookup_cmd.rs `fitted_json`). `profile` is `null` on files
+ * fitted before the profile meta existed; `version` is `null` when the stamp
+ * carries no second token.
+ */
+export interface FittedStamp {
+  /** The raw `tailor:fitted` value, `"<appendix> <version>"`. */
+  stamp: string;
+  appendix: string | null;
+  version: string | null;
+  /** The `tailor:profile` value: the profile that produced this copy. */
+  profile: string | null;
+}
+
 export interface MetadataShowReport {
   schema: 1;
   metadata: MetadataDoc;
   missing: string[];
+  /** `null` for a plain source; the stamp for a produced copy. */
+  fitted: FittedStamp | null;
 }
 
 /**

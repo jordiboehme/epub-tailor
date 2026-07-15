@@ -9,20 +9,20 @@
   // once (untracked) rather than kept reactive.
   import { untrack } from "svelte";
   import type { Candidate } from "../api/contract";
-  import type { Book } from "../stores/books.svelte";
+  import type { BookFile } from "../stores/books.svelte";
   import { creatorNames, stringList } from "../api/meta";
   import Button from "./ui/Button.svelte";
 
   let {
     candidate,
-    book,
+    file,
     busy = false,
     error = null,
     onaccept,
     onback,
   }: {
     candidate: Candidate;
-    book: Book;
+    file: BookFile;
     busy?: boolean;
     /** A failed fetch, shown here: the results list this step replaced cannot. */
     error?: string | null;
@@ -61,7 +61,7 @@
   }
 
   const rows = buildRows();
-  const missing = untrack(() => new Set(book.meta?.missing ?? []));
+  const missing = untrack(() => new Set(file.meta?.missing ?? []));
 
   // Default-checked: the fields the book is missing (missing_fields never names
   // language, series index or cover, so those start unticked).

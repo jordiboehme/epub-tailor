@@ -1,4 +1,4 @@
-// The staged metadata edits, keyed by book id. Nothing here is written to a
+// The staged metadata edits, keyed by file id. Nothing here is written to a
 // book until the next Tailor run (or "Write metadata only") picks the edits up
 // through argv.ts. The pure shape and the merge helper live in api/edits.ts;
 // this store is only the reactive Map plus a small batch-friendly API.
@@ -60,17 +60,17 @@ class EditsStore {
   #map = $state<Map<string, StagedEdits>>(new Map());
   #flushers = new Set<() => void>();
 
-  /** How many books have staged edits right now. */
+  /** How many files have staged edits right now. */
   count = $derived(this.#map.size);
 
   /** The staged edits for a book, or undefined when it has none. */
-  get(bookId: string): StagedEdits | undefined {
-    return this.#map.get(bookId);
+  get(fileId: string): StagedEdits | undefined {
+    return this.#map.get(fileId);
   }
 
   /** True when this book has anything staged. */
-  hasEdits(bookId: string): boolean {
-    return this.#map.has(bookId);
+  hasEdits(fileId: string): boolean {
+    return this.#map.has(fileId);
   }
 
   /**
@@ -94,14 +94,14 @@ class EditsStore {
   }
 
   /**
-   * Apply a field patch to one or many books at once (the batch workflow the
+   * Apply a field patch to one or many files at once (the batch workflow the
    * editor drives). The patch merges over each book's existing edits. A
    * `null` value stages a clear; a blank or explicitly-undefined value
    * prunes its field; a book left with nothing is dropped.
    */
-  stage(bookIds: string[], patch: Partial<StagedEdits>): void {
+  stage(fileIds: string[], patch: Partial<StagedEdits>): void {
     const next = new Map(this.#map);
-    for (const id of bookIds) {
+    for (const id of fileIds) {
       const merged = prune({ ...(next.get(id) ?? {}), ...patch });
       if (merged) next.set(id, merged);
       else next.delete(id);
@@ -110,26 +110,26 @@ class EditsStore {
   }
 
   /** Fold the checked fields of a fetched document onto one book's edits. */
-  applyDoc(bookId: string, doc: MetadataDoc, fields: Set<string>): void {
+  applyDoc(fileId: string, doc: MetadataDoc, fields: Set<string>): void {
     const next = new Map(this.#map);
-    const merged = prune(mergeDocIntoEdits(next.get(bookId) ?? {}, doc, fields));
-    if (merged) next.set(bookId, merged);
-    else next.delete(bookId);
+    const merged = prune(mergeDocIntoEdits(next.get(fileId) ?? {}, doc, fields));
+    if (merged) next.set(fileId, merged);
+    else next.delete(fileId);
     this.#map = next;
   }
 
   /** Drop one field from a book (revert it), or the book's whole entry when no field is given. */
-  unstage(bookId: string, field?: keyof StagedEdits): void {
-    const current = this.#map.get(bookId);
+  unstage(fileId: string, field?: keyof StagedEdits): void {
+    const current = this.#map.get(fileId);
     if (!current) return;
     const next = new Map(this.#map);
     if (field === undefined) {
-      next.delete(bookId);
+      next.delete(fileId);
     } else {
       const { [field]: _dropped, ...rest } = current;
       const merged = prune(rest);
-      if (merged) next.set(bookId, merged);
-      else next.delete(bookId);
+      if (merged) next.set(fileId, merged);
+      else next.delete(fileId);
     }
     this.#map = next;
   }
@@ -146,8 +146,8 @@ class EditsStore {
    * field-for-field and leaves everything else - re-typed or newly staged -
    * for the next Tailor run.
    */
-  unstageApplied(bookId: string, appliedEdits: StagedEdits): void {
-    const current = this.#map.get(bookId);
+  unstageApplied(fileId: string, appliedEdits: StagedEdits): void {
+    const current = this.#map.get(fileId);
     if (!current) return;
     const rest: StagedEdits = { ...current };
     for (const key of Object.keys(appliedEdits) as (keyof StagedEdits)[]) {
@@ -155,8 +155,8 @@ class EditsStore {
     }
     const next = new Map(this.#map);
     const merged = prune(rest);
-    if (merged) next.set(bookId, merged);
-    else next.delete(bookId);
+    if (merged) next.set(fileId, merged);
+    else next.delete(fileId);
     this.#map = next;
   }
 
@@ -165,9 +165,9 @@ class EditsStore {
    * wants. Snapshotting here is the one place a $state proxy is unwrapped before
    * it can drift toward the sidecar IPC boundary.
    */
-  snapshotFor(bookIds: string[]): Record<string, StagedEdits> {
+  snapshotFor(fileIds: string[]): Record<string, StagedEdits> {
     const out: Record<string, StagedEdits> = {};
-    for (const id of bookIds) {
+    for (const id of fileIds) {
       const staged = this.#map.get(id);
       if (staged) out[id] = $state.snapshot(staged) as StagedEdits;
     }
@@ -175,13 +175,13 @@ class EditsStore {
   }
 
   /** Clear the given books' edits, or every book's when no ids are given. */
-  clear(bookIds?: string[]): void {
-    if (bookIds === undefined) {
+  clear(fileIds?: string[]): void {
+    if (fileIds === undefined) {
       this.#map = new Map();
       return;
     }
     const next = new Map(this.#map);
-    for (const id of bookIds) next.delete(id);
+    for (const id of fileIds) next.delete(id);
     this.#map = next;
   }
 }

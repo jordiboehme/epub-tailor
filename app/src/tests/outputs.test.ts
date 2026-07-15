@@ -25,7 +25,6 @@ describe("planOutputs", () => {
     const plans = planOutputs([epub("/books/Dune.epub", { title: "Dune", authors: ["Herbert"] })], {
       template: "{author} - {title}",
       outputDir: null,
-      inPlace: false,
       appendix: "tailored",
       existsOnDisk: noDisk,
     });
@@ -36,7 +35,6 @@ describe("planOutputs", () => {
     const plans = planOutputs([epub("/books/Dune.epub", { title: "Dune", authors: ["Herbert"] })], {
       template: "{author} - {title}",
       outputDir: "/out",
-      inPlace: false,
       appendix: "tailored",
       existsOnDisk: noDisk,
     });
@@ -52,7 +50,6 @@ describe("planOutputs", () => {
       {
         template: "{title}",
         outputDir: "/out",
-        inPlace: false,
         appendix: "tailored",
         existsOnDisk: noDisk,
       },
@@ -69,7 +66,6 @@ describe("planOutputs", () => {
       {
         template: "{title}",
         outputDir: null,
-        inPlace: false,
         appendix: "tailored",
         existsOnDisk: noDisk,
       },
@@ -81,7 +77,6 @@ describe("planOutputs", () => {
     const plans = planOutputs([epub("/books/Dune.epub")], {
       template: "{original}",
       outputDir: null,
-      inPlace: false,
       appendix: "tailored",
       existsOnDisk: noDisk,
     });
@@ -92,7 +87,6 @@ describe("planOutputs", () => {
     const plans = planOutputs([epub("/books/Dune.EPUB")], {
       template: "{original}",
       outputDir: null,
-      inPlace: false,
       appendix: "x4",
       existsOnDisk: noDisk,
     });
@@ -103,7 +97,6 @@ describe("planOutputs", () => {
     const plans = planOutputs([epub("/books/Grays Sports Almanac -- 1950-2000.epub")], {
       template: "{original}",
       outputDir: null,
-      inPlace: false,
       appendix: "x4",
       existsOnDisk: noDisk,
     });
@@ -117,46 +110,38 @@ describe("planOutputs", () => {
     const plans = planOutputs([epub("/books/A:B.epub")], {
       template: "{original}",
       outputDir: null,
-      inPlace: false,
       appendix: "x4",
       existsOnDisk: noDisk,
     });
     expect(plans[0].output).toBe("/books/A-B.x4.epub");
   });
 
-  it("leaves epub books in place but still plans md outputs when in-place is on", () => {
-    const plans = planOutputs(
-      [epub("/b/A.epub"), md("/b/notes.md")],
-      {
-        template: "{original}",
-        outputDir: null,
-        inPlace: true,
-        appendix: "tailored",
-        existsOnDisk: noDisk,
-      },
-    );
-    expect(plans).toEqual([
-      { input: "/b/A.epub", output: null },
-      { input: "/b/notes.md", output: "/b/notes.epub" },
-    ]);
+  it("never plans an in-place write - every plan carries a real path", () => {
+    // In-place runs are Edit mode's business and never come out of the
+    // planner: Fit mode always produces a copy.
+    const plans = planOutputs([epub("/b/A.epub"), md("/b/notes.md")], {
+      template: "{original}",
+      outputDir: null,
+      appendix: "tailored",
+      existsOnDisk: noDisk,
+    });
+    expect(plans.every((p) => typeof p.output === "string")).toBe(true);
   });
 
   it("numbers a collision against a file already on disk", () => {
     const plans = planOutputs([epub("/books/Dune.epub", { title: "Foo" })], {
       template: "{title}",
       outputDir: "/out",
-      inPlace: false,
       appendix: "tailored",
       existsOnDisk: (p) => p === "/out/Foo.epub",
     });
     expect(plans[0].output).toBe("/out/Foo (2).epub");
   });
 
-  it("always gives an md book an .epub output even without in-place", () => {
+  it("always gives an md book an .epub output", () => {
     const plans = planOutputs([md("/docs/guide.md", { title: "Guide" })], {
       template: "{title}",
       outputDir: null,
-      inPlace: false,
       appendix: "tailored",
       existsOnDisk: noDisk,
     });
@@ -169,7 +154,6 @@ describe("planOutputs", () => {
       {
         template: "{original}",
         outputDir: null,
-        inPlace: false,
         appendix: "tailored",
         existsOnDisk: noDisk,
       },
@@ -183,7 +167,6 @@ describe("previewOutputName", () => {
   const opts = {
     template: "{original}",
     outputDir: null,
-    inPlace: false,
     appendix: "tailored",
   };
 
@@ -210,15 +193,5 @@ describe("previewOutputName", () => {
   it("is just the file name, never the whole path", () => {
     const name = previewOutputName(epub("/books/Dune.epub"), { ...opts, outputDir: "/out/box" });
     expect(name).toBe("Dune.epub");
-  });
-
-  it("has nothing to preview for an epub written in place", () => {
-    expect(previewOutputName(epub("/books/Dune.epub"), { ...opts, inPlace: true })).toBeNull();
-  });
-
-  it("previews a Markdown book even in place, because it is always written out", () => {
-    expect(previewOutputName(md("/docs/notes.md"), { ...opts, inPlace: true })).toBe(
-      "notes.epub",
-    );
   });
 });

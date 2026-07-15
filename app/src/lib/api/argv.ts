@@ -29,6 +29,13 @@ export interface RunOptions {
 const DEFAULT_SPLIT_LEVEL = 1;
 
 /**
+ * The repair-only profile every in-place run uses: metadata saves, cleanups
+ * and the automatic check-on-add all speak `epub`, never the device profile -
+ * Edit mode fixes the book itself, Fit mode makes device copies.
+ */
+export const CLEANUP_PROFILE = "epub";
+
+/**
  * The clearable fields and their `--clear` names, in emission order. Typed
  * against the clearable keys, so a protected field cannot creep in without
  * the compiler objecting.

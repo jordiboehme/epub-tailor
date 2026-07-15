@@ -1,9 +1,10 @@
-// Pure output-path planner: given a batch of books and the user's naming,
-// destination and in-place settings, decide where each converted EPUB lands
-// (or that it is written in place). No Tauri import - path math is plain string
-// work so this runs, and is tested, outside a window. The one bit of real-world
-// knowledge it needs, "does a file already sit here", is injected as
-// `existsOnDisk` (backed by the `paths_exist` command in the app).
+// Pure output-path planner: given a batch of books and the user's naming and
+// destination settings, decide where each converted EPUB lands. Fit mode
+// always produces a copy - in-place writes are Edit mode's business and never
+// come out of here. No Tauri import - path math is plain string work so this
+// runs, and is tested, outside a window. The one bit of real-world knowledge
+// it needs, "does a file already sit here", is injected as `existsOnDisk`
+// (backed by the `paths_exist` command in the app).
 
 import { renderTemplate, resolveCollisions } from "./templates";
 import type { TemplateBook } from "./templates";
@@ -16,8 +17,7 @@ export interface PlannedBook {
 
 export interface OutputPlan {
   input: string;
-  /** `null` => written in place (epub only). */
-  output: string | null;
+  output: string;
 }
 
 export interface PlanOptions {
@@ -25,8 +25,6 @@ export interface PlanOptions {
   template: string;
   /** Destination folder, or `null` to write alongside each original. */
   outputDir: string | null;
-  /** In-place mode (epub only); md books are always given an output path. */
-  inPlace: boolean;
   /** The active profile's appendix, inserted when an output would hit its own input. */
   appendix: string;
   /** Whether a file already exists at a given absolute path. */
@@ -54,29 +52,22 @@ const KEY_SEP = "\n";
 /**
  * Plan an output path for every book in the batch.
  *
- * - In-place: epub books get `output: null`; md books still get a real path
- *   (Markdown has no in-place mode).
- * - Otherwise the directory is `outputDir` (or the input's own folder) and the
- *   name comes from the template, always with an `.epub` extension.
+ * - The directory is `outputDir` (or the input's own folder) and the name
+ *   comes from the template, always with an `.epub` extension.
  * - If a book's computed output would land on its own input, the appendix is
  *   inserted before the extension (`Dune.epub` -> `Dune.tailored.epub`).
  * - Names are then made unique across the whole batch and against anything
  *   already on disk, case-insensitively, comparing the full directory + name.
  */
 export function planOutputs(books: PlannedBook[], opts: PlanOptions): OutputPlan[] {
-  // First pass: fixed decisions (in-place vs a dir+stem), independent of collisions.
+  // First pass: fixed decisions (dir + stem), independent of collisions.
   interface Draft {
     input: string;
-    inPlace: boolean;
     dir: string;
     stem: string;
   }
 
   const drafts: Draft[] = books.map((book) => {
-    if (opts.inPlace && book.kind === "epub") {
-      return { input: book.input, inPlace: true, dir: "", stem: "" };
-    }
-
     const dir = opts.outputDir ?? dirOf(book.input);
     let stem = renderTemplate(opts.template, book.template);
 
@@ -94,35 +85,22 @@ export function planOutputs(books: PlannedBook[], opts: PlanOptions): OutputPlan
       stem = `${stem}.${opts.appendix}`;
     }
 
-    return { input: book.input, inPlace: false, dir, stem };
+    return { input: book.input, dir, stem };
   });
 
-  // Second pass: resolve collisions over the dir-qualified keys of the books
-  // that actually produce a file. In-place books do not participate.
-  const producing = drafts.filter((d) => !d.inPlace);
-  const keys = producing.map((d) => `${d.dir}${KEY_SEP}${d.stem}`);
+  // Second pass: resolve collisions over the dir-qualified keys.
+  const keys = drafts.map((d) => `${d.dir}${KEY_SEP}${d.stem}`);
   const resolvedKeys = resolveCollisions(keys, {
     existsOnDisk: (key) => opts.existsOnDisk(pathOfKey(key)),
   });
 
-  // Stitch resolved names back onto the drafts, in order.
-  const resolvedByInput = new Map<string, string>();
-  producing.forEach((d, i) => {
-    resolvedByInput.set(d.input, pathOfKey(resolvedKeys[i]));
-  });
-
-  return drafts.map((d) =>
-    d.inPlace
-      ? { input: d.input, output: null }
-      : { input: d.input, output: resolvedByInput.get(d.input)! },
-  );
+  return drafts.map((d, i) => ({ input: d.input, output: pathOfKey(resolvedKeys[i]) }));
 }
 
 /**
  * The file name one book would be written as, for the naming preview: the real
  * planner, run on that book alone, so the preview cannot drift from what the
- * app actually writes. `null` when the book is rewritten in place and there is
- * no new name to show.
+ * app actually writes.
  *
  * Disk is not consulted (a preview that stats the filesystem on every keystroke
  * would be a poor trade), so the " (2)" a real collision earns is not shown -
@@ -132,9 +110,8 @@ export function planOutputs(books: PlannedBook[], opts: PlanOptions): OutputPlan
 export function previewOutputName(
   book: PlannedBook,
   opts: Omit<PlanOptions, "existsOnDisk">,
-): string | null {
+): string {
   const [plan] = planOutputs([book], { ...opts, existsOnDisk: () => false });
-  if (plan.output === null) return null;
   const slash = Math.max(plan.output.lastIndexOf("/"), plan.output.lastIndexOf("\\"));
   return slash >= 0 ? plan.output.slice(slash + 1) : plan.output;
 }

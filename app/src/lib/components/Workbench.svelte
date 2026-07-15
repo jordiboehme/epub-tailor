@@ -2,7 +2,7 @@
   import { books } from "../stores/books.svelte";
   import { jobs } from "../stores/jobs.svelte";
   import { settings } from "../stores/settings.svelte";
-  import type { ViewMode } from "../stores/settings.svelte";
+  import type { AppMode, ViewMode } from "../stores/settings.svelte";
   import { isModalOpen, isTextField, shortcutFor } from "../api/keys";
   import BrowseButtons from "./BrowseButtons.svelte";
   import BookGrid from "./BookGrid.svelte";
@@ -29,19 +29,23 @@
         books.selectAll();
         break;
       case "clear-selection":
-        if (books.selectedIds.size === 0) return;
+        if (books.selectedFileIds.size === 0) return;
         books.clearSelection();
         break;
       case "remove-selected": {
-        // No confirmation: these are list entries, not files. Nothing on disk
-        // is touched, and dropping the book back in takes one drag. A book
-        // that is mid-conversion is left alone, exactly as its card's own
-        // remove button is while it is busy.
-        const ids = books.selected
-          .filter((b) => {
-            const state = jobs.conversionJobFor(b.id)?.state;
-            return state !== "running" && state !== "queued";
-          })
+        // No confirmation: these are list entries, and nothing on disk is
+        // touched - dropping the book back in takes one drag. Removal is
+        // book-granular (a selected copy takes its whole card along), and a
+        // book with any file mid-conversion is left alone, exactly as its
+        // card's own remove button is while it is busy.
+        const ids = books.books
+          .filter((b) => b.files.some((f) => books.selectedFileIds.has(f.id)))
+          .filter((b) =>
+            b.files.every((f) => {
+              const state = jobs.conversionJobFor(f.id)?.state;
+              return state !== "running" && state !== "queued";
+            }),
+          )
           .map((b) => b.id);
         if (ids.length === 0) return;
         books.remove(ids);
@@ -71,6 +75,20 @@
   </svg>
 {/snippet}
 
+{#snippet editIcon()}
+  <svg class="h-4 w-4" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5">
+    <path d="M13.8 3.7l2.5 2.5L7 15.5l-3.4 0.9 0.9-3.4 9.3-9.3z" stroke-linecap="round" stroke-linejoin="round" />
+    <path d="M12 5.5l2.5 2.5" stroke-linecap="round" />
+  </svg>
+{/snippet}
+
+{#snippet fitIcon()}
+  <svg class="h-4 w-4" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5">
+    <path d="M11.5 8.5L16.5 3.5M16.5 3.5h-3.5M16.5 3.5V7" stroke-linecap="round" stroke-linejoin="round" />
+    <path d="M8.5 11.5L3.5 16.5M3.5 16.5H7M3.5 16.5V13" stroke-linecap="round" stroke-linejoin="round" />
+  </svg>
+{/snippet}
+
 {#snippet mark(size: string)}
   <svg class={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
     <path d="M5 4.5A1.5 1.5 0 016.5 3H13v18H6.5A1.5 1.5 0 015 19.5v-15z" stroke-linejoin="round" />
@@ -91,13 +109,24 @@
 {:else}
   <div class="flex h-full flex-col">
     <header
-      class="flex shrink-0 items-center justify-between border-b border-zinc-200 bg-white px-5 py-2.5 dark:border-zinc-800 dark:bg-zinc-900"
+      class="grid shrink-0 grid-cols-[1fr_auto_1fr] items-center gap-3 border-b border-zinc-200 bg-white px-5 py-2.5 dark:border-zinc-800 dark:bg-zinc-900"
     >
       <div class="flex items-center gap-2 text-zinc-700 dark:text-zinc-200">
         <span class="text-indigo-500">{@render mark("h-5 w-5")}</span>
         <span class="text-sm font-semibold tracking-tight">EPUB Tailor</span>
       </div>
-      <div class="flex items-center gap-3">
+      <!-- The app's central concept sits front and center, spelled out: what
+           you do in Edit stays in the file, what you do in Fit makes copies. -->
+      <SegmentedControl
+        labeled
+        value={settings.mode}
+        options={[
+          { value: "edit", label: "Edit metadata", icon: editIcon },
+          { value: "fit", label: "Fit for device", icon: fitIcon },
+        ]}
+        onchange={(value) => (settings.mode = value as AppMode)}
+      />
+      <div class="flex items-center justify-end gap-3">
         <SegmentedControl
           value={settings.viewMode}
           options={[

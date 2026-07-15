@@ -1,15 +1,13 @@
 <script lang="ts">
   import { fade } from "svelte/transition";
   import { previewOutputName } from "../api/outputs";
-  import { books, toTemplateBook } from "../stores/books.svelte";
+  import { books, toTemplateFile } from "../stores/books.svelte";
   import { profiles } from "../stores/profiles.svelte";
   import { settings } from "../stores/settings.svelte";
 
   let showTokens = $state(false);
 
-  const disabled = $derived(settings.inPlace);
-
-  const sample = $derived(books.selected[0] ?? books.books[0]);
+  const sample = $derived(books.selectedFiles[0] ?? books.books[0]?.files[0]);
 
   // The appendix the planner stamps on an output that would land on its own
   // input - which the defaults ({original}, alongside originals) do for every
@@ -39,15 +37,14 @@
   // "Dune.tailored.epub".
   const preview = $derived(
     sample
-      ? (previewOutputName(
-          { input: sample.path, kind: sample.kind, template: toTemplateBook(sample) },
+      ? previewOutputName(
+          { input: sample.path, kind: sample.kind, template: toTemplateFile(sample) },
           {
             template: settings.filenameTemplate,
             outputDir: settings.outputDir,
-            inPlace: settings.inPlace,
             appendix,
           },
-        ) ?? "")
+        )
       : "",
   );
 
@@ -61,14 +58,13 @@
   ];
 </script>
 
-<div class="flex flex-col gap-1.5" class:opacity-50={disabled}>
+<div class="flex flex-col gap-1.5">
   <div class="relative">
     <input
       type="text"
       spellcheck="false"
       autocapitalize="off"
       autocorrect="off"
-      {disabled}
       bind:value={settings.filenameTemplate}
       class="w-full rounded-lg border border-zinc-300 bg-white px-2.5 py-1.5 pr-9 font-mono text-[13px] text-zinc-800 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 disabled:cursor-not-allowed dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
     />
@@ -103,11 +99,7 @@
     {/if}
   </div>
 
-  {#if disabled}
-    <p class="text-[11px] leading-snug text-zinc-500 dark:text-zinc-400">
-      Naming is off while replacing originals - each book keeps its own name.
-    </p>
-  {:else if preview}
+  {#if preview}
     <p class="truncate text-[11px] text-zinc-500 dark:text-zinc-400" title={preview}>
       Preview: <span class="text-zinc-700 dark:text-zinc-300">{preview}</span>
     </p>

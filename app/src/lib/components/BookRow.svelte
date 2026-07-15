@@ -1,58 +1,63 @@
 <script lang="ts">
-  // One book, one row: the same book a BookCard shows, laid out as columns for
-  // the list view. Everything it says about a book - the title, the author,
-  // the series, the year, the chips, the failure - comes from api/book-view,
-  // the same helpers the card consumes, so the two views can never disagree
-  // about what a book's state is.
-  import { slide } from "svelte/transition";
-  import { revealItemInDir } from "@tauri-apps/plugin-opener";
+  // One book, one row group: the same virtual folder a BookCard shows, laid
+  // out as columns for the list view. The row's metadata cells come from the
+  // ORIGINAL file (files[0]) and clicking the row selects exactly that file;
+  // the file list beneath carries the per-file state. Everything it says
+  // about a file comes from api/book-view, the same helpers the card
+  // consumes, so the two views can never disagree.
   import { coverUrl } from "../api/covers";
   import { books } from "../stores/books.svelte";
   import type { Book } from "../stores/books.svelte";
   import { jobs } from "../stores/jobs.svelte";
   import { edits } from "../stores/edits.svelte";
+  import { profiles } from "../stores/profiles.svelte";
+  import { knownAppendixes } from "../api/copies";
   import {
-    bookAuthors,
-    bookInitials,
-    bookSeries,
-    bookTitle,
-    bookYear,
-    chipsFor,
-    failureOf,
-    findingsOf,
+    copyBadge,
+    fileAuthors,
+    fileInitials,
+    fileSeries,
+    fileTitle,
+    fileYear,
     TONE_CLASS,
-    writtenPathOf,
   } from "../api/book-view";
-  import type { Chip } from "../api/book-view";
-  import CardDetails from "./CardDetails.svelte";
+  import FileList from "./FileList.svelte";
 
   let { book }: { book: Book } = $props();
 
   let imgError = $state(false);
-  let showDetails = $state(false);
+
+  const original = $derived(book.files[0]);
 
   $effect(() => {
     // Reset the load-error flag whenever this row's cover changes, same as the
     // card does: a thumbnail that failed to load once (an ingest still writing
     // the file, say) would otherwise show its initials for the rest of the
     // session, even after a cover has been fetched or picked.
-    void book.coverPath;
+    void original.coverPath;
     imgError = false;
   });
 
-  const selected = $derived(books.selectedIds.has(book.id));
-  const job = $derived(jobs.conversionJobFor(book.id));
+  // The body stands for the original; its selected look means "that file is
+  // a target". A selected copy highlights its own row below.
+  const selected = $derived(books.selectedFileIds.has(original.id));
+  const job = $derived(jobs.conversionJobFor(original.id));
   const running = $derived(job?.state === "running");
   const queued = $derived(job?.state === "queued");
-  const unreadable = $derived(book.ingest === "failed");
+  const unreadable = $derived(original.ingest === "failed");
+  const anyBusy = $derived(
+    book.files.some((f) => {
+      const state = jobs.conversionJobFor(f.id)?.state;
+      return state === "running" || state === "queued";
+    }),
+  );
 
-  const staged = $derived(edits.get(book.id));
-  const edited = $derived(staged !== undefined);
+  const staged = $derived(edits.get(original.id));
 
-  const title = $derived(bookTitle(book, staged));
-  const authors = $derived(bookAuthors(book, staged));
-  const series = $derived(bookSeries(book, staged));
-  const year = $derived(bookYear(book, staged));
+  const title = $derived(fileTitle(original, staged));
+  const authors = $derived(fileAuthors(original, staged));
+  const series = $derived(fileSeries(original, staged));
+  const year = $derived(fileYear(original, staged));
 
   const titleEdited = $derived(staged?.title !== undefined);
   const authorsEdited = $derived(staged !== undefined && staged.authors !== undefined);
@@ -65,39 +70,23 @@
   const seriesCleared = $derived(staged?.series === null);
   const dateCleared = $derived(staged?.date === null);
 
-  const initials = $derived(bookInitials(book));
-  const hasCover = $derived(!!book.coverPath && !imgError);
-
-  const writtenPath = $derived(writtenPathOf(book));
-  const failure = $derived(failureOf(book));
-  const findings = $derived(findingsOf(book));
-  const canExpand = $derived(Boolean(failure || findings));
-  const chips = $derived(chipsFor(book));
+  const initials = $derived(fileInitials(original));
+  const hasCover = $derived(!!original.coverPath && !imgError);
+  const badge = $derived(copyBadge(original, knownAppendixes(profiles.builtins)));
 
   function onClick(event: MouseEvent) {
-    if (event.shiftKey) books.range(book.id);
-    else if (event.metaKey || event.ctrlKey) books.toggle(book.id);
-    else books.select(book.id);
+    if (event.shiftKey) books.range(original.id);
+    else if (event.metaKey || event.ctrlKey) books.toggle(original.id);
+    else books.select(original.id);
   }
 
   function onKey(event: KeyboardEvent) {
     if (event.key === "Enter" || event.key === " ") {
       event.preventDefault();
-      books.select(book.id);
+      books.select(original.id);
     }
   }
-
-  function reveal(event: MouseEvent) {
-    event.stopPropagation();
-    if (writtenPath) void revealItemInDir(writtenPath);
-  }
 </script>
-
-{#snippet chip(c: Chip)}
-  <span class="rounded-md px-1.5 py-0.5 text-[11px] font-medium {TONE_CLASS[c.tone]}" title={c.title}>
-    {c.label}
-  </span>
-{/snippet}
 
 {#snippet cell(text: string, isEdited: boolean, isCleared: boolean)}
   {#if isCleared}
@@ -136,7 +125,7 @@
       >
         {#if hasCover}
           <img
-            src={coverUrl(book.coverPath!)}
+            src={coverUrl(original.coverPath!)}
             alt={"Cover of " + title}
             onerror={() => (imgError = true)}
             class="h-full w-full object-cover"
@@ -184,22 +173,19 @@
         >
           {title}
         </p>
-        {#if book.kind === "md"}
+        {#if original.kind === "md"}
           <span
             class="shrink-0 rounded px-1 py-0.5 text-[10px] font-medium uppercase tracking-wide {TONE_CLASS.neutral}"
           >
             md
           </span>
         {/if}
-        {#if edited}
+        {#if badge}
           <span
-            title="Has staged metadata edits, written on the next Tailor"
-            class="inline-flex shrink-0 items-center gap-0.5 rounded bg-indigo-600/85 px-1 py-0.5 text-[10px] font-medium text-white"
+            title="A copy produced by EPUB Tailor ({badge})"
+            class="shrink-0 rounded px-1 py-0.5 text-[10px] font-medium {TONE_CLASS.neutral}"
           >
-            <svg class="h-2.5 w-2.5" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M13.5 4.5l2 2L8 14l-3 1 1-3 7.5-7.5z" stroke-linecap="round" stroke-linejoin="round" />
-            </svg>
-            edited
+            copy · {badge}
           </span>
         {/if}
       </div>
@@ -208,53 +194,19 @@
       {@render cell(series, seriesEdited, seriesCleared)}
       {@render cell(year, dateEdited, dateCleared)}
 
-      <!-- Status cell: chips, the queued badge, the details toggle, the hover actions -->
+      <!-- Status cell: the queued badge and the hover remove action -->
       <div class="flex shrink-0 items-center justify-end gap-1.5">
-        {#each chips as c}
-          {@render chip(c)}
-        {/each}
-
         {#if queued}
           <span class="rounded-md px-1.5 py-0.5 text-[11px] font-medium {TONE_CLASS.neutral}">queued</span>
         {/if}
 
-        {#if canExpand}
-          <button
-            type="button"
-            onclick={(e) => {
-              e.stopPropagation();
-              showDetails = !showDetails;
-            }}
-            class="rounded px-1 py-0.5 text-[11px] font-medium text-zinc-500 hover:text-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-200"
-          >
-            {showDetails ? "Less" : "Details"}
-          </button>
-        {/if}
-
-        <!--
-          The row's actions. They are laid out even while hidden and only faded
-          in on hover: a list is a column of aligned things, and popping two
-          buttons into existence would shove every chip on the row sideways.
-        -->
-        {#if !running && !queued}
+        {#if !anyBusy}
           <div
             class="flex items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100"
           >
-            {#if writtenPath}
-              <button
-                type="button"
-                title="Show the tailored file in the file manager"
-                onclick={reveal}
-                class="rounded-md p-1 text-zinc-500 transition-colors hover:bg-indigo-100 hover:text-indigo-700 dark:text-zinc-400 dark:hover:bg-indigo-500/20 dark:hover:text-indigo-300"
-              >
-                <svg class="h-3.5 w-3.5" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7">
-                  <path d="M2.5 6.5A1.5 1.5 0 014 5h3.2l1.4 1.8H16A1.5 1.5 0 0117.5 8.3v6.2A1.5 1.5 0 0116 16H4a1.5 1.5 0 01-1.5-1.5v-8z" stroke-linejoin="round" />
-                </svg>
-              </button>
-            {/if}
             <button
               type="button"
-              title="Remove from the workbench (the file stays where it is)"
+              title="Remove from the workbench (the files stay where they are)"
               onclick={(e) => {
                 e.stopPropagation();
                 books.remove([book.id]);
@@ -270,30 +222,19 @@
       </div>
     </div>
 
-    {#if failure && !showDetails}
-      <p
-        class="line-clamp-1 pl-[44px] text-[11px] leading-snug text-rose-600 dark:text-rose-400"
-        title={failure.friendly}
-      >
-        {failure.friendly}
-      </p>
-    {/if}
+    <!-- The book's files, always in view and individually selectable.
+         Indented to the row's text column. -->
+    <div class="pl-[44px] pt-1">
+      <FileList {book} />
+    </div>
 
     <!-- Busy along the whole row: the shimmer a running card runs under its cover. -->
     {#if running}
       <div class="absolute inset-x-0 bottom-0 h-0.5 overflow-hidden bg-indigo-500/15">
         <div class="h-full w-1/3 animate-[shimmer_1.1s_ease-in-out_infinite] bg-indigo-500"></div>
       </div>
-    {:else if book.ingest === "pending"}
+    {:else if original.ingest === "pending"}
       <div class="absolute inset-x-0 bottom-0 h-0.5 animate-pulse bg-indigo-300/70"></div>
     {/if}
   </div>
-
-  {#if showDetails && canExpand}
-    <div transition:slide={{ duration: 150 }}>
-      <!-- Indented to the row's text column (px-4 + a 32px thumb + gap-3), so
-           the drawer reads as this row's own, not as a block adrift under it. -->
-      <CardDetails {findings} {failure} padding="py-2.5 pr-4 pl-[60px]" />
-    </div>
-  {/if}
 </div>

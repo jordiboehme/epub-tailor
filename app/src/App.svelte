@@ -33,6 +33,10 @@
 
     try {
       await profiles.load();
+      // Books the OS handed us at launch can land before the profile list
+      // (and with it the copy-name appendixes) is known; regroup now that it
+      // is, so a copy opened next to its source still folds under it.
+      books.regroup();
     } catch {
       failures.push("the device profiles");
     }
