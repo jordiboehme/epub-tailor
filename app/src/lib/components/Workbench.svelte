@@ -99,20 +99,20 @@
 
 {#if books.books.length === 0}
   <div class="flex h-full flex-col items-center justify-center gap-7 px-8 text-center">
-    <span class="text-indigo-500">{@render mark("h-14 w-14")}</span>
+    <span class="text-teal-500 dark:text-teal-400 dark:drop-shadow-glow">{@render mark("h-14 w-14")}</span>
     <div>
-      <h1 class="text-3xl font-semibold tracking-tight text-zinc-800 dark:text-zinc-100">EPUB Tailor</h1>
-      <p class="mt-2 text-zinc-500 dark:text-zinc-400">Drop a book here and we will make it fit.</p>
+      <h1 class="text-3xl font-semibold tracking-tight text-ink-800 dark:text-ink-100">EPUB Tailor</h1>
+      <p class="mt-2 text-ink-500 dark:text-ink-400">Drop a book here and we will make it fit.</p>
     </div>
     <BrowseButtons />
   </div>
 {:else}
   <div class="flex h-full flex-col">
     <header
-      class="grid shrink-0 grid-cols-[1fr_auto_1fr] items-center gap-3 border-b border-zinc-200 bg-white px-5 py-2.5 dark:border-zinc-800 dark:bg-zinc-900"
+      class="grid shrink-0 grid-cols-[1fr_auto_1fr] items-center gap-3 border-b border-ink-200 bg-white px-5 py-2.5 dark:border-ink-800 dark:bg-ink-900"
     >
-      <div class="flex items-center gap-2 text-zinc-700 dark:text-zinc-200">
-        <span class="text-indigo-500">{@render mark("h-5 w-5")}</span>
+      <div class="flex items-center gap-2 text-ink-700 dark:text-ink-200">
+        <span class="text-teal-500 dark:text-teal-400">{@render mark("h-5 w-5")}</span>
         <span class="text-sm font-semibold tracking-tight">EPUB Tailor</span>
       </div>
       <!-- The app's central concept sits front and center, spelled out: what
@@ -148,7 +148,7 @@
         {/if}
       </main>
       <aside
-        class="w-[300px] shrink-0 overflow-y-auto border-l border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900"
+        class="w-[300px] shrink-0 overflow-y-auto border-l border-ink-200 bg-white dark:border-ink-800 dark:bg-ink-900"
       >
         <Inspector />
       </aside>

@@ -191,13 +191,13 @@
 </script>
 
 {#if selected.length === 0}
-  <p class="text-[12px] leading-snug text-zinc-500 dark:text-zinc-400">
+  <p class="text-[12px] leading-snug text-ink-500 dark:text-ink-400">
     Select a file to edit its metadata, or fetch it from Open Library.
   </p>
 {:else}
   {#key single ? single.id : `multi:${ids.join(",")}`}
     {#if isMulti}
-      <p class="mb-2.5 text-[11px] text-zinc-500 dark:text-zinc-400">
+      <p class="mb-2.5 text-[11px] text-ink-500 dark:text-ink-400">
         Editing {selected.length} files - a change stages to all of them as you type.
       </p>
     {/if}
@@ -233,13 +233,13 @@
                 if (coverStaged && single) edits.unstage(single.id, "coverPath");
               }}
               title={coverStaged ? "Staged - uncheck to revert" : "Choose an image to stage it"}
-              class="h-3 w-3 rounded accent-indigo-600"
+              class="h-3 w-3 rounded accent-teal-600"
             />
-            <span class="text-[11px] font-medium text-zinc-500 dark:text-zinc-400">Cover</span>
+            <span class="text-[11px] font-medium text-ink-500 dark:text-ink-400">Cover</span>
           </label>
           <div class="flex items-start gap-2.5">
             <div
-              class="h-20 w-14 shrink-0 overflow-hidden rounded-md border border-zinc-200 bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-800"
+              class="h-20 w-14 shrink-0 overflow-hidden rounded-md border border-ink-200 bg-ink-100 dark:border-ink-700 dark:bg-ink-800"
             >
               {#if coverShown && !coverError}
                 <img
@@ -249,7 +249,7 @@
                   class="h-full w-full object-cover"
                 />
               {:else}
-                <div class="flex h-full w-full items-center justify-center text-[10px] text-zinc-400">
+                <div class="flex h-full w-full items-center justify-center text-[10px] text-ink-400">
                   {coverError ? "no preview" : "none"}
                 </div>
               {/if}
@@ -281,7 +281,7 @@
       </Button>
 
       {#if mdOnlySelection}
-        <p class="text-[11px] leading-snug text-zinc-500 dark:text-zinc-400">
+        <p class="text-[11px] leading-snug text-ink-500 dark:text-ink-400">
           Markdown books get their metadata when you Fit them - there is nothing to save in place.
         </p>
       {/if}

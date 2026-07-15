@@ -113,7 +113,7 @@
   <div
     role="presentation"
     transition:fade={{ duration: 120 }}
-    class="absolute inset-0 bg-zinc-950/45 backdrop-blur-[2px]"
+    class="absolute inset-0 bg-ink-950/45 backdrop-blur-[2px]"
     onclick={onclose}
   ></div>
 
@@ -122,15 +122,15 @@
     aria-modal="true"
     aria-label="Find metadata online"
     transition:scale={{ start: 0.96, duration: 140 }}
-    class="relative flex max-h-[80vh] w-full max-w-lg flex-col rounded-2xl border border-zinc-200 bg-white p-5 shadow-xl dark:border-zinc-800 dark:bg-zinc-900"
+    class="relative flex max-h-[80vh] w-full max-w-lg flex-col rounded-2xl border border-ink-200 bg-white p-5 shadow-xl dark:border-ink-800 dark:bg-ink-900"
   >
     <div class="mb-3 flex items-center justify-between">
-      <h2 class="text-base font-semibold text-zinc-900 dark:text-zinc-100">Find metadata online</h2>
+      <h2 class="text-base font-semibold text-ink-900 dark:text-ink-100">Find metadata online</h2>
       <button
         type="button"
         aria-label="Close"
         onclick={onclose}
-        class="rounded-md p-1 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800"
+        class="rounded-md p-1 text-ink-400 hover:bg-ink-100 hover:text-ink-600 dark:hover:bg-ink-800"
       >
         <svg class="h-4 w-4" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6">
           <path d="M6 6l8 8M14 6l-8 8" stroke-linecap="round" />
@@ -158,7 +158,7 @@
           spellcheck="false"
           bind:value={query.title}
           onkeydown={(e) => e.key === "Enter" && canSearch && runSearch()}
-          class="rounded-lg border border-zinc-300 bg-white px-2.5 py-1.5 text-[13px] text-zinc-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
+          class="rounded-lg border border-ink-300 bg-white px-2.5 py-1.5 text-[13px] text-ink-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 dark:focus-visible:ring-teal-400 dark:border-ink-700 dark:bg-ink-800 dark:text-ink-100"
         />
         <input
           type="text"
@@ -166,7 +166,7 @@
           spellcheck="false"
           bind:value={query.author}
           onkeydown={(e) => e.key === "Enter" && canSearch && runSearch()}
-          class="rounded-lg border border-zinc-300 bg-white px-2.5 py-1.5 text-[13px] text-zinc-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
+          class="rounded-lg border border-ink-300 bg-white px-2.5 py-1.5 text-[13px] text-ink-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 dark:focus-visible:ring-teal-400 dark:border-ink-700 dark:bg-ink-800 dark:text-ink-100"
         />
       </div>
       <div class="mt-2 flex gap-2">
@@ -176,7 +176,7 @@
           spellcheck="false"
           bind:value={query.isbn}
           onkeydown={(e) => e.key === "Enter" && canSearch && runSearch()}
-          class="min-w-0 flex-1 rounded-lg border border-zinc-300 bg-white px-2.5 py-1.5 text-[13px] text-zinc-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
+          class="min-w-0 flex-1 rounded-lg border border-ink-300 bg-white px-2.5 py-1.5 text-[13px] text-ink-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 dark:focus-visible:ring-teal-400 dark:border-ink-700 dark:bg-ink-800 dark:text-ink-100"
         />
         <Button variant="primary" disabled={!canSearch} onclick={runSearch}>Search</Button>
       </div>
@@ -184,7 +184,7 @@
       <!-- Results -->
       <div class="mt-3 min-h-0 flex-1 overflow-y-auto">
         {#if loading}
-          <div class="flex items-center justify-center gap-2 py-10 text-[13px] text-zinc-500 dark:text-zinc-400">
+          <div class="flex items-center justify-center gap-2 py-10 text-[13px] text-ink-500 dark:text-ink-400">
             <svg class="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none">
               <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3" />
               <path class="opacity-90" d="M12 2a10 10 0 019 5.5" stroke="currentColor" stroke-width="3" stroke-linecap="round" />
@@ -196,13 +196,13 @@
             {error}
           </div>
         {:else if candidates === null}
-          <p class="py-8 text-center text-[13px] text-zinc-500 dark:text-zinc-400">
+          <p class="py-8 text-center text-[13px] text-ink-500 dark:text-ink-400">
             {isEpub
               ? "Search with the fields above - we seeded them from your book."
               : "Type a title, author or ISBN, then Search."}
           </p>
         {:else if candidates.length === 0}
-          <p class="py-8 text-center text-[13px] text-zinc-500 dark:text-zinc-400">
+          <p class="py-8 text-center text-[13px] text-ink-500 dark:text-ink-400">
             Nothing found. Try a different title, author or an ISBN.
           </p>
         {:else}
@@ -216,7 +216,7 @@
     {/if}
 
     <!-- Footer: licence -->
-    <div class="mt-3 border-t border-zinc-200 pt-2.5 text-[10px] leading-relaxed text-zinc-400 dark:border-zinc-800 dark:text-zinc-500">
+    <div class="mt-3 border-t border-ink-200 pt-2.5 text-[10px] leading-relaxed text-ink-400 dark:border-ink-800 dark:text-ink-500">
       {licence ?? "Open Library metadata is CC0; cover images are not."}
       <br />
       Cover images come from many sources and are not CC0 - only embed one you may use.

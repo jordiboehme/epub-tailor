@@ -27,7 +27,7 @@
   } = $props();
 </script>
 
-<div class="inline-flex rounded-lg border border-zinc-300 p-0.5 dark:border-zinc-700">
+<div class="inline-flex rounded-lg border border-ink-300 p-0.5 dark:border-ink-700">
   {#each options as option (option.value)}
     <button
       type="button"
@@ -35,11 +35,11 @@
       aria-label={option.label}
       aria-pressed={option.value === value}
       onclick={() => onchange(option.value)}
-      class="flex items-center gap-1.5 rounded-md transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 {labeled
+      class="flex items-center gap-1.5 rounded-md transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 dark:focus-visible:ring-teal-400 {labeled
         ? 'px-3 py-1.5 text-[13px] font-medium'
         : 'px-2 py-1'} {option.value === value
-        ? 'bg-indigo-600 text-white'
-        : 'text-zinc-600 hover:bg-zinc-200/70 dark:text-zinc-300 dark:hover:bg-zinc-800'}"
+        ? 'bg-teal-700 text-white dark:bg-teal-400 dark:text-teal-950'
+        : 'text-ink-600 hover:bg-ink-200/70 dark:text-ink-300 dark:hover:bg-ink-800'}"
     >
       {@render option.icon()}
       {#if labeled}

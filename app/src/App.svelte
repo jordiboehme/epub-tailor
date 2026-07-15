@@ -129,7 +129,7 @@
   </div>
 {/snippet}
 
-<main class="flex h-full flex-col bg-zinc-50 text-zinc-800 dark:bg-zinc-950 dark:text-zinc-200">
+<main class="flex h-full flex-col bg-ink-50 text-ink-800 dark:bg-ink-950 dark:text-ink-200">
   <UpdateBanner />
 
   {#if loadWarning}

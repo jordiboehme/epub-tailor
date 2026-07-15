@@ -86,9 +86,9 @@
       type="checkbox"
       onclick={onBoxClick}
       title={staged ? "Staged - uncheck to revert" : "Edit the field to stage it"}
-      class="h-3 w-3 rounded accent-indigo-600"
+      class="h-3 w-3 rounded accent-teal-600"
     />
-    <span class="text-[11px] font-medium text-zinc-500 dark:text-zinc-400">{label}</span>
+    <span class="text-[11px] font-medium text-ink-500 dark:text-ink-400">{label}</span>
   </label>
 
   {#if multiline}
@@ -101,9 +101,9 @@
       oninput={onInput}
       onfocus={() => (focused = true)}
       onblur={() => (focused = false)}
-      class="min-w-0 resize-y rounded-lg border bg-white px-2.5 py-1.5 text-[13px] text-zinc-800 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 dark:bg-zinc-800 dark:text-zinc-100 {staged
-        ? 'border-indigo-400 dark:border-indigo-500/60'
-        : 'border-zinc-300 dark:border-zinc-700'}"
+      class="min-w-0 resize-y rounded-lg border bg-white px-2.5 py-1.5 text-[13px] text-ink-800 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 dark:focus-visible:ring-teal-400 dark:bg-ink-800 dark:text-ink-100 {staged
+        ? 'border-teal-400 dark:border-teal-500/60'
+        : 'border-ink-300 dark:border-ink-700'}"
     ></textarea>
   {:else}
     <input
@@ -115,9 +115,9 @@
       oninput={onInput}
       onfocus={() => (focused = true)}
       onblur={() => (focused = false)}
-      class="min-w-0 rounded-lg border bg-white px-2.5 py-1.5 text-[13px] text-zinc-800 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 dark:bg-zinc-800 dark:text-zinc-100 {staged
-        ? 'border-indigo-400 dark:border-indigo-500/60'
-        : 'border-zinc-300 dark:border-zinc-700'}"
+      class="min-w-0 rounded-lg border bg-white px-2.5 py-1.5 text-[13px] text-ink-800 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 dark:focus-visible:ring-teal-400 dark:bg-ink-800 dark:text-ink-100 {staged
+        ? 'border-teal-400 dark:border-teal-500/60'
+        : 'border-ink-300 dark:border-ink-700'}"
     />
   {/if}
 </div>

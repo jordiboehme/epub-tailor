@@ -127,10 +127,10 @@
 </script>
 
 <div
-  class="flex items-center justify-between gap-4 border-t border-zinc-200 bg-white/80 px-5 py-3 backdrop-blur dark:border-zinc-800 dark:bg-zinc-900/80"
+  class="flex items-center justify-between gap-4 border-t border-ink-200 bg-white/80 px-5 py-3 backdrop-blur dark:border-ink-800 dark:bg-ink-900/80"
 >
-  <div class="min-w-0 text-[13px] text-zinc-500 dark:text-zinc-400">
-    <span class="font-medium text-zinc-700 dark:text-zinc-200">
+  <div class="min-w-0 text-[13px] text-ink-500 dark:text-ink-400">
+    <span class="font-medium text-ink-700 dark:text-ink-200">
       {books.books.length} {books.books.length === 1 ? "book" : "books"}
     </span>
     {#if books.selectedFiles.length > 0}
@@ -144,13 +144,13 @@
   {#if jobs.active}
     <div class="flex flex-1 items-center justify-end gap-3">
       <div class="flex min-w-0 flex-1 items-center gap-3">
-        <div class="h-1.5 w-full max-w-56 overflow-hidden rounded-full bg-zinc-200 dark:bg-zinc-700">
+        <div class="h-1.5 w-full max-w-56 overflow-hidden rounded-full bg-ink-200 dark:bg-ink-700">
           <div
-            class="h-full rounded-full bg-indigo-500 transition-[width] duration-300"
+            class="h-full rounded-full bg-teal-500 dark:bg-teal-400 dark:shadow-glow-sm transition-[width] duration-300"
             style="width: {jobs.total > 0 ? (jobs.done / jobs.total) * 100 : 0}%"
           ></div>
         </div>
-        <span class="shrink-0 text-[13px] tabular-nums text-zinc-600 dark:text-zinc-300">
+        <span class="shrink-0 text-[13px] tabular-nums text-ink-600 dark:text-ink-300">
           {jobs.done} of {jobs.total}
         </span>
       </div>
@@ -175,7 +175,7 @@
             {planError}
           </span>
         {:else if notice}
-          <span class="max-w-80 text-right text-[10px] leading-snug text-zinc-400 dark:text-zinc-500">
+          <span class="max-w-80 text-right text-[10px] leading-snug text-ink-400 dark:text-ink-500">
             {notice}
           </span>
         {/if}
@@ -191,7 +191,7 @@
             {planError}
           </span>
         {:else if editHint}
-          <span class="text-[10px] leading-none text-zinc-400 dark:text-zinc-500">{editHint}</span>
+          <span class="text-[10px] leading-none text-ink-400 dark:text-ink-500">{editHint}</span>
         {/if}
       </div>
     </div>

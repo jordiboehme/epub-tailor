@@ -82,7 +82,7 @@
   <button
     type="button"
     onclick={onback}
-    class="mb-2 inline-flex items-center gap-1 self-start text-[12px] font-medium text-zinc-500 hover:text-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-200"
+    class="mb-2 inline-flex items-center gap-1 self-start text-[12px] font-medium text-ink-500 hover:text-ink-700 dark:text-ink-400 dark:hover:text-ink-200"
   >
     <svg class="h-3.5 w-3.5" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5">
       <path d="M12 5l-5 5 5 5" stroke-linecap="round" stroke-linejoin="round" />
@@ -90,40 +90,40 @@
     Back to results
   </button>
 
-  <p class="mb-2 text-[12px] text-zinc-500 dark:text-zinc-400">
+  <p class="mb-2 text-[12px] text-ink-500 dark:text-ink-400">
     Choose what to keep. Fields your book is missing are ticked already.
   </p>
 
   <div class="flex max-h-[42vh] flex-col gap-1 overflow-y-auto pr-1">
     {#each rows as row (row.key)}
       <label
-        class="flex cursor-pointer items-start gap-2.5 rounded-lg px-2 py-1.5 hover:bg-zinc-50 dark:hover:bg-zinc-800/60"
+        class="flex cursor-pointer items-start gap-2.5 rounded-lg px-2 py-1.5 hover:bg-ink-50 dark:hover:bg-ink-800/60"
       >
         <input
           type="checkbox"
           bind:checked={checked[row.key]}
-          class="mt-0.5 h-4 w-4 shrink-0 accent-indigo-600"
+          class="mt-0.5 h-4 w-4 shrink-0 accent-teal-600"
         />
         <span class="min-w-0 flex-1">
-          <span class="block text-[11px] font-medium text-zinc-500 dark:text-zinc-400">{row.label}</span>
-          <span class="block truncate text-[13px] text-zinc-800 dark:text-zinc-100">{row.value}</span>
+          <span class="block text-[11px] font-medium text-ink-500 dark:text-ink-400">{row.label}</span>
+          <span class="block truncate text-[13px] text-ink-800 dark:text-ink-100">{row.value}</span>
         </span>
       </label>
     {/each}
 
     {#if candidate.cover_url}
       <label
-        class="flex cursor-pointer items-center gap-2.5 rounded-lg px-2 py-1.5 hover:bg-zinc-50 dark:hover:bg-zinc-800/60"
+        class="flex cursor-pointer items-center gap-2.5 rounded-lg px-2 py-1.5 hover:bg-ink-50 dark:hover:bg-ink-800/60"
       >
-        <input type="checkbox" bind:checked={includeCover} class="h-4 w-4 shrink-0 accent-indigo-600" />
+        <input type="checkbox" bind:checked={includeCover} class="h-4 w-4 shrink-0 accent-teal-600" />
         <img
           src={candidate.cover_url}
           alt=""
           class="h-12 w-8 shrink-0 rounded object-cover"
         />
         <span class="min-w-0 flex-1">
-          <span class="block text-[11px] font-medium text-zinc-500 dark:text-zinc-400">Cover</span>
-          <span class="block text-[11px] text-zinc-500 dark:text-zinc-400">Not CC0 - embed only if you may.</span>
+          <span class="block text-[11px] font-medium text-ink-500 dark:text-ink-400">Cover</span>
+          <span class="block text-[11px] text-ink-500 dark:text-ink-400">Not CC0 - embed only if you may.</span>
         </span>
       </label>
     {/if}

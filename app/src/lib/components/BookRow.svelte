@@ -90,12 +90,12 @@
 
 {#snippet cell(text: string, isEdited: boolean, isCleared: boolean)}
   {#if isCleared}
-    <span class="truncate text-[12px] italic text-indigo-500/70 dark:text-indigo-300/60" title="will be removed">-</span>
+    <span class="truncate text-[12px] italic text-teal-500/70 dark:text-teal-300/60" title="will be removed">-</span>
   {:else}
     <span
       class="truncate text-[12px] {isEdited
-        ? 'font-medium text-indigo-600 dark:text-indigo-300'
-        : 'text-zinc-600 dark:text-zinc-400'}"
+        ? 'font-medium text-teal-700 dark:text-teal-300'
+        : 'text-ink-600 dark:text-ink-400'}"
       title={text}
     >
       {text}
@@ -109,19 +109,19 @@
   aria-pressed={selected}
   onclick={onClick}
   onkeydown={onKey}
-  class="group relative cursor-default text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-indigo-500 {selected
-    ? 'bg-indigo-50 ring-2 ring-inset ring-indigo-500/60 dark:bg-indigo-500/10'
+  class="group relative cursor-default text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-teal-500 dark:focus-visible:ring-teal-400 {selected
+    ? 'bg-teal-50 ring-2 ring-inset ring-teal-500/60 dark:bg-teal-500/10 dark:ring-teal-400/50 dark:shadow-glow-inset'
     : unreadable
       ? 'bg-rose-50/70 ring-1 ring-inset ring-rose-200 hover:bg-rose-50 dark:bg-rose-950/20 dark:ring-rose-500/30 dark:hover:bg-rose-950/40'
       : running
-        ? 'bg-indigo-50/60 dark:bg-indigo-500/5'
-        : 'hover:bg-white dark:hover:bg-zinc-900'}"
+        ? 'bg-teal-50/60 dark:bg-teal-500/5'
+        : 'hover:bg-white dark:hover:bg-ink-900'}"
 >
   <div class="relative px-4 py-2">
     <div class="book-list-grid">
       <!-- Cover thumbnail -->
       <div
-        class="relative aspect-[2/3] h-12 w-8 shrink-0 overflow-hidden rounded bg-zinc-100 dark:bg-zinc-800"
+        class="relative aspect-[2/3] h-12 w-8 shrink-0 overflow-hidden rounded bg-ink-100 dark:bg-ink-800"
       >
         {#if hasCover}
           <img
@@ -146,7 +146,7 @@
           </div>
         {:else}
           <div class="flex h-full w-full items-center justify-center">
-            <span class="text-[11px] font-semibold tracking-wide text-zinc-400 dark:text-zinc-500">
+            <span class="text-[11px] font-semibold tracking-wide text-ink-400 dark:text-ink-500">
               {initials || "?"}
             </span>
           </div>
@@ -154,8 +154,8 @@
 
         <!-- Running veil, scaled to the thumbnail -->
         {#if running}
-          <div class="absolute inset-0 flex items-center justify-center bg-zinc-950/50 backdrop-blur-[1px]">
-            <svg class="h-4 w-4 animate-spin text-white" viewBox="0 0 24 24" fill="none">
+          <div class="absolute inset-0 flex items-center justify-center bg-ink-950/50 backdrop-blur-[1px]">
+            <svg class="h-4 w-4 animate-spin text-white dark:text-teal-300 dark:drop-shadow-glow" viewBox="0 0 24 24" fill="none">
               <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3" />
               <path class="opacity-90" d="M12 2a10 10 0 019 5.5" stroke="currentColor" stroke-width="3" stroke-linecap="round" />
             </svg>
@@ -167,8 +167,8 @@
       <div class="flex min-w-0 items-center gap-1.5">
         <p
           class="truncate text-[13px] font-medium {titleEdited
-            ? 'text-indigo-600 dark:text-indigo-300'
-            : 'text-zinc-800 dark:text-zinc-100'}"
+            ? 'text-teal-700 dark:text-teal-300'
+            : 'text-ink-800 dark:text-ink-100'}"
           title={title}
         >
           {title}
@@ -211,7 +211,7 @@
                 e.stopPropagation();
                 books.remove([book.id]);
               }}
-              class="rounded-md p-1 text-zinc-500 transition-colors hover:bg-rose-100 hover:text-rose-600 dark:text-zinc-400 dark:hover:bg-rose-500/20 dark:hover:text-rose-300"
+              class="rounded-md p-1 text-ink-500 transition-colors hover:bg-rose-100 hover:text-rose-600 dark:text-ink-400 dark:hover:bg-rose-500/20 dark:hover:text-rose-300"
             >
               <svg class="h-3.5 w-3.5" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M6 6l8 8M14 6l-8 8" stroke-linecap="round" />
@@ -230,11 +230,11 @@
 
     <!-- Busy along the whole row: the shimmer a running card runs under its cover. -->
     {#if running}
-      <div class="absolute inset-x-0 bottom-0 h-0.5 overflow-hidden bg-indigo-500/15">
-        <div class="h-full w-1/3 animate-[shimmer_1.1s_ease-in-out_infinite] bg-indigo-500"></div>
+      <div class="absolute inset-x-0 bottom-0 h-0.5 overflow-hidden bg-teal-500/15">
+        <div class="h-full w-1/3 animate-[shimmer_1.1s_ease-in-out_infinite] bg-teal-500 dark:bg-teal-400 dark:shadow-glow-sm"></div>
       </div>
     {:else if original.ingest === "pending"}
-      <div class="absolute inset-x-0 bottom-0 h-0.5 animate-pulse bg-indigo-300/70"></div>
+      <div class="absolute inset-x-0 bottom-0 h-0.5 animate-pulse bg-teal-300/70"></div>
     {/if}
   </div>
 </div>

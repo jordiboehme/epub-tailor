@@ -21,17 +21,17 @@
     candidate.score >= 0.8
       ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300"
       : candidate.score >= 0.5
-        ? "bg-indigo-100 text-indigo-700 dark:bg-indigo-500/15 dark:text-indigo-300"
-        : "bg-zinc-200 text-zinc-600 dark:bg-zinc-700 dark:text-zinc-300",
+        ? "bg-teal-100 text-teal-800 dark:bg-teal-500/15 dark:text-teal-300"
+        : "bg-ink-200 text-ink-600 dark:bg-ink-700 dark:text-ink-300",
   );
 </script>
 
 <button
   type="button"
   onclick={onselect}
-  class="flex w-full items-start gap-3 rounded-xl border border-zinc-200 bg-white p-2.5 text-left transition-colors hover:border-indigo-400 hover:bg-indigo-50/40 dark:border-zinc-800 dark:bg-zinc-900 dark:hover:border-indigo-500/60 dark:hover:bg-indigo-500/5"
+  class="flex w-full items-start gap-3 rounded-xl border border-ink-200 bg-white p-2.5 text-left transition-colors hover:border-teal-400 hover:bg-teal-50/40 dark:border-ink-800 dark:bg-ink-900 dark:hover:border-teal-500/60 dark:hover:bg-teal-500/5"
 >
-  <div class="h-16 w-11 shrink-0 overflow-hidden rounded-md bg-zinc-100 dark:bg-zinc-800">
+  <div class="h-16 w-11 shrink-0 overflow-hidden rounded-md bg-ink-100 dark:bg-ink-800">
     {#if candidate.cover_url && !imgError}
       <img
         src={candidate.cover_url}
@@ -40,21 +40,21 @@
         class="h-full w-full object-cover"
       />
     {:else}
-      <div class="flex h-full w-full items-center justify-center text-[9px] text-zinc-400">
+      <div class="flex h-full w-full items-center justify-center text-[9px] text-ink-400">
         no cover
       </div>
     {/if}
   </div>
 
   <div class="min-w-0 flex-1">
-    <p class="truncate text-[13px] font-medium text-zinc-800 dark:text-zinc-100">
+    <p class="truncate text-[13px] font-medium text-ink-800 dark:text-ink-100">
       {meta.title ?? "Untitled"}
     </p>
     {#if authors}
-      <p class="truncate text-[12px] text-zinc-600 dark:text-zinc-300">{authors}</p>
+      <p class="truncate text-[12px] text-ink-600 dark:text-ink-300">{authors}</p>
     {/if}
     {#if line}
-      <p class="truncate text-[11px] text-zinc-500 dark:text-zinc-400">{line}</p>
+      <p class="truncate text-[11px] text-ink-500 dark:text-ink-400">{line}</p>
     {/if}
     <span class="mt-1 inline-block rounded px-1.5 py-0.5 text-[10px] font-medium {strengthTone}">
       {strength}

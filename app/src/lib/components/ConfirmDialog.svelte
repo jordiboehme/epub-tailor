@@ -32,7 +32,7 @@
   <div
     role="presentation"
     transition:fade={{ duration: 120 }}
-    class="absolute inset-0 bg-zinc-950/45 backdrop-blur-[2px]"
+    class="absolute inset-0 bg-ink-950/45 backdrop-blur-[2px]"
     onclick={onCancel}
   ></div>
 
@@ -41,10 +41,10 @@
     aria-modal="true"
     aria-label={title}
     transition:scale={{ start: 0.96, duration: 140 }}
-    class="relative w-full max-w-sm rounded-2xl border border-zinc-200 bg-white p-5 shadow-xl dark:border-zinc-800 dark:bg-zinc-900"
+    class="relative w-full max-w-sm rounded-2xl border border-ink-200 bg-white p-5 shadow-xl dark:border-ink-800 dark:bg-ink-900"
   >
-    <h2 class="text-base font-semibold text-zinc-900 dark:text-zinc-100">{title}</h2>
-    <div class="mt-2 text-[13px] leading-relaxed text-zinc-600 dark:text-zinc-300">
+    <h2 class="text-base font-semibold text-ink-900 dark:text-ink-100">{title}</h2>
+    <div class="mt-2 text-[13px] leading-relaxed text-ink-600 dark:text-ink-300">
       {@render children()}
     </div>
     <div class="mt-5 flex justify-end gap-2">

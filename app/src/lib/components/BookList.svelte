@@ -21,12 +21,12 @@
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
   onclick={onBackgroundClick}
-  class="flex min-h-full flex-col divide-y divide-zinc-200 dark:divide-zinc-800"
+  class="flex min-h-full flex-col divide-y divide-ink-200 dark:divide-ink-800"
 >
   <!-- The header names the row grid's columns; the two blank cells sit over
        the thumbnails and the status/actions area, which explain themselves. -->
   <div
-    class="book-list-grid sticky top-0 z-10 border-b border-zinc-200 bg-zinc-50/95 px-4 py-1.5 text-[10px] font-medium uppercase tracking-wider text-zinc-400 backdrop-blur dark:border-zinc-800 dark:bg-zinc-950/90 dark:text-zinc-500"
+    class="book-list-grid sticky top-0 z-10 border-b border-ink-200 bg-ink-50/95 px-4 py-1.5 text-[10px] font-medium uppercase tracking-wider text-ink-400 backdrop-blur dark:border-ink-800 dark:bg-ink-950/90 dark:text-ink-500"
   >
     <span></span>
     <span>Title</span>

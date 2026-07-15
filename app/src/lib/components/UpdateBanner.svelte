@@ -90,7 +90,7 @@
 {#if phase !== "idle"}
   <div
     transition:slide={{ duration: 140 }}
-    class="flex shrink-0 items-center gap-3 border-b border-indigo-200 bg-indigo-50 px-4 py-2 text-[12px] leading-snug text-indigo-900 dark:border-indigo-500/30 dark:bg-indigo-500/10 dark:text-indigo-100"
+    class="flex shrink-0 items-center gap-3 border-b border-teal-200 bg-teal-50 px-4 py-2 text-[12px] leading-snug text-teal-900 dark:border-teal-500/30 dark:bg-teal-500/10 dark:text-teal-100"
   >
     {#if phase === "offered"}
       <span class="min-w-0 flex-1">
@@ -104,14 +104,14 @@
       </span>
       {#if percent !== null}
         <div
-          class="h-1 w-24 shrink-0 overflow-hidden rounded-full bg-indigo-200 dark:bg-indigo-500/25"
+          class="h-1 w-24 shrink-0 overflow-hidden rounded-full bg-teal-200 dark:bg-teal-500/25"
           role="progressbar"
           aria-label="Downloading the update"
           aria-valuenow={percent}
           aria-valuemin={0}
           aria-valuemax={100}
         >
-          <div class="h-full bg-indigo-600 transition-all dark:bg-indigo-400" style="width: {percent}%"></div>
+          <div class="h-full bg-teal-600 transition-all dark:bg-teal-400 dark:shadow-glow-sm" style="width: {percent}%"></div>
         </div>
       {/if}
     {:else if phase === "installed"}

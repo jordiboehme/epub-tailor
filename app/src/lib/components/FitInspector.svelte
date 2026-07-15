@@ -36,44 +36,44 @@
 </script>
 
 <div class="flex flex-col text-sm">
-  <section class="border-b border-zinc-200 px-4 py-4 dark:border-zinc-800">
-    <h3 class="mb-2 text-[11px] font-semibold uppercase tracking-wide text-zinc-400">Profile</h3>
+  <section class="border-b border-ink-200 px-4 py-4 dark:border-ink-800">
+    <h3 class="mb-2 text-[11px] font-semibold uppercase tracking-wide text-ink-400">Profile</h3>
     <ProfilePicker />
   </section>
 
-  <section class="border-b border-zinc-200 px-4 py-4 dark:border-zinc-800">
-    <h3 class="mb-2 text-[11px] font-semibold uppercase tracking-wide text-zinc-400">Destination</h3>
+  <section class="border-b border-ink-200 px-4 py-4 dark:border-ink-800">
+    <h3 class="mb-2 text-[11px] font-semibold uppercase tracking-wide text-ink-400">Destination</h3>
     <OutputPicker />
   </section>
 
-  <section class="border-b border-zinc-200 px-4 py-4 dark:border-zinc-800">
-    <h3 class="mb-2 text-[11px] font-semibold uppercase tracking-wide text-zinc-400">Naming</h3>
+  <section class="border-b border-ink-200 px-4 py-4 dark:border-ink-800">
+    <h3 class="mb-2 text-[11px] font-semibold uppercase tracking-wide text-ink-400">Naming</h3>
     <TemplateField />
   </section>
 
   {#if hasMarkdown}
-    <section transition:slide={{ duration: 150 }} class="border-b border-zinc-200 px-4 py-4 dark:border-zinc-800">
-      <h3 class="mb-2 text-[11px] font-semibold uppercase tracking-wide text-zinc-400">Markdown</h3>
-      <span class="mb-1 block text-[12px] text-zinc-500 dark:text-zinc-400">Split chapters at</span>
+    <section transition:slide={{ duration: 150 }} class="border-b border-ink-200 px-4 py-4 dark:border-ink-800">
+      <h3 class="mb-2 text-[11px] font-semibold uppercase tracking-wide text-ink-400">Markdown</h3>
+      <span class="mb-1 block text-[12px] text-ink-500 dark:text-ink-400">Split chapters at</span>
       <Select
         value={String(settings.mdSplitLevel)}
         options={splitOptions}
         ariaLabel="Split chapters at"
         onchange={(v) => (settings.mdSplitLevel = Number(v))}
       />
-      <p class="mt-1.5 text-[11px] leading-snug text-zinc-500 dark:text-zinc-400">
+      <p class="mt-1.5 text-[11px] leading-snug text-ink-500 dark:text-ink-400">
         Every heading at this level starts a new chapter.
       </p>
     </section>
   {/if}
 
   <section class="px-4 py-4">
-    <h3 class="mb-2 text-[11px] font-semibold uppercase tracking-wide text-zinc-400">Options</h3>
+    <h3 class="mb-2 text-[11px] font-semibold uppercase tracking-wide text-ink-400">Options</h3>
 
     <label class="flex cursor-pointer items-center justify-between gap-3">
       <span>
-        <span class="block text-[13px] font-medium text-zinc-700 dark:text-zinc-200">Preview only</span>
-        <span class="block text-[11px] text-zinc-500 dark:text-zinc-400">See what would change, write nothing.</span>
+        <span class="block text-[13px] font-medium text-ink-700 dark:text-ink-200">Preview only</span>
+        <span class="block text-[11px] text-ink-500 dark:text-ink-400">See what would change, write nothing.</span>
       </span>
       <Toggle checked={settings.dryRun} onchange={(v) => (settings.dryRun = v)} label="Preview only" />
     </label>
@@ -82,7 +82,7 @@
     <button
       type="button"
       onclick={() => (advancedOpen = !advancedOpen)}
-      class="mt-3 flex items-center gap-1 text-[12px] font-medium text-zinc-500 hover:text-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-200"
+      class="mt-3 flex items-center gap-1 text-[12px] font-medium text-ink-500 hover:text-ink-700 dark:text-ink-400 dark:hover:text-ink-200"
     >
       <svg
         class="h-3.5 w-3.5 transition-transform {advancedOpen ? 'rotate-90' : ''}"
@@ -99,7 +99,7 @@
     {#if advancedOpen}
       <div transition:slide={{ duration: 150 }} class="mt-3 flex flex-col gap-3">
         <div>
-          <span class="mb-1 block text-[12px] text-zinc-500 dark:text-zinc-400">Image quality</span>
+          <span class="mb-1 block text-[12px] text-ink-500 dark:text-ink-400">Image quality</span>
           <Select
             value={settings.quality ?? ""}
             options={qualityOptions}
@@ -108,7 +108,7 @@
           />
         </div>
         <div>
-          <span class="mb-1 block text-[12px] text-zinc-500 dark:text-zinc-400">Tables</span>
+          <span class="mb-1 block text-[12px] text-ink-500 dark:text-ink-400">Tables</span>
           <Select
             value={settings.tables ?? ""}
             options={tablesOptions}

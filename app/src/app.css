@@ -1,5 +1,30 @@
 @import "tailwindcss";
 
+@theme {
+  /* "ink": a blue-green-tinted grey ramp replacing zinc 1:1, from the app
+     icon's palette. Lightness is matched to zinc step-for-step so shade
+     choices keep their contrast. Light steps whisper e-ink paper; dark steps
+     land on the icon's ink (800~#213039, 900~#142029, 950~#0a1118). */
+  --color-ink-50: oklch(0.985 0.003 155);
+  --color-ink-100: oklch(0.967 0.005 160);
+  --color-ink-200: oklch(0.92 0.008 165);
+  --color-ink-300: oklch(0.871 0.01 175);
+  --color-ink-400: oklch(0.705 0.016 200);
+  --color-ink-500: oklch(0.552 0.02 215);
+  --color-ink-600: oklch(0.442 0.022 225);
+  --color-ink-700: oklch(0.375 0.024 232);
+  --color-ink-800: oklch(0.3 0.026 238);
+  --color-ink-900: oklch(0.237 0.024 240);
+  --color-ink-950: oklch(0.175 0.018 245);
+
+  /* The one neon recipe (teal-400 light). Dark-mode only, and only as
+     signal: selection, focus, progress, running. */
+  --shadow-glow: 0 0 14px 0 rgb(45 212 191 / 0.3);
+  --shadow-glow-sm: 0 0 8px 0 rgb(45 212 191 / 0.55);
+  --shadow-glow-inset: inset 0 0 16px 0 rgb(45 212 191 / 0.1);
+  --drop-shadow-glow: 0 0 6px rgb(45 212 191 / 0.55);
+}
+
 /* Light and dark are both honored, keyed off the OS via prefers-color-scheme.
    `color-scheme` lets native chrome (scrollbars, the select popup) follow. */
 :root {

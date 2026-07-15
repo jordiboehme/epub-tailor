@@ -23,7 +23,7 @@
   } = $props();
 
   const base =
-    "inline-flex items-center justify-center gap-1.5 rounded-lg font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-1 focus-visible:ring-offset-zinc-50 dark:focus-visible:ring-offset-zinc-950 disabled:cursor-not-allowed disabled:opacity-50";
+    "inline-flex items-center justify-center gap-1.5 rounded-lg font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 dark:focus-visible:ring-teal-400 focus-visible:ring-offset-1 focus-visible:ring-offset-ink-50 dark:focus-visible:ring-offset-ink-950 disabled:cursor-not-allowed disabled:opacity-50";
 
   const sizes: Record<Size, string> = {
     sm: "px-2.5 py-1 text-[13px]",
@@ -31,11 +31,12 @@
   };
 
   const variants: Record<Variant, string> = {
-    primary: "bg-indigo-600 text-white hover:bg-indigo-500 active:bg-indigo-700 shadow-sm",
+    primary:
+      "bg-teal-700 text-white hover:bg-teal-600 active:bg-teal-800 shadow-sm dark:bg-teal-400 dark:text-teal-950 dark:hover:bg-teal-300 dark:active:bg-teal-500 dark:shadow-glow-sm",
     secondary:
-      "border border-zinc-300 bg-white text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100 dark:hover:bg-zinc-700",
+      "border border-ink-300 bg-white text-ink-700 hover:bg-ink-50 dark:border-ink-700 dark:bg-ink-800 dark:text-ink-100 dark:hover:bg-ink-700",
     ghost:
-      "text-zinc-600 hover:bg-zinc-200/70 dark:text-zinc-300 dark:hover:bg-zinc-800",
+      "text-ink-600 hover:bg-ink-200/70 dark:text-ink-300 dark:hover:bg-ink-800",
     danger: "bg-rose-600 text-white hover:bg-rose-500 active:bg-rose-700 shadow-sm",
   };
 </script>

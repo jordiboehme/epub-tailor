@@ -95,27 +95,27 @@
   aria-pressed={selected}
   onclick={onClick}
   onkeydown={onKey}
-  class="group/file relative cursor-default rounded-md px-1 py-0.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-indigo-500 {selected
-    ? 'bg-indigo-100/70 ring-1 ring-inset ring-indigo-400/50 dark:bg-indigo-500/15 dark:ring-indigo-400/40'
-    : 'hover:bg-zinc-100 dark:hover:bg-zinc-800/60'}"
+  class="group/file relative cursor-default rounded-md px-1 py-0.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-teal-500 dark:focus-visible:ring-teal-400 {selected
+    ? 'bg-teal-100/70 ring-1 ring-inset ring-teal-400/50 dark:bg-teal-500/15 dark:ring-teal-400/40'
+    : 'hover:bg-ink-100 dark:hover:bg-ink-800/60'}"
 >
   <div class="flex min-w-0 items-center gap-1.5">
     <span
       class="shrink-0 rounded px-1 py-0.5 text-[10px] font-medium {file.role === 'original'
-        ? 'bg-zinc-200 text-zinc-600 dark:bg-zinc-700 dark:text-zinc-300'
-        : 'bg-indigo-100 text-indigo-700 dark:bg-indigo-500/15 dark:text-indigo-300'}"
+        ? 'bg-ink-200 text-ink-600 dark:bg-ink-700 dark:text-ink-300'
+        : 'bg-teal-100 text-teal-800 dark:bg-teal-500/15 dark:text-teal-300'}"
     >
       {fileBadge(file)}
     </span>
 
-    <span class="min-w-0 truncate text-[11px] text-zinc-600 dark:text-zinc-300" title={file.path}>
+    <span class="min-w-0 truncate text-[11px] text-ink-600 dark:text-ink-300" title={file.path}>
       {file.fileName}
     </span>
 
     {#if staged}
       <span
         title="Has staged metadata edits, written on the next save"
-        class="inline-flex shrink-0 items-center gap-0.5 rounded bg-indigo-600/85 px-1 py-0.5 text-[10px] font-medium text-white"
+        class="inline-flex shrink-0 items-center gap-0.5 rounded bg-teal-700/85 px-1 py-0.5 text-[10px] font-medium text-white"
       >
         <svg class="h-2.5 w-2.5" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M13.5 4.5l2 2L8 14l-3 1 1-3 7.5-7.5z" stroke-linecap="round" stroke-linejoin="round" />
@@ -134,7 +134,7 @@
               e.stopPropagation();
               confirmCleanup = true;
             }}
-            class="shrink-0 rounded px-1 py-0.5 text-[10px] font-medium ring-1 ring-inset ring-amber-400/50 transition-shadow hover:ring-amber-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 {TONE_CLASS[c.tone]}"
+            class="shrink-0 rounded px-1 py-0.5 text-[10px] font-medium ring-1 ring-inset ring-amber-400/50 transition-shadow hover:ring-amber-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 dark:focus-visible:ring-teal-400 {TONE_CLASS[c.tone]}"
           >
             {c.label}
           </button>
@@ -144,7 +144,7 @@
       {/each}
 
       {#if running}
-        <svg class="h-3 w-3 animate-spin text-indigo-500" viewBox="0 0 24 24" fill="none">
+        <svg class="h-3 w-3 animate-spin text-teal-500 dark:text-teal-400" viewBox="0 0 24 24" fill="none">
           <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3" />
           <path class="opacity-90" d="M12 2a10 10 0 019 5.5" stroke="currentColor" stroke-width="3" stroke-linecap="round" />
         </svg>
@@ -159,7 +159,7 @@
             e.stopPropagation();
             showDetails = !showDetails;
           }}
-          class="rounded px-1 py-0.5 text-[10px] font-medium text-zinc-500 hover:text-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-200"
+          class="rounded px-1 py-0.5 text-[10px] font-medium text-ink-500 hover:text-ink-700 dark:text-ink-400 dark:hover:text-ink-200"
         >
           {showDetails ? "Less" : "Details"}
         </button>
@@ -173,7 +173,7 @@
             type="button"
             title="Show this file in the file manager"
             onclick={reveal}
-            class="rounded p-0.5 text-zinc-500 transition-colors hover:bg-indigo-100 hover:text-indigo-700 dark:text-zinc-400 dark:hover:bg-indigo-500/20 dark:hover:text-indigo-300"
+            class="rounded p-0.5 text-ink-500 transition-colors hover:bg-teal-100 hover:text-teal-800 dark:text-ink-400 dark:hover:bg-teal-500/20 dark:hover:text-teal-300"
           >
             <svg class="h-3 w-3" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7">
               <path d="M2.5 6.5A1.5 1.5 0 014 5h3.2l1.4 1.8H16A1.5 1.5 0 0117.5 8.3v6.2A1.5 1.5 0 0116 16H4a1.5 1.5 0 01-1.5-1.5v-8z" stroke-linejoin="round" />
@@ -184,7 +184,7 @@
               type="button"
               title="Move this copy to the Trash"
               onclick={trash}
-              class="rounded p-0.5 text-zinc-500 transition-colors hover:bg-rose-100 hover:text-rose-600 dark:text-zinc-400 dark:hover:bg-rose-500/20 dark:hover:text-rose-300"
+              class="rounded p-0.5 text-ink-500 transition-colors hover:bg-rose-100 hover:text-rose-600 dark:text-ink-400 dark:hover:bg-rose-500/20 dark:hover:text-rose-300"
             >
               <svg class="h-3 w-3" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7">
                 <path d="M4 6h12M8.5 6V4.5A1 1 0 019.5 3.5h1a1 1 0 011 1V6M6 6l.7 9.2a1.5 1.5 0 001.5 1.3h3.6a1.5 1.5 0 001.5-1.3L14 6" stroke-linecap="round" stroke-linejoin="round" />
@@ -197,7 +197,7 @@
   </div>
 
   {#if file.ingest === "pending"}
-    <div class="absolute inset-x-0 bottom-0 h-0.5 animate-pulse bg-indigo-300/70"></div>
+    <div class="absolute inset-x-0 bottom-0 h-0.5 animate-pulse bg-teal-300/70"></div>
   {/if}
 
   {#if failure && !showDetails}
