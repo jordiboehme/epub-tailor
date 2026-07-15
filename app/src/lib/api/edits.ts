@@ -31,8 +31,18 @@ export interface StagedEdits {
   coverPath?: string;
 }
 
-/** The fields a staged `null` may clear - the CLI's `--clear` vocabulary. */
-export const CLEARABLE_FIELDS: ReadonlySet<keyof StagedEdits> = new Set<keyof StagedEdits>([
+/** The keys a staged `null` may clear - the CLI's `--clear` vocabulary. */
+export type ClearableField =
+  | "authors"
+  | "series"
+  | "seriesIndex"
+  | "publisher"
+  | "description"
+  | "date"
+  | "subjects";
+
+/** The fields a staged `null` may clear, as a runtime set for the editor. */
+export const CLEARABLE_FIELDS: ReadonlySet<keyof StagedEdits> = new Set<ClearableField>([
   "authors",
   "series",
   "seriesIndex",

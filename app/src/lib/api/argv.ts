@@ -3,7 +3,7 @@
 // every rule here is unit-tested without a window in sight. Flag order is
 // fixed so the tests can pin it and a reader can predict it.
 
-import type { StagedEdits } from "./edits";
+import type { ClearableField, StagedEdits } from "./edits";
 import { hasAnyEdit } from "./edits";
 
 export interface RunOptions {
@@ -28,8 +28,12 @@ export interface RunOptions {
 /** The CLI's own `md --split-level` default, which we never spell out. */
 const DEFAULT_SPLIT_LEVEL = 1;
 
-/** The clearable fields and their `--clear` names, in emission order. */
-const CLEAR_NAMES: [keyof StagedEdits, string][] = [
+/**
+ * The clearable fields and their `--clear` names, in emission order. Typed
+ * against the clearable keys, so a protected field cannot creep in without
+ * the compiler objecting.
+ */
+const CLEAR_NAMES: [ClearableField, string][] = [
   ["authors", "authors"],
   ["series", "series"],
   ["seriesIndex", "series-index"],
