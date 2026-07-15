@@ -423,3 +423,38 @@ fn clearing_an_absent_field_is_a_quiet_no_op() {
     assert_eq!(book.metadata.publisher, None);
     assert!(book.metadata.series.is_none());
 }
+
+#[test]
+fn cleared_fields_leave_no_empty_elements_in_the_opf() {
+    // The reader filters empty strings on the way back in, so a regression
+    // emitting `<dc:publisher></dc:publisher>` would pass a read-back test
+    // unseen - this pins the raw OPF text instead.
+    let mut opts = ConvertOptions {
+        features: epub_tailor_core::profile::Features::repair_only(),
+        ..ConvertOptions::default()
+    };
+    opts.metadata_clears = vec![
+        ClearField::Publisher,
+        ClearField::Series,
+        ClearField::Subjects,
+        ClearField::Description,
+        ClearField::Date,
+    ];
+
+    let converted =
+        convert(Input::Epub(epub_with_rich_metadata()), &opts).expect("conversion succeeds");
+    let opf = opf_of(&converted.epub);
+    for gone in [
+        "<dc:publisher",
+        "<dc:subject",
+        "<dc:description",
+        "<dc:date",
+        "belongs-to-collection",
+    ] {
+        assert!(
+            !opf.contains(gone),
+            "a cleared field must leave no element behind, found {gone}"
+        );
+    }
+    assert!(opf.contains("<dc:title>The Rich Book</dc:title>"), "kept fields still written");
+}
