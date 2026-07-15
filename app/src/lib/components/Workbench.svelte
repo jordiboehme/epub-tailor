@@ -2,10 +2,9 @@
   import { books } from "../stores/books.svelte";
   import { jobs } from "../stores/jobs.svelte";
   import { settings } from "../stores/settings.svelte";
-  import type { AppMode, ViewMode } from "../stores/settings.svelte";
+  import type { AppMode } from "../stores/settings.svelte";
   import { isModalOpen, isTextField, shortcutFor } from "../api/keys";
   import BrowseButtons from "./BrowseButtons.svelte";
-  import BookGrid from "./BookGrid.svelte";
   import BookList from "./BookList.svelte";
   import Inspector from "./Inspector.svelte";
   import ActionBar from "./ActionBar.svelte";
@@ -57,23 +56,6 @@
 </script>
 
 <svelte:window onkeydown={onKeydown} />
-
-{#snippet galleryIcon()}
-  <svg class="h-4 w-4" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5">
-    <rect x="3" y="3" width="6" height="6" rx="1.2" />
-    <rect x="11" y="3" width="6" height="6" rx="1.2" />
-    <rect x="3" y="11" width="6" height="6" rx="1.2" />
-    <rect x="11" y="11" width="6" height="6" rx="1.2" />
-  </svg>
-{/snippet}
-
-{#snippet listIcon()}
-  <svg class="h-4 w-4" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5">
-    <rect x="3" y="4" width="3.5" height="3.5" rx="0.8" />
-    <rect x="3" y="12.5" width="3.5" height="3.5" rx="0.8" />
-    <path d="M9 5.75h8M9 14.25h8" stroke-linecap="round" />
-  </svg>
-{/snippet}
 
 {#snippet editIcon()}
   <svg class="h-4 w-4" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5">
@@ -150,25 +132,13 @@
         onchange={(value) => (settings.mode = value as AppMode)}
       />
       <div class="flex items-center justify-end gap-3">
-        <SegmentedControl
-          value={settings.viewMode}
-          options={[
-            { value: "grid", label: "Gallery", icon: galleryIcon },
-            { value: "list", label: "List", icon: listIcon },
-          ]}
-          onchange={(value) => (settings.viewMode = value as ViewMode)}
-        />
         <BrowseButtons size="sm" />
       </div>
     </header>
 
     <div class="flex min-h-0 flex-1">
       <main class="min-w-0 flex-1 overflow-y-auto">
-        {#if settings.viewMode === "list"}
-          <BookList />
-        {:else}
-          <BookGrid />
-        {/if}
+        <BookList />
       </main>
       <aside
         class="w-[300px] shrink-0 overflow-y-auto border-l border-ink-200 bg-white dark:border-ink-800 dark:bg-ink-900"

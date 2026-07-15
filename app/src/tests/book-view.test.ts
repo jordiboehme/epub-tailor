@@ -1,7 +1,6 @@
 // Tests for the shared per-book display logic (title/subtitle fallbacks,
-// initials, failure/finding shaping, status chips) that both the gallery
-// card and the upcoming list row consume. Follows the fixture style of
-// jobs.test.ts and templates.test.ts.
+// initials, failure/finding shaping, status chips) that the list row
+// consumes. Follows the fixture style of jobs.test.ts and templates.test.ts.
 
 import { describe, expect, it } from "vitest";
 import {

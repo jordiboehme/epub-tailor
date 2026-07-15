@@ -34,20 +34,6 @@ function clampInt(value: unknown, min: number, max: number, fallback: number): n
   return Math.min(max, Math.max(min, Math.round(value)));
 }
 
-/** How the workbench shows its books: the cover gallery, or the denser list. */
-export type ViewMode = "grid" | "list";
-
-const DEFAULT_VIEW_MODE: ViewMode = "list";
-
-/**
- * A persisted view mode, or the list when the file holds anything else -
- * same reasoning as the clamps above: settings.json is hand-editable, and a
- * `"View.LIST"` read back unchecked would render neither view.
- */
-function toViewMode(value: unknown): ViewMode {
-  return value === "grid" || value === "list" ? value : DEFAULT_VIEW_MODE;
-}
-
 /**
  * What the workbench is for right now: Edit (metadata, always written into
  * the original) or Fit (device conversion, always a copy). The mode decides
@@ -82,8 +68,6 @@ class SettingsStore {
   recursive = $state(true);
   /** How many conversions run at once. */
   parallelism = $state(DEFAULT_PARALLELISM);
-  /** Whether the books show as a cover gallery or as a list. */
-  viewMode = $state<ViewMode>(DEFAULT_VIEW_MODE);
   /** Whether the workbench is in Edit (in place) or Fit (copy) mode. */
   mode = $state<AppMode>(DEFAULT_MODE);
   /** Where the window was, and how big, when it was last moved or resized. */
@@ -120,7 +104,6 @@ class SettingsStore {
       MAX_PARALLELISM,
       DEFAULT_PARALLELISM,
     );
-    this.viewMode = toViewMode(await store.get("viewMode"));
     this.mode = toMode(await store.get("mode"));
     this.windowGeometry = (await store.get<WindowGeometry>("windowGeometry")) ?? null;
     this.#store = store;
@@ -139,7 +122,6 @@ class SettingsStore {
       $effect(() => void store.set("mdSplitLevel", this.mdSplitLevel));
       $effect(() => void store.set("recursive", this.recursive));
       $effect(() => void store.set("parallelism", this.parallelism));
-      $effect(() => void store.set("viewMode", this.viewMode));
       $effect(() => void store.set("mode", this.mode));
       $effect(() => void store.set("windowGeometry", $state.snapshot(this.windowGeometry)));
     });

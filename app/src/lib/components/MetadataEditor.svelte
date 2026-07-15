@@ -6,11 +6,13 @@
   // which saves staged edits into the selected files themselves.
 
   import { open } from "@tauri-apps/plugin-dialog";
+  import { fileTitle } from "../api/book-view";
   import { cacheCover, coverUrl } from "../api/covers";
   import { books } from "../stores/books.svelte";
   import type { BookFile } from "../stores/books.svelte";
   import { edits } from "../stores/edits.svelte";
   import { CLEARABLE_FIELDS } from "../api/edits";
+  import CoverLightbox from "./CoverLightbox.svelte";
   import MetadataField from "./MetadataField.svelte";
   import MetadataSearchDialog from "./MetadataSearchDialog.svelte";
   import Button from "./ui/Button.svelte";
@@ -23,6 +25,7 @@
   let searchOpen = $state(false);
   let coverError = $state(false);
   let coverFailed = $state<string | null>(null);
+  let lightboxOpen = $state(false);
 
   // Debounced live staging in single-book mode, one timer per field so fast
   // typing in one box never delays another. Each pending timer keeps its own
@@ -238,22 +241,29 @@
             <span class="text-[11px] font-medium text-ink-500 dark:text-ink-400">Cover</span>
           </label>
           <div class="flex items-start gap-2.5">
-            <div
-              class="h-20 w-14 shrink-0 overflow-hidden rounded-md border border-ink-200 bg-ink-100 dark:border-ink-700 dark:bg-ink-800"
-            >
-              {#if coverShown && !coverError}
+            {#if coverShown && !coverError}
+              <button
+                type="button"
+                title="View large"
+                onclick={() => (lightboxOpen = true)}
+                class="h-20 w-14 shrink-0 cursor-zoom-in overflow-hidden rounded-md border border-ink-200 bg-ink-100 transition-shadow hover:ring-2 hover:ring-teal-400/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 dark:border-ink-700 dark:bg-ink-800 dark:focus-visible:ring-teal-400"
+              >
                 <img
                   src={coverUrl(coverShown)}
                   alt="Cover"
                   onerror={() => (coverError = true)}
                   class="h-full w-full object-cover"
                 />
-              {:else}
+              </button>
+            {:else}
+              <div
+                class="h-20 w-14 shrink-0 overflow-hidden rounded-md border border-ink-200 bg-ink-100 dark:border-ink-700 dark:bg-ink-800"
+              >
                 <div class="flex h-full w-full items-center justify-center text-[10px] text-ink-400">
                   {coverError ? "no preview" : "none"}
                 </div>
-              {/if}
-            </div>
+              </div>
+            {/if}
             <div class="flex min-w-0 flex-col gap-1.5">
               <Button variant="secondary" size="sm" onclick={chooseCover}>Choose image...</Button>
             </div>
@@ -291,4 +301,12 @@
 
 {#if searchOpen && single}
   <MetadataSearchDialog file={single} onclose={() => (searchOpen = false)} />
+{/if}
+
+{#if lightboxOpen && single && coverShown}
+  <CoverLightbox
+    path={coverShown}
+    title={fileTitle(single, edits.get(single.id))}
+    onclose={() => (lightboxOpen = false)}
+  />
 {/if}

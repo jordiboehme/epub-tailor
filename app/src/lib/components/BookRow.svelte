@@ -121,7 +121,7 @@
     <div class="book-list-grid">
       <!-- Cover thumbnail -->
       <div
-        class="relative aspect-[2/3] h-12 w-8 shrink-0 overflow-hidden rounded bg-ink-100 dark:bg-ink-800"
+        class="relative aspect-[2/3] h-24 w-16 shrink-0 overflow-hidden rounded bg-ink-100 dark:bg-ink-800"
       >
         {#if hasCover}
           <img
@@ -133,7 +133,7 @@
         {:else if unreadable}
           <div class="flex h-full w-full items-center justify-center bg-rose-50 dark:bg-rose-950/40">
             <svg
-              class="h-4 w-4 text-rose-400 dark:text-rose-500"
+              class="h-6 w-6 text-rose-400 dark:text-rose-500"
               viewBox="0 0 24 24"
               fill="none"
               stroke="currentColor"
@@ -146,7 +146,7 @@
           </div>
         {:else}
           <div class="flex h-full w-full items-center justify-center">
-            <span class="text-[11px] font-semibold tracking-wide text-ink-400 dark:text-ink-500">
+            <span class="text-sm font-semibold tracking-wide text-ink-400 dark:text-ink-500">
               {initials || "?"}
             </span>
           </div>
@@ -155,7 +155,7 @@
         <!-- Running veil, scaled to the thumbnail -->
         {#if running}
           <div class="absolute inset-0 flex items-center justify-center bg-ink-950/50 backdrop-blur-[1px]">
-            <svg class="h-4 w-4 animate-spin text-white dark:text-teal-300 dark:drop-shadow-glow" viewBox="0 0 24 24" fill="none">
+            <svg class="h-6 w-6 animate-spin text-white dark:text-teal-300 dark:drop-shadow-glow" viewBox="0 0 24 24" fill="none">
               <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3" />
               <path class="opacity-90" d="M12 2a10 10 0 019 5.5" stroke="currentColor" stroke-width="3" stroke-linecap="round" />
             </svg>
@@ -224,7 +224,7 @@
 
     <!-- The book's files, always in view and individually selectable.
          Indented to the row's text column. -->
-    <div class="pl-[44px] pt-1">
+    <div class="pl-[76px] pt-1">
       <FileList {book} />
     </div>
 

@@ -75,7 +75,7 @@ body {
    the status cell takes what its chips and actions need. */
 .book-list-grid {
   display: grid;
-  grid-template-columns: 2rem minmax(0, 2fr) minmax(0, 1.3fr) minmax(0, 1fr) 3.5rem auto;
+  grid-template-columns: 4rem minmax(0, 2fr) minmax(0, 1.3fr) minmax(0, 1fr) 3.5rem auto;
   column-gap: 0.75rem;
   align-items: center;
 }

@@ -4,9 +4,9 @@
 //! they fall into three groups: expanding what was dropped or browsed in
 //! (`expand_inputs`), answering the filesystem questions the planner and the
 //! destination picker need answered (`paths_exist`, `list_removable_volumes`,
-//! `is_appimage`), and the cover cache (`ensure_covers_dir`, `cache_cover`) -
-//! the only place the app writes to disk itself, which is why the fs plugin is
-//! not installed at all.
+//! `is_appimage`), and the cover cache (`ensure_covers_dir`, `cache_cover`,
+//! `sniff_cover_extension`, `export_cover`) - the only place the app writes to
+//! disk itself, which is why the fs plugin is not installed at all.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -355,6 +355,56 @@ pub fn cache_cover(app: tauri::AppHandle, source: String) -> Result<String, Stri
     std::fs::copy(&source, &target)
         .map_err(|e| format!("cannot cache {}: {e}", source.display()))?;
     Ok(target.display().to_string())
+}
+
+/// The image extension a cached cover actually is, sniffed from its first
+/// bytes. Extracted covers are cached as `<hash>.img` no matter what the EPUB
+/// held, so the save dialog would otherwise suggest a filename no image viewer
+/// wants to claim. Falls back to the file's own extension, then to `jpg`.
+#[tauri::command]
+pub fn sniff_cover_extension(path: String) -> Result<String, String> {
+    let path = PathBuf::from(path);
+    let mut head = [0u8; 12];
+    let n = std::fs::File::open(&path)
+        .and_then(|mut f| std::io::Read::read(&mut f, &mut head))
+        .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+    let head = &head[..n];
+    let sniffed = if head.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        Some("jpg")
+    } else if head.starts_with(&[0x89, b'P', b'N', b'G']) {
+        Some("png")
+    } else if head.starts_with(b"GIF8") {
+        Some("gif")
+    } else if head.len() >= 12 && head.starts_with(b"RIFF") && &head[8..12] == b"WEBP" {
+        Some("webp")
+    } else {
+        None
+    };
+    if let Some(ext) = sniffed {
+        return Ok(ext.to_string());
+    }
+    let fallback = cover_extension(&path);
+    Ok(if fallback == "img" { "jpg".to_string() } else { fallback })
+}
+
+/// Copy a cached cover to a destination the user chose in a save dialog. The
+/// inverse of `cache_cover`, with the same narrow contract: the source must
+/// live inside the cover cache, so the frontend can never use this to copy
+/// arbitrary files around.
+#[tauri::command]
+pub fn export_cover(app: tauri::AppHandle, source: String, destination: String) -> Result<(), String> {
+    let source = PathBuf::from(source)
+        .canonicalize()
+        .map_err(|e| format!("cannot resolve source: {e}"))?;
+    let dir = covers_dir(&app)?
+        .canonicalize()
+        .map_err(|e| format!("cannot resolve cover cache: {e}"))?;
+    if !source.starts_with(&dir) {
+        return Err("source is not a cached cover".to_string());
+    }
+    std::fs::copy(&source, Path::new(&destination))
+        .map_err(|e| format!("cannot save to {destination}: {e}"))?;
+    Ok(())
 }
 
 /// The sibling path an in-place write's safety copy is staged at:

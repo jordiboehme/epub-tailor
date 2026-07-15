@@ -57,6 +57,8 @@ pub fn run() {
             commands::is_appimage,
             commands::ensure_covers_dir,
             commands::cache_cover,
+            commands::sniff_cover_extension,
+            commands::export_cover,
             commands::backup_to_trash,
             commands::trash_file,
             open_files::drain_pending_opens,
