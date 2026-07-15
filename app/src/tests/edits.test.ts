@@ -345,6 +345,17 @@ describe("edits store with clears", () => {
     expect(edits.get("a")).toEqual({ authors: null, subjects: null });
   });
 
+  it("a staged series clear subsumes a staged index value", () => {
+    edits.stage(["a"], { seriesIndex: "3" });
+    edits.stage(["a"], { series: null });
+    expect(edits.get("a")).toEqual({ series: null });
+  });
+
+  it("clearing both series and index collapses to the series clear", () => {
+    edits.stage(["a"], { series: null, seriesIndex: null });
+    expect(edits.get("a")).toEqual({ series: null });
+  });
+
   it("snapshotFor carries nulls through", () => {
     edits.stage(["a"], { series: null });
     expect(edits.snapshotFor(["a"])).toEqual({ a: { series: null } });

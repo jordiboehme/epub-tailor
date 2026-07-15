@@ -27,8 +27,13 @@ function prune(edits: StagedEdits): StagedEdits | undefined {
   else if (edits.authors && edits.authors.length > 0) next.authors = edits.authors;
   if (edits.series === null) next.series = null;
   else if (edits.series?.trim()) next.series = edits.series.trim();
-  if (edits.seriesIndex === null) next.seriesIndex = null;
-  else if (edits.seriesIndex?.trim()) next.seriesIndex = edits.seriesIndex.trim();
+  // A cleared series takes its index with it (the index nests under the
+  // series), so a staged index - value or clear - is subsumed by the clear.
+  // Same cascade as mergeEditsIntoMeta and the CLI's ClearField::Series.
+  if (edits.series !== null) {
+    if (edits.seriesIndex === null) next.seriesIndex = null;
+    else if (edits.seriesIndex?.trim()) next.seriesIndex = edits.seriesIndex.trim();
+  }
   if (edits.publisher === null) next.publisher = null;
   else if (edits.publisher?.trim()) next.publisher = edits.publisher.trim();
   if (edits.description === null) next.description = null;
