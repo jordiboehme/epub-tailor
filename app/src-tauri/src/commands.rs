@@ -384,7 +384,11 @@ pub fn sniff_cover_extension(path: String) -> Result<String, String> {
         return Ok(ext.to_string());
     }
     let fallback = cover_extension(&path);
-    Ok(if fallback == "img" { "jpg".to_string() } else { fallback })
+    Ok(if fallback == "img" {
+        "jpg".to_string()
+    } else {
+        fallback
+    })
 }
 
 /// Copy a cached cover to a destination the user chose in a save dialog. The
@@ -392,7 +396,11 @@ pub fn sniff_cover_extension(path: String) -> Result<String, String> {
 /// live inside the cover cache, so the frontend can never use this to copy
 /// arbitrary files around.
 #[tauri::command]
-pub fn export_cover(app: tauri::AppHandle, source: String, destination: String) -> Result<(), String> {
+pub fn export_cover(
+    app: tauri::AppHandle,
+    source: String,
+    destination: String,
+) -> Result<(), String> {
     let source = PathBuf::from(source)
         .canonicalize()
         .map_err(|e| format!("cannot resolve source: {e}"))?;
