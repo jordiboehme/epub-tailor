@@ -42,7 +42,7 @@ unicode-normalization = "0.1"
 # use (M3 already owns code-block handling); dropping them also drops
 # `fmt2io` (MITNFA, not on the license allow-list) and syntect's `bincode`/
 # `yaml-rust` transitive deps (both unmaintained per `cargo deny`).
-comrak = { version = "0.53", default-features = false }
+comrak = { version = "0.54", default-features = false }
 serde_yaml_ng = "0.10"
 askama = "0.16"
 # Blocking HTTP for the optional Open Library lookup. Deliberately ureq: it is
