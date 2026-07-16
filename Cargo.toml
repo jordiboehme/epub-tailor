@@ -56,3 +56,11 @@ epub-tailor-core = { path = "crates/core", version = "0.6.1" }
 [workspace.lints.clippy]
 # Intentionally empty: keep clippy's default lint levels.
 # CI enforces `-D warnings` on the command line (see .github/workflows/ci.yml).
+
+[profile.dev]
+# Line tables instead of full DWARF (the `debug = 2` default): panics and
+# backtraces keep file:line, target/debug shrinks by ~20% (measured), and the
+# ~25 test-binary links push less debuginfo around. The only loss is variable
+# inspection in an interactive debugger. `profile.test` inherits this;
+# release is untouched.
+debug = "line-tables-only"
