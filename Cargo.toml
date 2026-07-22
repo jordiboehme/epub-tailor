@@ -35,7 +35,7 @@ resvg = { version = "0.47", default-features = false, features = [
     "text",
     "raster-images",
 ] }
-lightningcss = { version = "=1.0.0-alpha.71", default-features = false }
+lightningcss = { version = "=1.0.0-alpha.72", default-features = false }
 unicode-normalization = "0.1"
 # Default features pull in the standalone `comrak` CLI binary (clap, bon,
 # shell-words, xdg) and syntax highlighting (syntect-onig) - none of which we

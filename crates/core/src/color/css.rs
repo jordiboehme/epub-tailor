@@ -100,7 +100,7 @@ fn parse_sheet<'i>(
     css: &'i str,
     path: &str,
     warnings: &mut Vec<Warning>,
-) -> Option<StyleSheet<'i, 'i>> {
+) -> Option<StyleSheet<'i>> {
     let parse_warnings = Arc::new(RwLock::new(Vec::new()));
     let options = ParserOptions {
         filename: path.to_string(),
