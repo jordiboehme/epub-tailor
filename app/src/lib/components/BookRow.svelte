@@ -118,10 +118,14 @@
         : 'hover:bg-white dark:hover:bg-ink-900'}"
 >
   <div class="relative px-4 py-2">
-    <div class="book-list-grid">
+    <!-- Two rows: metadata line, then the file lines - both right of the
+         cover, which spans the full height. The 1fr second row absorbs the
+         slack of the 96px cover, so the metadata line keeps its natural
+         height and the files sit directly under it. -->
+    <div class="book-list-grid grid-rows-[auto_1fr]">
       <!-- Cover thumbnail -->
       <div
-        class="relative aspect-[2/3] h-24 w-16 shrink-0 overflow-hidden rounded bg-ink-100 dark:bg-ink-800"
+        class="relative row-span-2 aspect-[2/3] h-24 w-16 shrink-0 self-start overflow-hidden rounded bg-ink-100 dark:bg-ink-800"
       >
         {#if hasCover}
           <img
@@ -220,12 +224,12 @@
           </div>
         {/if}
       </div>
-    </div>
 
-    <!-- The book's files, always in view and individually selectable.
-         Indented to the row's text column. -->
-    <div class="pl-[76px] pt-1">
-      <FileList {book} />
+      <!-- The book's files, always in view and individually selectable:
+           the second grid row, spanning every column right of the cover. -->
+      <div class="col-[2/-1] min-w-0 self-start pt-1">
+        <FileList {book} />
+      </div>
     </div>
 
     <!-- Busy along the whole row: the shimmer a running card runs under its cover. -->

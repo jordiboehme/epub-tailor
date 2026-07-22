@@ -6,7 +6,9 @@
   import { settings } from "./lib/stores/settings.svelte";
   import { profiles } from "./lib/stores/profiles.svelte";
   import { books } from "./lib/stores/books.svelte";
-  import { restoreGeometry, trackGeometry } from "./lib/api/window";
+  import { edits } from "./lib/stores/edits.svelte";
+  import { jobs } from "./lib/stores/jobs.svelte";
+  import { guardClose, restoreGeometry, trackGeometry } from "./lib/api/window";
   import Workbench from "./lib/components/Workbench.svelte";
   import DropZone from "./lib/components/DropZone.svelte";
   import UpdateBanner from "./lib/components/UpdateBanner.svelte";
@@ -61,6 +63,26 @@
     let untrackGeometry: UnlistenFn | undefined;
     void loadStores().then((fn) => (untrackGeometry = fn));
 
+    // Everything on the workbench is in-memory only; a close throws it away.
+    // Ask first while any book is loaded. Covers the red button, Cmd+W and
+    // (via the Rust-side Quit menu swap) Cmd+Q.
+    let unguardClose: UnlistenFn | undefined;
+    guardClose(
+      () => {
+        // A keystroke still inside the metadata editor's debounce window
+        // counts as a staged edit.
+        edits.flushPending();
+        return { books: books.books.length, editedFiles: edits.count, jobsRunning: jobs.active };
+      },
+      // Confirmed close: stop the sidecars; they do not die with the window.
+      () => jobs.cancelAll(),
+    )
+      .then((fn) => (unguardClose = fn))
+      .catch(() => {
+        // No guard, but closing still works natively - without a registered
+        // close listener the window closes the ordinary way.
+      });
+
     let unlistenDrag: UnlistenFn | undefined;
     getCurrentWebview()
       .onDragDropEvent((event) => {
@@ -107,6 +129,7 @@
       unlistenDrag?.();
       unlistenOpen?.();
       untrackGeometry?.();
+      unguardClose?.();
     };
   });
 </script>

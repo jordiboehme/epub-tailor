@@ -45,6 +45,9 @@
   }
 
   function onKey(event: KeyboardEvent) {
+    // A chip or Details button inside the row handles its own Enter/Space;
+    // only a keypress on the row itself selects the file.
+    if (event.target !== event.currentTarget) return;
     if (event.key === "Enter" || event.key === " ") {
       event.preventDefault();
       event.stopPropagation();
@@ -84,9 +87,26 @@
 </script>
 
 {#snippet chip(c: Chip)}
-  <span class="shrink-0 rounded px-1 py-0.5 text-[10px] font-medium {TONE_CLASS[c.tone]}" title={c.title}>
-    {c.label}
-  </span>
+  {#if canExpand && (c.tone === "bad" || c.tone === "warn")}
+    <!-- A chip that stands for expandable information (findings, a failure)
+         is itself the toggle - clicking "2 errors" should show the errors. -->
+    <button
+      type="button"
+      aria-expanded={showDetails}
+      title={c.title ?? (showDetails ? "Hide the details" : "Show the details")}
+      onclick={(e) => {
+        e.stopPropagation();
+        showDetails = !showDetails;
+      }}
+      class="shrink-0 cursor-pointer rounded px-1 py-0.5 text-[10px] font-medium ring-1 ring-current/30 ring-inset transition-shadow hover:ring-current/70 focus-visible:ring-2 focus-visible:ring-teal-500 focus-visible:outline-none dark:focus-visible:ring-teal-400 {TONE_CLASS[c.tone]}"
+    >
+      {c.label}
+    </button>
+  {:else}
+    <span class="shrink-0 rounded px-1 py-0.5 text-[10px] font-medium {TONE_CLASS[c.tone]}" title={c.title}>
+      {c.label}
+    </span>
+  {/if}
 {/snippet}
 
 <div
@@ -215,7 +235,13 @@
   {/if}
 
   {#if showDetails && canExpand}
-    <div transition:slide={{ duration: 150 }}>
+    <!-- Once the slide has settled (final height known), make sure the
+         details are actually visible: a row near the bottom of the list
+         would otherwise expand below the fold. -->
+    <div
+      transition:slide={{ duration: 150 }}
+      onintroend={(e) => e.currentTarget.scrollIntoView({ block: "nearest", behavior: "smooth" })}
+    >
       <CardDetails {findings} {failure} padding="py-1.5 px-1" />
     </div>
   {/if}

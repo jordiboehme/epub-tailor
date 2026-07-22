@@ -43,6 +43,55 @@ pub fn run() {
         builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
     }
 
+    // macOS only, because only macOS has the default application menu: its
+    // Quit item dispatches the native `terminate:` selector, which tears the
+    // process down without ever consulting the event loop (no
+    // RunEvent::ExitRequested, nothing to prevent). Swap it for an item we
+    // control and route Cmd+Q through the main window's close-requested flow,
+    // where the frontend asks about unsaved work. A confirmed close destroys
+    // the last window, and the unhandled ExitRequested that follows lets the
+    // app exit - one dialog, one path, no way to double-ask. Dock-icon Quit,
+    // logout and shutdown still terminate natively; that cannot be
+    // intercepted at this layer.
+    #[cfg(target_os = "macos")]
+    {
+        use tauri::menu::{Menu, MenuItem, MenuItemKind};
+        builder = builder
+            .menu(|handle| {
+                let menu = Menu::default(handle)?;
+                // The app submenu is the first entry and the native Quit item
+                // is its last, per Menu::default's own construction (tauri
+                // 2.x) - re-check on tauri bumps; a drifted index degrades to
+                // two Quit items, which the close-flow test run catches.
+                if let Some(MenuItemKind::Submenu(app_menu)) = menu.items()?.first() {
+                    if let Some(native_quit) = app_menu.items()?.last() {
+                        app_menu.remove(native_quit)?;
+                    }
+                    let quit = MenuItem::with_id(
+                        handle,
+                        "quit",
+                        format!("Quit {}", handle.package_info().name),
+                        true,
+                        Some("CmdOrCtrl+Q"),
+                    )?;
+                    app_menu.append(&quit)?;
+                }
+                Ok(menu)
+            })
+            .on_menu_event(|app, event| {
+                if event.id() == "quit" {
+                    // Close, not exit: the close-requested listener owns the
+                    // confirmation, and a confirmed close of the single
+                    // window exits the app on its own.
+                    if let Some(window) = app.get_webview_window("main") {
+                        let _ = window.close();
+                    } else {
+                        app.exit(0);
+                    }
+                }
+            });
+    }
+
     builder
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
