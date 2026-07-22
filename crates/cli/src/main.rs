@@ -242,6 +242,12 @@ struct CommonArgs {
     #[arg(long)]
     split_tall_images: bool,
 
+    /// Remap text and diagram colors to perceptually spaced gray tones on a
+    /// grayscale panel (true/false). Overrides the profile value; color
+    /// panels never remap.
+    #[arg(long, value_name = "BOOL")]
+    remap_colors: Option<bool>,
+
     /// Maximum chapter size in KiB before splitting at a heading boundary.
     /// Overrides the profile value.
     #[arg(long)]
@@ -402,6 +408,9 @@ impl CommonArgs {
         }
         if self.split_tall_images {
             opts.split_tall_images = true;
+        }
+        if let Some(remap) = self.remap_colors {
+            opts.features.remap_colors = remap;
         }
         if let Some(kb) = self.max_chapter_kb {
             opts.max_chapter_bytes = kb as usize * 1024;

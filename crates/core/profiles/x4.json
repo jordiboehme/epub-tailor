@@ -27,7 +27,8 @@
     "relocate_anchors": true,
     "dedupe_ids": true,
     "unicode_hygiene": true,
-    "chapter_split": true
+    "chapter_split": true,
+    "remap_colors": true
   },
   "options": {
     "jpeg_quality": 82,

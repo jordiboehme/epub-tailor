@@ -13,7 +13,8 @@
     }
   },
   "features": {
-    "sanitize_css": true
+    "sanitize_css": true,
+    "remap_colors": true
   },
   "output": { "appendix": "pocketbook-verse-pro" }
 }

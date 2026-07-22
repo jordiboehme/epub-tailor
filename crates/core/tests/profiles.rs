@@ -236,7 +236,8 @@ fn a_capable_reader_never_gets_the_crosspoint_downgrades() {
         "tolino-vision-color",
         "tolino-epos-3",
     ] {
-        let f = resolve_specs(&[name]).expect("resolves").features;
+        let p = resolve_specs(&[name]).expect("resolves");
+        let f = p.features;
         assert!(!f.filter_css, "{name}: CrossPoint's CSS grammar is not its");
         assert!(!f.linearize_tables, "{name} renders real tables");
         assert!(!f.bake_ordered_lists, "{name} numbers its own lists");
@@ -252,6 +253,26 @@ fn a_capable_reader_never_gets_the_crosspoint_downgrades() {
         assert!(
             f.dedupe_ids && f.unicode_hygiene,
             "{name} still gets repair"
+        );
+        assert_eq!(
+            f.remap_colors,
+            !p.caps.panel.is_color(),
+            "{name}: gray panels remap colors, color panels keep them"
+        );
+    }
+}
+
+#[test]
+fn remap_colors_follows_the_panel_on_every_builtin() {
+    // Every gray-panel builtin remaps colors to spaced gray tones; every
+    // color-panel builtin (and the repair-only `epub` profile, whose
+    // permissive caps are a color panel) keeps them.
+    for p in builtins() {
+        assert_eq!(
+            p.features.remap_colors,
+            !p.caps.panel.is_color(),
+            "{}: remap_colors should follow the panel",
+            p.name
         );
     }
 }

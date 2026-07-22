@@ -15,10 +15,13 @@ use crate::html::dom::{collect_by_name, get_attr, remove_attr, set_attr, text_co
 use crate::report::Transformation;
 
 /// Extract and remove every `<style>` element, and filter every inline style
-/// attribute, in `doc`. Returns the concatenated raw text of the removed
-/// `<style>` elements (empty when there were none) for the caller to relocate.
+/// attribute, in `doc`. `keep_colors` keeps concrete inline color declarations
+/// for the gray-tone remap pass to rewrite. Returns the concatenated raw text
+/// of the removed `<style>` elements (empty when there were none) for the
+/// caller to relocate.
 pub(crate) fn relocate_styles(
     doc: &NodeRef,
+    keep_colors: bool,
     report: &mut Vec<Transformation>,
     chapter_path: &str,
 ) -> String {
@@ -40,7 +43,7 @@ pub(crate) fn relocate_styles(
         let Some(style) = get_attr(&node, "style") else {
             continue;
         };
-        match filter_inline_style(&style) {
+        match filter_inline_style(&style, keep_colors) {
             Some(kept) => {
                 if kept != style {
                     set_attr(&node, "style", &kept);
@@ -75,7 +78,7 @@ mod tests {
     fn run(body: &str) -> (String, String, Vec<Transformation>) {
         let doc = doc_from_body(body);
         let mut report = Vec::new();
-        let extracted = relocate_styles(&doc, &mut report, "ch.xhtml");
+        let extracted = relocate_styles(&doc, false, &mut report, "ch.xhtml");
         (serialize(&doc), extracted, report)
     }
 
@@ -102,6 +105,15 @@ mod tests {
     fn empty_inline_style_attribute_is_dropped() {
         let (out, _, _) = run("<p style=\"color:red;font-size:9px\">hi</p>");
         assert!(!out.contains("style="), "attribute must be dropped: {out}");
+    }
+
+    #[test]
+    fn keep_colors_preserves_inline_color_declarations() {
+        let doc = doc_from_body(r#"<p style="color:teal;font-size:9px">hi</p>"#);
+        let mut report = Vec::new();
+        relocate_styles(&doc, true, &mut report, "ch.xhtml");
+        let out = serialize(&doc);
+        assert!(out.contains(r#"style="color:teal""#), "got: {out}");
     }
 
     #[test]

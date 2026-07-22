@@ -787,3 +787,123 @@ pub fn epub3_nested_tables() -> Vec<u8> {
         ("OEBPS/text/chapter.xhtml", CHAPTER),
     ])
 }
+
+/// A two-chapter EPUB stressing the gray-tone remap: an external sheet with
+/// text, background and border colors (including the near-equal-luminance
+/// teal/orange pair and a deliberately muted dark gray), a head `<style>` with
+/// colored rules, inline `style=""` colors used identically in both chapters,
+/// a standalone `diagram.svg` (fills, strokes, a two-stop gradient, a
+/// `<style>` block and a `style=""` attribute) and an inline `<svg>` carrying
+/// only the teal/orange pair.
+#[allow(dead_code)]
+pub fn epub3_color_kitchen() -> Vec<u8> {
+    const CONTAINER_XML: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles>
+    <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
+  </rootfiles>
+</container>"#;
+
+    const CONTENT_OPF: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="pub-id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:title>Color Kitchen</dc:title>
+    <dc:creator>Jane Author</dc:creator>
+    <dc:language>en</dc:language>
+    <dc:identifier id="pub-id">urn:uuid:c0104c17-4242-4242-4242-abcdefabcdef</dc:identifier>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="ch1" href="text/chapter1.xhtml" media-type="application/xhtml+xml"/>
+    <item id="ch2" href="text/chapter2.xhtml" media-type="application/xhtml+xml"/>
+    <item id="ext" href="styles/ext.css" media-type="text/css"/>
+    <item id="diagram" href="images/diagram.svg" media-type="image/svg+xml"/>
+  </manifest>
+  <spine>
+    <itemref idref="ch1"/>
+    <itemref idref="ch2"/>
+  </spine>
+</package>"#;
+
+    const NAV_XHTML: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+<head><title>Nav</title></head>
+<body>
+<nav epub:type="toc">
+<ol>
+<li><a href="text/chapter1.xhtml">One</a></li>
+<li><a href="text/chapter2.xhtml">Two</a></li>
+</ol>
+</nav>
+</body>
+</html>"#;
+
+    const CHAPTER_1: &[u8] = br##"<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>One</title>
+<link rel="stylesheet" type="text/css" href="../styles/ext.css"/>
+<style>
+h1 { color: #b22222; text-align: center; }
+</style>
+</head>
+<body>
+<h1>One</h1>
+<p class="alert">Watch out.</p>
+<p class="note">A teal note.</p>
+<p class="muted">Fine print.</p>
+<p style="color:teal">Inline teal.</p>
+<div class="box">Boxed.</div>
+<svg xmlns="http://www.w3.org/2000/svg" width="100" height="50" viewBox="0 0 100 50">
+<rect x="0" y="0" width="50" height="50" fill="#009688"/>
+<rect x="50" y="0" width="50" height="50" fill="#e67e22"/>
+</svg>
+<p><img src="../images/diagram.svg" alt="Diagram"/></p>
+</body>
+</html>"##;
+
+    const CHAPTER_2: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>Two</title>
+<link rel="stylesheet" type="text/css" href="../styles/ext.css"/>
+</head>
+<body>
+<h1>Two</h1>
+<p class="alert">Still watching.</p>
+<p style="color:teal">Inline teal again.</p>
+</body>
+</html>"#;
+
+    const EXT_CSS: &[u8] = br#"body { color: #000000; }
+.alert { color: #e67e22; }
+.note { color: #009688; }
+.muted { color: #444444; }
+.box { background-color: #ffee88; border-color: #663399; }
+"#;
+
+    const DIAGRAM_SVG: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100" viewBox="0 0 200 100">
+<defs>
+<linearGradient id="sky">
+<stop offset="0" stop-color="navy"/>
+<stop offset="1" stop-color="gold"/>
+</linearGradient>
+</defs>
+<style>.wire{stroke:#663399}</style>
+<rect x="0" y="0" width="100" height="100" fill="#009688" stroke="black"/>
+<rect x="100" y="0" width="100" height="100" fill="#e67e22"/>
+<rect x="40" y="40" width="20" height="20" fill="url(#sky)"/>
+<path class="wire" d="M0 0 L200 100" style="fill:#b22222"/>
+</svg>"##;
+
+    build_epub(&[
+        ("mimetype", b"application/epub+zip"),
+        ("META-INF/container.xml", CONTAINER_XML),
+        ("OEBPS/content.opf", CONTENT_OPF),
+        ("OEBPS/nav.xhtml", NAV_XHTML),
+        ("OEBPS/text/chapter1.xhtml", CHAPTER_1),
+        ("OEBPS/text/chapter2.xhtml", CHAPTER_2),
+        ("OEBPS/styles/ext.css", EXT_CSS),
+        ("OEBPS/images/diagram.svg", DIAGRAM_SVG),
+    ])
+}

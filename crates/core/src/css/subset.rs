@@ -22,7 +22,8 @@ use lightningcss::media_query::{MediaList, MediaType, Qualifier};
 use lightningcss::rules::CssRule;
 use lightningcss::selector::SelectorList;
 use lightningcss::stylesheet::{ParserOptions, PrinterOptions, StyleSheet};
-use lightningcss::traits::ToCss;
+use lightningcss::traits::{Parse, ToCss};
+use lightningcss::values::color::CssColor;
 
 use crate::report::Warning;
 
@@ -50,6 +51,35 @@ const ALLOWED_PROPERTIES: &[&str] = &[
     "height",
     "direction",
 ];
+
+/// Color properties kept only when the gray-tone remap is active
+/// (`keep_colors`): the remap pass rewrites their values to panel grays after
+/// filtering, so they must survive it. The device renders per-element
+/// grayscale text, so a concrete color value is meaningful to it once reduced
+/// to a gray.
+const COLOR_PROPERTIES: &[&str] = &[
+    "color",
+    "background-color",
+    "border-color",
+    "border-top-color",
+    "border-right-color",
+    "border-bottom-color",
+    "border-left-color",
+];
+
+/// Whether `value` is a single concrete color the remap pass can rewrite:
+/// parses as a CSS color and is not `currentColor`, `light-dark()` or a system
+/// color keyword (those resolve at render time and cannot be mapped to one
+/// gray).
+fn is_concrete_color(value: &str) -> bool {
+    match CssColor::parse_string(value) {
+        Ok(color) => !matches!(
+            color,
+            CssColor::CurrentColor | CssColor::LightDark(..) | CssColor::System(_)
+        ),
+        Err(_) => false,
+    }
+}
 
 /// The outcome of filtering one stylesheet.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -94,6 +124,7 @@ struct Accumulator {
 fn filter_css_to_accumulator(
     css: &str,
     path: &str,
+    keep_colors: bool,
     warnings: &mut Vec<Warning>,
 ) -> Option<Accumulator> {
     let parse_warnings = Arc::new(RwLock::new(Vec::new()));
@@ -116,7 +147,7 @@ fn filter_css_to_accumulator(
     };
 
     let mut acc = Accumulator::default();
-    process_rules(&stylesheet.rules.0, path, warnings, &mut acc);
+    process_rules(&stylesheet.rules.0, path, keep_colors, warnings, &mut acc);
 
     // One warning per construct lightningcss skipped during error recovery.
     let skipped = parse_warnings.read().map(|w| w.len()).unwrap_or(0);
@@ -131,10 +162,17 @@ fn filter_css_to_accumulator(
 }
 
 /// Filter `css` down to the device-supported subset, naming the source `path`
-/// in any warnings. Never fails: parse errors are recovered from and reported as
-/// warnings, and a stylesheet that cannot be parsed at all is dropped entirely.
-pub fn filter_css(css: &str, path: &str, warnings: &mut Vec<Warning>) -> FilteredCss {
-    let Some(acc) = filter_css_to_accumulator(css, path, warnings) else {
+/// in any warnings. `keep_colors` additionally keeps concrete color
+/// declarations for the gray-tone remap pass to rewrite. Never fails: parse
+/// errors are recovered from and reported as warnings, and a stylesheet that
+/// cannot be parsed at all is dropped entirely.
+pub fn filter_css(
+    css: &str,
+    path: &str,
+    keep_colors: bool,
+    warnings: &mut Vec<Warning>,
+) -> FilteredCss {
+    let Some(acc) = filter_css_to_accumulator(css, path, keep_colors, warnings) else {
         return FilteredCss::default();
     };
 
@@ -156,8 +194,13 @@ pub fn filter_css(css: &str, path: &str, warnings: &mut Vec<Warning>) -> Filtere
 /// string. `filter_css(css, path, w).css` is exactly
 /// `selectors.join(",") + "{" + declarations + "}"` for each returned rule,
 /// concatenated with no separator.
-pub fn filter_css_rules(css: &str, path: &str, warnings: &mut Vec<Warning>) -> Vec<FilteredRule> {
-    filter_css_to_accumulator(css, path, warnings)
+pub fn filter_css_rules(
+    css: &str,
+    path: &str,
+    keep_colors: bool,
+    warnings: &mut Vec<Warning>,
+) -> Vec<FilteredRule> {
+    filter_css_to_accumulator(css, path, keep_colors, warnings)
         .map(|acc| acc.rules)
         .unwrap_or_default()
 }
@@ -176,13 +219,13 @@ pub(crate) fn push_rule(out: &mut String, selectors: &[String], declarations: &s
 /// Filter one inline `style=""` attribute value through the declaration
 /// whitelist. Returns the minified survivors, or `None` when nothing survives
 /// (so the caller can drop the attribute).
-pub fn filter_inline_style(style: &str) -> Option<String> {
+pub fn filter_inline_style(style: &str, keep_colors: bool) -> Option<String> {
     let options = ParserOptions {
         error_recovery: true,
         ..Default::default()
     };
     let block = DeclarationBlock::parse_string(style, options).ok()?;
-    let (declarations, _) = filter_declarations(&block);
+    let (declarations, _) = filter_declarations(&block, keep_colors);
     if declarations.is_empty() {
         None
     } else {
@@ -196,14 +239,17 @@ pub fn filter_inline_style(style: &str) -> Option<String> {
 fn process_rules(
     rules: &[CssRule<'_>],
     path: &str,
+    keep_colors: bool,
     warnings: &mut Vec<Warning>,
     acc: &mut Accumulator,
 ) {
     for rule in rules {
         match rule {
-            CssRule::Style(style) => emit_style_rule(&style.selectors, &style.declarations, acc),
+            CssRule::Style(style) => {
+                emit_style_rule(&style.selectors, &style.declarations, keep_colors, acc)
+            }
             CssRule::Media(media) if media_is_screen_or_all(&media.query) => {
-                process_rules(&media.rules.0, path, warnings, acc);
+                process_rules(&media.rules.0, path, keep_colors, warnings, acc);
             }
             CssRule::Import(import) => {
                 acc.dropped += 1;
@@ -228,6 +274,7 @@ fn process_rules(
 fn emit_style_rule(
     selectors: &SelectorList<'_>,
     declarations: &DeclarationBlock<'_>,
+    keep_colors: bool,
     acc: &mut Accumulator,
 ) {
     let kept_selectors: Vec<String> = selectors
@@ -241,7 +288,7 @@ fn emit_style_rule(
         return;
     }
 
-    let (declarations, dropped) = filter_declarations(declarations);
+    let (declarations, dropped) = filter_declarations(declarations, keep_colors);
     acc.decls_dropped += dropped;
     if declarations.is_empty() {
         acc.dropped += 1;
@@ -258,7 +305,7 @@ fn emit_style_rule(
 /// Filter a declaration block to the whitelist, stripping `!important`. Returns
 /// the minified `name:value;name:value` string and the count of dropped
 /// declarations.
-fn filter_declarations(block: &DeclarationBlock<'_>) -> (String, usize) {
+fn filter_declarations(block: &DeclarationBlock<'_>, keep_colors: bool) -> (String, usize) {
     let mut kept: Vec<String> = Vec::new();
     let mut dropped = 0usize;
     for property in block
@@ -273,7 +320,7 @@ fn filter_declarations(block: &DeclarationBlock<'_>) -> (String, usize) {
             continue;
         };
         let value = restore_leading_zeros(&value);
-        if property_is_supported(name, &value) {
+        if property_is_supported(name, &value, keep_colors) {
             kept.push(format!("{name}:{value}"));
         } else {
             dropped += 1;
@@ -304,7 +351,9 @@ pub(crate) fn restore_leading_zeros(value: &str) -> String {
 }
 
 /// Whether a property (by canonical name and serialized value) is kept.
-fn property_is_supported(name: &str, value: &str) -> bool {
+/// `keep_colors` additionally admits the [`COLOR_PROPERTIES`] carrying a
+/// concrete color value, for the gray-tone remap pass to rewrite.
+fn property_is_supported(name: &str, value: &str, keep_colors: bool) -> bool {
     // A modern value function is unreadable to the device's parser whatever
     // property carries it: `width: calc(100% - 2em)` is in the allowed property
     // list but is still gibberish to firmware that cannot do arithmetic. See
@@ -319,6 +368,7 @@ fn property_is_supported(name: &str, value: &str) -> bool {
         "vertical-align" => {
             value.eq_ignore_ascii_case("super") || value.eq_ignore_ascii_case("sub")
         }
+        other if keep_colors && COLOR_PROPERTIES.contains(&other) => is_concrete_color(value),
         other => ALLOWED_PROPERTIES.contains(&other),
     }
 }
@@ -395,7 +445,12 @@ mod tests {
 
     fn filter(css: &str) -> FilteredCss {
         let mut warnings = Vec::new();
-        filter_css(css, "test.css", &mut warnings)
+        filter_css(css, "test.css", false, &mut warnings)
+    }
+
+    fn filter_keeping_colors(css: &str) -> FilteredCss {
+        let mut warnings = Vec::new();
+        filter_css(css, "test.css", true, &mut warnings)
     }
 
     #[test]
@@ -412,6 +467,10 @@ mod tests {
     /// Re-parse `css` and assert every rule is a plain style rule whose
     /// selectors and properties are all device-supported (no at-rules survive).
     fn assert_conformant(css: &str) {
+        assert_conformant_with(css, false);
+    }
+
+    fn assert_conformant_with(css: &str, keep_colors: bool) {
         let sheet = StyleSheet::parse(
             css,
             ParserOptions {
@@ -443,7 +502,7 @@ mod tests {
                             .value_to_css_string(PrinterOptions::default())
                             .expect("value serializes");
                         assert!(
-                            property_is_supported(id.name(), &value),
+                            property_is_supported(id.name(), &value, keep_colors),
                             "unsupported property survived: {}:{value}",
                             id.name()
                         );
@@ -517,7 +576,7 @@ sub { vertical-align: sub; }
 "#;
         let filtered = filter(input);
         let mut warnings = Vec::new();
-        let rules = filter_css_rules(input, "test.css", &mut warnings);
+        let rules = filter_css_rules(input, "test.css", false, &mut warnings);
         let reconstructed: String = rules
             .iter()
             .map(|rule| format!("{}{{{}}}", rule.selectors.join(","), rule.declarations))
@@ -602,6 +661,7 @@ sub { vertical-align: sub; }
         let filtered = filter_css(
             "@import url(evil.css);p{text-align:left}",
             "s.css",
+            false,
             &mut warnings,
         );
         assert_eq!(filtered.css, "p{text-align:left}");
@@ -626,22 +686,70 @@ sub { vertical-align: sub; }
     #[test]
     fn inline_style_keeps_supported_drops_unsupported() {
         assert_eq!(
-            filter_inline_style("color:red;text-align:center;font-size:12px"),
+            filter_inline_style("color:red;text-align:center;font-size:12px", false),
             Some("text-align:center".to_string())
         );
     }
 
     #[test]
     fn inline_style_all_unsupported_returns_none() {
-        assert_eq!(filter_inline_style("color:blue;font-size:9px"), None);
+        assert_eq!(filter_inline_style("color:blue;font-size:9px", false), None);
     }
 
     #[test]
     fn inline_style_strips_important() {
         assert_eq!(
-            filter_inline_style("text-indent:1em !important"),
+            filter_inline_style("text-indent:1em !important", false),
             Some("text-indent:1em".to_string())
         );
+    }
+
+    #[test]
+    fn keep_colors_keeps_concrete_color_declarations() {
+        let out = filter_keeping_colors(
+            ".x{color:red;background-color:#eef;border-color:rgb(1,2,3);font-size:9px}",
+        );
+        assert!(out.css.contains("color:red"), "got: {}", out.css);
+        assert!(out.css.contains("background-color:"), "got: {}", out.css);
+        assert!(out.css.contains("border-color:"), "got: {}", out.css);
+        assert!(!out.css.contains("font-size"), "got: {}", out.css);
+        assert_conformant_with(&out.css, true);
+    }
+
+    #[test]
+    fn keep_colors_still_drops_unresolvable_color_values() {
+        let out = filter_keeping_colors(
+            ".x{color:currentColor;text-align:center}.y{color:var(--accent)}",
+        );
+        assert!(
+            !out.css.to_ascii_lowercase().contains("currentcolor"),
+            "got: {}",
+            out.css
+        );
+        assert!(!out.css.contains("var("), "got: {}", out.css);
+        assert!(out.css.contains("text-align:center"), "got: {}", out.css);
+    }
+
+    #[test]
+    fn keep_colors_still_drops_the_shorthands() {
+        // `background`/`border` shorthands carry constructs beyond a color;
+        // they stay out even when colors are kept.
+        let out = filter_keeping_colors(".x{background:#eef;border:1px solid red}");
+        assert_eq!(out.css, "", "got: {}", out.css);
+    }
+
+    #[test]
+    fn keep_colors_inline_style_keeps_the_color() {
+        assert_eq!(
+            filter_inline_style("color:teal;font-size:9px", true),
+            Some("color:teal".to_string())
+        );
+    }
+
+    #[test]
+    fn without_keep_colors_nothing_changes() {
+        let out = filter(".x{color:red;text-align:center}");
+        assert_eq!(out.css, ".x{text-align:center}");
     }
 
     #[test]
@@ -665,6 +773,9 @@ sub { vertical-align: sub; }
         prop::sample::select(vec![
             "text-align:center",
             "color:red",
+            "color:currentColor",
+            "background-color:#eef",
+            "border-color:rgba(0,0,0,0.5)",
             "margin:1em",
             "margin-left:2em",
             "display:none",
@@ -705,12 +816,15 @@ sub { vertical-align: sub; }
         #![proptest_config(ProptestConfig::with_cases(400))]
 
         #[test]
-        fn output_is_conformant_and_idempotent(chunks in prop::collection::vec(chunk(), 0..12)) {
+        fn output_is_conformant_and_idempotent(
+            chunks in prop::collection::vec(chunk(), 0..12),
+            keep_colors in any::<bool>(),
+        ) {
             let input = chunks.join("\n");
             let mut warnings = Vec::new();
-            let filtered = filter_css(&input, "gen.css", &mut warnings);
-            assert_conformant(&filtered.css);
-            let twice = filter_css(&filtered.css, "gen.css", &mut Vec::new());
+            let filtered = filter_css(&input, "gen.css", keep_colors, &mut warnings);
+            assert_conformant_with(&filtered.css, keep_colors);
+            let twice = filter_css(&filtered.css, "gen.css", keep_colors, &mut Vec::new());
             prop_assert_eq!(twice.css, filtered.css);
         }
     }

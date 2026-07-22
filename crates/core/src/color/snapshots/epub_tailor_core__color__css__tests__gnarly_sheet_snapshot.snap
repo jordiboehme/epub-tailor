@@ -1,0 +1,9 @@
+---
+source: crates/core/src/color/css.rs
+assertion_line: 367
+expression: css
+---
+@font-face {
+  font-family: X;
+  src: url("x.woff2");
+}body{color:#777;text-align:justify}.note{color:#777;margin-left:2em}.tip{background-color:#fff}.lab{color:#777}.imp{color:#555!important}@media screen{.s{color:#777;margin:0.5em}}@media print{.p{color:#777}}.plain{margin:0.5em}

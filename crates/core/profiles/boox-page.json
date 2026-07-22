@@ -12,5 +12,6 @@
       "cover_budget_kb": 1000
     }
   },
+  "features": { "remap_colors": true },
   "output": { "appendix": "boox-page" }
 }

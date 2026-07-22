@@ -664,6 +664,50 @@ fn fit_help_lists_all_table_modes() {
 }
 
 #[test]
+fn remap_colors_takes_a_bool_and_rejects_anything_else() {
+    let output = bin()
+        .args(["fit", "book.epub", "--remap-colors", "banana"])
+        .output()
+        .expect("failed to run binary");
+    assert_eq!(output.status.code(), Some(2), "clap usage error exits 2");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("invalid value 'banana'"),
+        "expected a value error on stderr, got:\n{stderr}"
+    );
+}
+
+#[test]
+fn remap_colors_override_is_accepted_in_both_directions() {
+    let dir = temp_dir("remap-colors");
+    let book = book_in(&dir, "plain");
+    for value in ["true", "false"] {
+        let out_path = dir.join(format!("remap-{value}.epub"));
+        let output = bin()
+            .args([
+                "fit",
+                book.to_str().unwrap(),
+                "--profile",
+                "x4",
+                "--remap-colors",
+                value,
+                "--output",
+                out_path.to_str().unwrap(),
+            ])
+            .output()
+            .expect("failed to run binary");
+        assert!(
+            output.status.success(),
+            "`--remap-colors {value}` should be accepted, got {:?}\nstderr: {}",
+            output.status.code(),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(out_path.exists());
+    }
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn tables_rejects_an_unknown_mode() {
     let output = bin()
         .args(["fit", "book.epub", "--tables", "bogus"])

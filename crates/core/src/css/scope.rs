@@ -45,9 +45,10 @@ pub(crate) fn scope_relocated_css(
     css: &str,
     scope_idx: usize,
     path: &str,
+    keep_colors: bool,
     warnings: &mut Vec<Warning>,
 ) -> String {
-    let rules = filter_css_rules(css, path, warnings);
+    let rules = filter_css_rules(css, path, keep_colors, warnings);
     let mut out = String::new();
     for rule in &rules {
         let scoped: Vec<String> = rule
@@ -148,7 +149,7 @@ mod tests {
     fn run(body: &str, css: &str, idx: usize) -> (String, String) {
         let doc = doc_from_body(body);
         let mut warnings = Vec::new();
-        let out = scope_relocated_css(&doc, css, idx, "ch.xhtml", &mut warnings);
+        let out = scope_relocated_css(&doc, css, idx, "ch.xhtml", false, &mut warnings);
         (out, serialize(&doc))
     }
 
@@ -293,6 +294,24 @@ mod tests {
         let (css, dom) = run(r#"<p class="note">x</p>"#, ".note{margin-left:2em}", 3);
         assert_eq!(css, ".cpr3-c-note{margin-left:2em}");
         assert!(dom.contains("cpr3-c-note"), "{dom}");
+    }
+
+    #[test]
+    fn keep_colors_survives_scoping() {
+        // The relocated sheet is subset-filtered unconditionally; with the
+        // remap active its colors must ride through the scoper for the later
+        // rewrite to find them.
+        let doc = doc_from_body(r#"<p class="note">hi</p>"#);
+        let mut warnings = Vec::new();
+        let out = scope_relocated_css(
+            &doc,
+            ".note{color:red;margin-left:2em}",
+            1,
+            "ch.xhtml",
+            true,
+            &mut warnings,
+        );
+        assert_eq!(out, ".cpr1-c-note{color:red;margin-left:2em}");
     }
 
     #[test]

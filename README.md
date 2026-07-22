@@ -72,6 +72,7 @@ The app keeps itself current. When a new version ships it mentions it, quietly, 
 
 - Transcodes every image to baseline grayscale JPEG or PNG, pre-fit to the screen and inside the device's byte budgets.
 - Rasterizes SVG with a real renderer (resvg, 2x supersampled), because the device has no SVG decoder at all.
+- Remaps text and diagram colors to perceptually spaced gray tones: each color keeps its apparent brightness, equal-luminance hues like teal and orange stay tellable apart and the report says so when a 4-level panel cannot keep up.
 - Bakes ordered-list numbers into the text, so `1. 2. 3.` does not silently read "• • •".
 - Linearizes tables into labeled paragraphs, or rasterizes complex ones into crisp line-art images with `--tables image`.
 - Rebuilds `<pre>` and code blocks with explicit breaks and spacing so indentation survives.

@@ -15,6 +15,7 @@
 //! unconditionally; everything device-specific is a profile feature.
 
 mod chapter_split;
+pub(crate) mod color;
 pub mod css;
 pub mod epub;
 pub mod error;
@@ -59,7 +60,10 @@ use crate::image::{
 use css::caps;
 use epub::model::normalize_href;
 use html::cap_ids;
-use html::dom::{collect_by_name, element, find_head, get_attr, remove_attr, replace_with};
+use html::dom::{
+    collect_by_name, element, find_head, get_attr, is_named, remove_attr, replace_with, set_attr,
+    text_content,
+};
 
 /// The generated helper stylesheet, kept strictly within the device's supported
 /// CSS grammar (single class selectors, supported properties only). It is added
@@ -231,7 +235,7 @@ pub fn convert(input: Input, opts: &ConvertOptions) -> Result<Converted, Convert
             };
 
             let filtered = if opts.features.filter_css {
-                filter_css(&source, &path, &mut warnings)
+                filter_css(&source, &path, opts.remap_active(), &mut warnings)
             } else {
                 FilteredCss {
                     css: source,
@@ -251,6 +255,12 @@ pub fn convert(input: Input, opts: &ConvertOptions) -> Result<Converted, Convert
             );
         }
     }
+
+    // Gray-tone remap, standalone SVG resources (see [`color`]): each diagram
+    // gets its own solve, and the rewrite happens on the SVG source so the
+    // rasterization below renders the remapped tones (or the remapped source
+    // ships as-is when a profile keeps SVG).
+    remap_svg_resources(&mut book, opts, &mut transformations, &mut warnings);
 
     // SVGs first (the device has no SVG decoder): unwrap single-`<image>`
     // wrappers so their raster payload flows through the raster pass, and
@@ -344,6 +354,7 @@ pub fn convert(input: Input, opts: &ConvertOptions) -> Result<Converted, Convert
                 &extracted_css,
                 relocated_scope_idx,
                 path,
+                opts.remap_active(),
                 &mut warnings,
             );
             if !scoped.is_empty() {
@@ -351,6 +362,7 @@ pub fn convert(input: Input, opts: &ConvertOptions) -> Result<Converted, Convert
             }
         }
         remove_font_links(&doc, path, &stripped_fonts);
+        remap_inline_svg_colors(&doc, path, opts, &mut transformations, &mut warnings);
         if opts.features.rasterize_svg {
             inline_svg_rasterized += rasterize_inline_svgs(
                 &doc,
@@ -400,7 +412,12 @@ pub fn convert(input: Input, opts: &ConvertOptions) -> Result<Converted, Convert
         // Only a filtering profile runs the relocated CSS through the subset
         // filter; otherwise it is relocated verbatim.
         let filtered = if opts.features.filter_css {
-            filter_css(&combined, &relocated_path, &mut warnings)
+            filter_css(
+                &combined,
+                &relocated_path,
+                opts.remap_active(),
+                &mut warnings,
+            )
         } else {
             FilteredCss {
                 css: combined.clone(),
@@ -437,6 +454,20 @@ pub fn convert(input: Input, opts: &ConvertOptions) -> Result<Converted, Convert
             );
         }
     }
+
+    // Gray-tone remap, CSS surfaces (see [`color`]): one global solve over
+    // every color in the book's stylesheets, remaining `<style>` elements and
+    // inline `style=""` attributes, then a rewrite of those same surfaces.
+    // Runs after the CSS passes and the chapter loop so it sees exactly what
+    // survives filtering and relocation; inline `<svg>` subtrees are excluded
+    // (each SVG solves on its own, see [`remap_inline_svg_colors`]).
+    remap_document_colors(
+        &mut book,
+        &chapters,
+        opts,
+        &mut transformations,
+        &mut warnings,
+    );
 
     // Phase 2: fix up cross-document references, then enforce the anchor cap
     // using the set of ids actually referenced anywhere in the book.
@@ -1569,6 +1600,252 @@ fn store_filtered_css(
     }
 }
 
+/// Whether `node` sits inside an inline `<svg>` subtree. Those are excluded
+/// from the document color solve: each SVG gets its own (see
+/// [`remap_inline_svg_colors`]).
+fn inside_svg(node: &NodeRef) -> bool {
+    node.ancestors().any(|ancestor| is_named(&ancestor, "svg"))
+}
+
+/// Gray-tone remap over every standalone `image/svg+xml` resource, one
+/// independent solve per file (a diagram's colors only need to stay distinct
+/// from each other). Runs before the SVG rasterization pass so the raster
+/// picks the remapped tones up.
+fn remap_svg_resources(
+    book: &mut Book,
+    opts: &ConvertOptions,
+    transformations: &mut Vec<Transformation>,
+    warnings: &mut Vec<Warning>,
+) {
+    if !opts.remap_active() {
+        return;
+    }
+    let svg_paths: Vec<String> = book
+        .resources
+        .iter()
+        .filter(|(_, resource)| resource.media_type == "image/svg+xml")
+        .map(|(path, _)| path.clone())
+        .collect();
+    let levels = opts.device.panel.gray_levels();
+    for path in svg_paths {
+        let source = String::from_utf8_lossy(&book.resources[&path].data).into_owned();
+        let Some((remapped, stats, rewritten)) =
+            color::svg::remap_svg_str(&source, opts.device.panel, &path, warnings)
+        else {
+            continue;
+        };
+        book.resources
+            .get_mut(&path)
+            .expect("path was taken from this book")
+            .data = remapped.into_bytes();
+        transformations.push(Transformation {
+            kind: "svg-colors-remapped".to_string(),
+            detail: format!(
+                "remapped {rewritten} color value(s) to {} gray tone(s) for the {levels}-level panel",
+                stats.tones_out
+            ),
+            file: Some(path.clone()),
+        });
+        if stats.collapsed > 0 {
+            warnings.push(Warning {
+                message: format!(
+                    "the {levels}-level panel cannot keep all {} colors in {path} apart; \
+                     {} of them now share a gray tone with a visibly different color",
+                    stats.colors_in, stats.collapsed
+                ),
+                file: Some(path),
+            });
+        }
+    }
+}
+
+/// Gray-tone remap over the inline `<svg>` elements of one chapter, one
+/// independent solve per SVG, mutating the DOM in place (the rasterization
+/// that may follow serializes the mutated subtree). Nested `<svg>` elements
+/// are covered by their outermost ancestor's solve.
+fn remap_inline_svg_colors(
+    doc: &NodeRef,
+    chapter_path: &str,
+    opts: &ConvertOptions,
+    transformations: &mut Vec<Transformation>,
+    warnings: &mut Vec<Warning>,
+) {
+    if !opts.remap_active() {
+        return;
+    }
+    let mut rewritten_total = 0usize;
+    let mut collapsed_total = 0usize;
+    let mut svgs = 0usize;
+    for svg in collect_by_name(doc, "svg") {
+        if !is_attached(&svg) || inside_svg(&svg) {
+            continue;
+        }
+        let Some((stats, rewritten)) =
+            color::svg::remap_inline_svg(&svg, opts.device.panel, chapter_path, warnings)
+        else {
+            continue;
+        };
+        rewritten_total += rewritten;
+        collapsed_total += stats.collapsed;
+        svgs += 1;
+    }
+    if rewritten_total == 0 {
+        return;
+    }
+    let levels = opts.device.panel.gray_levels();
+    transformations.push(Transformation {
+        kind: "svg-colors-remapped".to_string(),
+        detail: format!(
+            "remapped {rewritten_total} color value(s) across {svgs} inline SVG(s) \
+             for the {levels}-level panel"
+        ),
+        file: Some(chapter_path.to_string()),
+    });
+    if collapsed_total > 0 {
+        warnings.push(Warning {
+            message: format!(
+                "the {levels}-level panel cannot keep all inline SVG colors in {chapter_path} \
+                 apart; {collapsed_total} of them now share a gray tone with a visibly \
+                 different color"
+            ),
+            file: Some(chapter_path.to_string()),
+        });
+    }
+}
+
+/// Gray-tone remap over the book's CSS surfaces: collect every concrete color
+/// with its role from `text/css` resources, remaining `<style>` elements and
+/// inline `style=""` attributes, solve ONE palette for the whole book (so a
+/// class renders identically in every chapter), and rewrite the same surfaces.
+///
+/// The collect pass parses with a scratch warning list - the rewrite pass
+/// parses the identical text again and reports any parse failure exactly once.
+/// A stylesheet the remap grows past the device byte cap is re-split like the
+/// filter pass splits it (a remapped `red` -> `#4a4a4a` can tip a sheet stored
+/// flush against the cap).
+fn remap_document_colors(
+    book: &mut Book,
+    chapters: &[(String, NodeRef)],
+    opts: &ConvertOptions,
+    transformations: &mut Vec<Transformation>,
+    warnings: &mut Vec<Warning>,
+) {
+    if !opts.remap_active() {
+        return;
+    }
+
+    let css_paths: Vec<String> = book
+        .resources
+        .iter()
+        .filter(|(_, resource)| resource.media_type == "text/css")
+        .map(|(path, _)| path.clone())
+        .collect();
+
+    let mut collected = color::palette::Collected::default();
+    let mut scratch = Vec::new();
+    for path in &css_paths {
+        let source = String::from_utf8_lossy(&book.resources[path].data).into_owned();
+        color::css::collect_stylesheet_colors(&source, path, &mut collected, &mut scratch);
+    }
+    for (path, doc) in chapters {
+        for node in doc.inclusive_descendants() {
+            if inside_svg(&node) {
+                continue;
+            }
+            if is_named(&node, "style") {
+                color::css::collect_stylesheet_colors(
+                    &text_content(&node),
+                    path,
+                    &mut collected,
+                    &mut scratch,
+                );
+            } else if let Some(style) = get_attr(&node, "style") {
+                color::css::collect_inline_style_colors(&style, &mut collected);
+            }
+        }
+    }
+    if collected.is_empty() {
+        return;
+    }
+
+    let (palette, stats) = color::palette::build_palette(&collected, opts.device.panel);
+    let mut rewritten_total = 0usize;
+
+    for path in &css_paths {
+        let source = String::from_utf8_lossy(&book.resources[path].data).into_owned();
+        let Some((remapped, rewritten)) =
+            color::css::remap_stylesheet_colors(&source, path, &palette, warnings)
+        else {
+            continue;
+        };
+        rewritten_total += rewritten;
+        if opts.features.filter_css && remapped.len() > opts.device.css_max_bytes {
+            let regrown = FilteredCss {
+                css: remapped,
+                ..FilteredCss::default()
+            };
+            store_filtered_css(book, path, regrown, opts, transformations, warnings);
+        } else {
+            book.resources
+                .get_mut(path)
+                .expect("path was taken from this book")
+                .data = remapped.into_bytes();
+        }
+    }
+
+    for (path, doc) in chapters {
+        // Snapshot the walk: swapping a <style> element's text mutates the
+        // tree, which must not happen under a live descendant iterator.
+        for node in doc.inclusive_descendants().collect::<Vec<_>>() {
+            if inside_svg(&node) {
+                continue;
+            }
+            if is_named(&node, "style") {
+                let text = text_content(&node);
+                let Some((remapped, rewritten)) =
+                    color::css::remap_stylesheet_colors(&text, path, &palette, warnings)
+                else {
+                    continue;
+                };
+                for child in node.children().collect::<Vec<_>>() {
+                    child.detach();
+                }
+                node.append(NodeRef::new_text(remapped));
+                rewritten_total += rewritten;
+            } else if let Some(style) = get_attr(&node, "style")
+                && let Some((remapped, rewritten)) =
+                    color::css::remap_inline_style_colors(&style, &palette)
+            {
+                set_attr(&node, "style", &remapped);
+                rewritten_total += rewritten;
+            }
+        }
+    }
+
+    if rewritten_total == 0 {
+        return;
+    }
+    let levels = opts.device.panel.gray_levels();
+    transformations.push(Transformation {
+        kind: "colors-remapped".to_string(),
+        detail: format!(
+            "remapped {rewritten_total} CSS color value(s) to {} gray tone(s) for the {levels}-level panel",
+            stats.tones_out
+        ),
+        file: None,
+    });
+    if stats.collapsed > 0 {
+        warnings.push(Warning {
+            message: format!(
+                "the {levels}-level panel cannot keep all {} CSS colors apart; \
+                 {} of them now share a gray tone with a visibly different color",
+                stats.colors_in, stats.collapsed
+            ),
+            file: None,
+        });
+    }
+}
+
 /// Whether any element in `doc` carries a generated `et-*` helper class.
 fn doc_has_cp_class(doc: &NodeRef) -> bool {
     doc.inclusive_descendants().any(|node| {
@@ -1832,7 +2109,7 @@ mod tests {
     #[test]
     fn et_styles_is_a_fixed_point_of_the_css_filter() {
         let mut warnings = Vec::new();
-        let filtered = filter_css(ET_STYLES, "et-styles.css", &mut warnings);
+        let filtered = filter_css(ET_STYLES, "et-styles.css", false, &mut warnings);
         assert_eq!(
             filtered.css, ET_STYLES,
             "filter_css must not change et-styles.css"

@@ -79,7 +79,7 @@ pub fn transform_chapter(
         dedupe::dedupe_ids(doc, report, chapter_path);
     }
     let extracted_css = if features.relocate_styles {
-        styles::relocate_styles(doc, report, chapter_path)
+        styles::relocate_styles(doc, opts.remap_active(), report, chapter_path)
     } else {
         String::new()
     };

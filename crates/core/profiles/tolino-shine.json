@@ -14,7 +14,8 @@
   },
   "features": {
     "sanitize_css": true,
-    "chapter_split": true
+    "chapter_split": true,
+    "remap_colors": true
   },
   "options": {
     "max_chapter_kb": 500

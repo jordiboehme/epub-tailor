@@ -44,6 +44,7 @@ fn css_kitchen_filters_relocates_and_strips_fonts() {
         "fonts-stripped",
         "head-style-relocated",
         "inline-style-filtered",
+        "colors-remapped",
     ] {
         assert!(
             kinds.contains(&expected),
@@ -73,28 +74,35 @@ fn css_kitchen_filters_relocates_and_strips_fonts() {
         "the embedded font should be stripped"
     );
 
-    // Inline styles: supported declarations kept, unsupported dropped, empty
-    // attribute removed entirely.
+    // Inline styles: supported declarations kept, unsupported dropped, and
+    // colors kept but remapped to the x4 panel's gray tones (red, green and
+    // blue all read as one mid tone, and the 4-level panel folds them onto
+    // its dark-gray level, #555).
     assert!(
-        chapter.contains(r#"style="text-align:center""#),
-        "supported inline declaration should survive:\n{chapter}"
+        chapter.contains(r#"style="color:#555;text-align:center""#),
+        "inline color remapped, sibling declaration kept:\n{chapter}"
     );
     assert!(
         !chapter.contains("color:red"),
-        "unsupported inline decl dropped:\n{chapter}"
+        "no source color survives:\n{chapter}"
     );
     assert!(
-        !chapter.contains("color:blue"),
-        "all-unsupported style attr removed:\n{chapter}"
+        chapter.contains(r#"style="color:#555">Dropped inline."#),
+        "a color-only style attr survives remapped:\n{chapter}"
+    );
+    assert!(
+        !chapter.contains("font-size"),
+        "unsupported inline decl dropped:\n{chapter}"
     );
 
     // The head <style> is the only contributor, so its rules are scoped to
     // chapter 1 (`cpr1-...`). `body` becomes `body.cpr1-e-body`, `.note` becomes
     // `.cpr1-c-note`, and `.s` is dead-dropped (no `.s` element in the chapter).
+    // Its `color:green` survives the filter and comes out as the shared gray.
     let relocated = read_entry(&converted.epub, "OEBPS/et-relocated.css");
     assert_eq!(
         relocated,
-        "body.cpr1-e-body{text-align:justify}.cpr1-c-note{margin-left:2em}"
+        "body.cpr1-e-body{color:#555;text-align:justify}.cpr1-c-note{margin-left:2em}"
     );
 
     // The chapter's own elements carry the matching scope classes.
@@ -107,9 +115,12 @@ fn css_kitchen_filters_relocates_and_strips_fonts() {
         "the .note paragraph should carry the class scope class:\n{chapter}"
     );
 
-    // The external stylesheet was filtered in place.
+    // The external stylesheet was filtered in place, its color remapped.
     let ext = read_entry(&converted.epub, "OEBPS/styles/ext.css");
-    assert_eq!(ext, "p{margin:1em}.keep{text-align:center;margin-left:2em}");
+    assert_eq!(
+        ext,
+        "p{color:#555;margin:1em}.keep{text-align:center;margin-left:2em}"
+    );
 
     // Both generated/filtered sheets are declared in the regenerated manifest.
     let opf = read_entry(&converted.epub, "OEBPS/content.opf");

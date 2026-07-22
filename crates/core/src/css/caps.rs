@@ -95,7 +95,7 @@ mod tests {
             assert!(chunk.len() <= 512 || chunk.matches('}').count() == 1);
             let FilteredCss {
                 css: refiltered, ..
-            } = filter_css(chunk, "part.css", &mut Vec::new());
+            } = filter_css(chunk, "part.css", false, &mut Vec::new());
             assert_eq!(&refiltered, chunk, "a split part must refilter to itself");
         }
     }

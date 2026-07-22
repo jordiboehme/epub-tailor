@@ -174,6 +174,7 @@ declaration survives with its value intact rather than being dropped.
 | `dedupe_ids` | Remove duplicate element ids. |
 | `unicode_hygiene` | NFC-normalize text, strip XML-invalid characters. |
 | `chapter_split` | Split chapters over `options.max_chapter_kb` at heading boundaries. |
+| `remap_colors` | Remap text (CSS) and diagram (SVG) colors to perceptually spaced gray tones: each color keeps its apparent brightness while staying distinguishable on the panel's gray levels. Document colors get one solve per book, each SVG its own. Never applies on a color panel. |
 
 ## `options` - tunables
 

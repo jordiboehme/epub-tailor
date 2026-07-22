@@ -44,6 +44,10 @@ pub struct Features {
     pub unicode_hygiene: bool,
     /// Split chapters over the per-file byte cap at block boundaries.
     pub chapter_split: bool,
+    /// Remap text (CSS) and diagram (SVG) colors to perceptually spaced gray
+    /// tones on a grayscale panel. Never applies on a color panel, whatever a
+    /// profile claims (see `ConvertOptions::remap_active`).
+    pub remap_colors: bool,
 }
 
 impl Features {
@@ -72,6 +76,7 @@ impl Features {
             dedupe_ids: true,
             unicode_hygiene: true,
             chapter_split: true,
+            remap_colors: true,
         }
     }
 
@@ -94,6 +99,7 @@ impl Features {
             dedupe_ids: true,
             unicode_hygiene: true,
             chapter_split: false,
+            remap_colors: false,
         }
     }
 }
@@ -118,6 +124,7 @@ pub(crate) struct RawFeatures {
     pub dedupe_ids: Option<bool>,
     pub unicode_hygiene: Option<bool>,
     pub chapter_split: Option<bool>,
+    pub remap_colors: Option<bool>,
 }
 
 impl RawFeatures {
@@ -144,6 +151,7 @@ impl RawFeatures {
             dedupe_ids,
             unicode_hygiene,
             chapter_split,
+            remap_colors,
         );
     }
 }

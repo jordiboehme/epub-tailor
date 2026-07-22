@@ -55,6 +55,16 @@ pub struct CoverImage {
     pub file_name: String,
 }
 
+impl ConvertOptions {
+    /// Whether the gray-tone remap runs for these options: the profile enables
+    /// it AND the panel is grayscale. The panel guard is here, not in the
+    /// profiles, so a hand-written profile claiming `remap_colors` on a color
+    /// panel still converts colors to nothing but colors.
+    pub(crate) fn remap_active(&self) -> bool {
+        self.features.remap_colors && !self.device.panel.is_color()
+    }
+}
+
 impl Default for ConvertOptions {
     fn default() -> Self {
         ConvertOptions {
@@ -115,6 +125,23 @@ mod tests {
         assert_eq!(opts.split_level, 1);
         assert!(!opts.dry_run);
         assert!(opts.output_stamp.is_none());
+    }
+
+    #[test]
+    fn remap_is_active_on_gray_panels_only() {
+        let opts = ConvertOptions::default();
+        assert!(opts.remap_active(), "the x4 default is a gray panel");
+
+        let mut color = ConvertOptions::default();
+        color.device.panel = crate::profile::caps::Panel::Color;
+        assert!(
+            !color.remap_active(),
+            "a color panel never remaps, whatever the profile claims"
+        );
+
+        let mut off = ConvertOptions::default();
+        off.features.remap_colors = false;
+        assert!(!off.remap_active());
     }
 
     #[test]
