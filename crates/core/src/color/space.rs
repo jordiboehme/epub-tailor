@@ -101,13 +101,20 @@ pub(crate) fn rgb_to_lch(rgb: Rgb8) -> Lch {
     let b = 200.0 * (fy - fz);
 
     let c = (a * a + b * b).sqrt();
-    let h_deg = if c < 1e-4 {
-        // Hue is undefined for a (near-)neutral; pin it so exact grays are
-        // bit-stable through the pipeline.
-        0.0
-    } else {
-        b.atan2(a).to_degrees().rem_euclid(360.0)
-    };
+    // Sub-noise chroma IS an exact neutral: the sRGB matrix rows do not sum
+    // to exactly 1.0 in f32, so a pure gray picks up ~1e-6 of chroma whose
+    // survival depends on the platform's rounding (x86 keeps it, ARM happens
+    // to cancel it). The nearest real color on the u8 grid is ~0.3 C* away,
+    // so anything below 1e-4 is float noise - snap it (and the then-undefined
+    // hue) to zero so neutrals are exact fixed points everywhere.
+    if c < 1e-4 {
+        return Lch {
+            l,
+            c: 0.0,
+            h_deg: 0.0,
+        };
+    }
+    let h_deg = b.atan2(a).to_degrees().rem_euclid(360.0);
     Lch { l, c, h_deg }
 }
 
