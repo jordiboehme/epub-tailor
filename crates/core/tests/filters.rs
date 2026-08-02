@@ -11,24 +11,7 @@ use epub_tailor_core::profile::{DeviceCaps, Features};
 use epub_tailor_core::{ConvertOptions, Input, convert};
 use zip::ZipArchive;
 
-const CONTAINER_XML: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
-<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
-  <rootfiles>
-    <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
-  </rootfiles>
-</container>"#;
-
-const NAV_XHTML: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
-<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
-<head><title>Nav</title></head>
-<body>
-<nav epub:type="toc">
-<ol>
-<li><a href="chapter.xhtml">InventedWatermark.example Chapter</a></li>
-</ol>
-</nav>
-</body>
-</html>"#;
+use common::{CONTAINER_XML, NAV_XHTML};
 
 /// A one-chapter book whose chapter body is `body`, with a watermarked title
 /// and TOC entry.

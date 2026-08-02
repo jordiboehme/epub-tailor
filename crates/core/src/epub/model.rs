@@ -28,6 +28,9 @@ pub struct Book {
     pub nav_path: Option<String>,
     /// Zip path of the EPUB2 NCX document, if present.
     pub ncx_path: Option<String>,
+    /// What `META-INF/encryption.xml` declared, if the book carried one.
+    /// `None` when there was no such file (the common case).
+    pub encryption_class: Option<crate::epub::read::EncryptionClass>,
 }
 
 /// Book-level metadata: everything the OPF `<metadata>` element carries, or

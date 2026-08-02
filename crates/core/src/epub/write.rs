@@ -738,6 +738,7 @@ mod tests {
             opf_path,
             nav_path: None,
             ncx_path: None,
+            encryption_class: None,
         };
         let bytes = write_epub(&book, stamp, stamp_profile, None).expect("write should succeed");
 

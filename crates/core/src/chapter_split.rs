@@ -612,6 +612,7 @@ mod tests {
             opf_path: "content.opf".to_string(),
             nav_path: None,
             ncx_path: None,
+            encryption_class: None,
         };
         let chapters = vec![
             ("text/a.xhtml".to_string(), doc_with_body("A", ch_a_body)),
