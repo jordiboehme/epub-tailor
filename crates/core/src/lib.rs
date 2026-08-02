@@ -579,6 +579,10 @@ pub fn convert(input: Input, opts: &ConvertOptions) -> Result<Converted, Convert
         generic::identity::normalize(&mut book, &mut transformations);
     }
 
+    if opts.features.strip_media_metadata {
+        generic::media::strip(&mut book, &mut transformations);
+    }
+
     // The writer regenerates the OPF, nav document and NCX from
     // `book.metadata` and `book.toc`, which chapter-text hygiene never sees -
     // normalize them under the same feature, or a decomposed TOC title keeps

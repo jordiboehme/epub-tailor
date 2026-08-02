@@ -56,6 +56,65 @@ pub fn build_epub(entries: &[(&str, &[u8])]) -> Vec<u8> {
     writer.finish().expect("finish zip").into_inner()
 }
 
+/// Extension-based media type guess for [`book_with_image`]'s embedded raster.
+fn guess_media_type(path: &str) -> &'static str {
+    if path.to_ascii_lowercase().ends_with(".png") {
+        "image/png"
+    } else {
+        "image/jpeg"
+    }
+}
+
+/// A minimal EPUB3 book whose single chapter embeds one raster image at
+/// `path` (a zip-relative path under `OEBPS/`, e.g. `"OEBPS/pic.jpg"`) with
+/// the given bytes: the manifest lists it and the chapter's `<img src>`
+/// points at it, so the fixture stays structurally valid (manifest, spine and
+/// nav href all agree). Used by the media-metadata-stripping tests, which
+/// supply their own hand-built image bytes.
+pub fn book_with_image(path: &str, data: &[u8]) -> Vec<u8> {
+    let href = path.strip_prefix("OEBPS/").unwrap_or(path);
+    let media_type = guess_media_type(path);
+    let content_opf = format!(
+        r##"<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="pub-id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="pub-id">urn:uuid:6a3d1b10-2222-4444-8888-abcdefabcdef</dc:identifier>
+    <dc:title>Book</dc:title>
+    <dc:language>en</dc:language>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="ch" href="chapter.xhtml" media-type="application/xhtml+xml"/>
+    <item id="img" href="{href}" media-type="{media_type}"/>
+  </manifest>
+  <spine><itemref idref="ch"/></spine>
+</package>"##
+    );
+    let chapter = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>C</title></head>
+<body><p>Text.</p><img src="{href}"/></body></html>"#
+    );
+    build_epub(&[
+        ("mimetype", b"application/epub+zip"),
+        ("META-INF/container.xml", CONTAINER_XML),
+        ("OEBPS/content.opf", content_opf.as_bytes()),
+        ("OEBPS/nav.xhtml", NAV_XHTML),
+        ("OEBPS/chapter.xhtml", chapter.as_bytes()),
+        (path, data),
+    ])
+}
+
+/// Read one zip entry's raw bytes by name, if present.
+pub fn entry(epub: &[u8], name: &str) -> Option<Vec<u8>> {
+    use std::io::Read;
+    let mut zip = zip::ZipArchive::new(Cursor::new(epub)).ok()?;
+    let mut file = zip.by_name(name).ok()?;
+    let mut buf = Vec::new();
+    file.read_to_end(&mut buf).ok()?;
+    Some(buf)
+}
+
 /// A minimal, well-formed EPUB3 book: two chapters, a nav doc with a nested
 /// table of contents (to exercise TOC levels), one stylesheet, one cover
 /// image referenced both via `meta[name=cover]` and `properties=cover-image`.
