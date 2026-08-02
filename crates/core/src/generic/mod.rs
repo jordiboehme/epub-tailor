@@ -6,4 +6,5 @@
 //! between copies; anything shared by every copy is left alone.
 
 pub(crate) mod identity;
+pub mod invisible;
 pub(crate) mod media;

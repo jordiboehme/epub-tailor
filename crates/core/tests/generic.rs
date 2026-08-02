@@ -2,6 +2,7 @@
 
 mod common;
 
+use epub_tailor_core::generic::invisible::scrub;
 use epub_tailor_core::profile::resolve;
 use epub_tailor_core::{ConvertOptions, Input, convert};
 
@@ -146,4 +147,46 @@ fn generic_strips_exif_but_keeps_the_pixels() {
     );
     assert_eq!(&stored[..2], &[0xFF, 0xD8], "still a JPEG");
     assert!(stored.ends_with(&[0xFF, 0xD9]), "still terminated");
+}
+
+#[test]
+fn scrub_removes_the_unconditional_invisibles() {
+    let (out, n) = scrub("He\u{200B}llo\u{2060} world\u{FEFF}!");
+    assert_eq!(out, "Hello world!");
+    assert_eq!(n, 3);
+}
+
+#[test]
+fn scrub_keeps_zwnj_where_the_script_needs_it() {
+    // Persian: ZWNJ between two Arabic-script letters is meaningful.
+    let persian = "\u{0645}\u{06CC}\u{200C}\u{062E}\u{0648}\u{0627}\u{0645}";
+    let (out, n) = scrub(persian);
+    assert_eq!(out, persian, "Persian ZWNJ must survive");
+    assert_eq!(n, 0);
+}
+
+#[test]
+fn scrub_keeps_zwj_inside_emoji_sequences() {
+    let family = "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}";
+    let (out, n) = scrub(family);
+    assert_eq!(out, family, "emoji ZWJ sequences must survive");
+    assert_eq!(n, 0);
+}
+
+#[test]
+fn scrub_removes_zwnj_between_latin_letters() {
+    // Latin has no use for ZWNJ: here it can only be a fingerprint.
+    let (out, n) = scrub("wa\u{200C}termark");
+    assert_eq!(out, "watermark");
+    assert_eq!(n, 1);
+}
+
+#[test]
+fn scrub_keeps_bidi_marks() {
+    let (out, n) = scrub("a\u{200E}b\u{200F}c");
+    assert_eq!(
+        out, "a\u{200E}b\u{200F}c",
+        "bidi marks are layout, not marks"
+    );
+    assert_eq!(n, 0);
 }

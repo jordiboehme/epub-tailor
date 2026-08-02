@@ -20,7 +20,7 @@ pub mod css;
 pub mod epub;
 pub mod error;
 pub mod filter;
-mod generic;
+pub mod generic;
 pub mod html;
 pub mod image;
 pub mod markdown;
@@ -309,6 +309,13 @@ pub fn convert(input: Input, opts: &ConvertOptions) -> Result<Converted, Convert
     // raster (svg -> intermediate payload -> raster-pass rename).
     let renames = compose_renames(&svg_renames, &image_renames);
     let mut images_processed = images_processed + svg_rasterized;
+
+    // Script-aware invisible-character removal runs before any chapter is
+    // parsed into a DOM, so the cleaned text - not the fingerprinted original -
+    // flows through every transform that follows.
+    if opts.features.strip_invisible_chars {
+        generic::invisible::scrub_book(&mut book, &mut transformations);
+    }
 
     // Phase 1: transform every spine chapter, collecting per-chapter anchor
     // aliases into one book-wide map and each chapter's lifted `<style>` CSS.
