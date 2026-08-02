@@ -586,6 +586,9 @@ pub fn convert(input: Input, opts: &ConvertOptions) -> Result<Converted, Convert
         &book,
         opts.output_stamp.as_deref(),
         opts.output_profile.as_deref(),
+        opts.features
+            .normalize_identity
+            .then_some(crate::epub::write::GENERIC_MODIFIED),
     )?;
     let bytes_out = epub.len() as u64;
 

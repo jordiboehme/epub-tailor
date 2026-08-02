@@ -18,6 +18,12 @@ use crate::epub::model::{Book, Creator, Metadata, TocEntry};
 use crate::error::ConvertError;
 use crate::html::escape::{escape_attr, escape_text};
 
+/// The `dcterms:modified` value the generic profile pins, so two copies of the
+/// same edition converge. EPUB 3 requires the field, so it cannot be omitted;
+/// a fixed epoch is the only value that converges even when the vendor stamped
+/// the source field per copy.
+pub const GENERIC_MODIFIED: &str = "1970-01-01T00:00:00Z";
+
 /// Serialize a [`Book`] as a complete EPUB archive.
 ///
 /// The OPF, navigation document and NCX are regenerated (the corresponding
@@ -29,7 +35,9 @@ use crate::html::escape::{escape_attr, escape_text};
 /// `<meta property="tailor:fitted">` (with its prefix declaration); `None`
 /// leaves the OPF byte-identical to an unstamped write. `stamp_profile` names
 /// the profile behind the stamp as a sibling `<meta property="tailor:profile">`;
-/// it is ignored without a `stamp`.
+/// it is ignored without a `stamp`. `fixed_modified` overrides the
+/// `dcterms:modified` value with a caller-supplied string instead of the
+/// current wall-clock time; `None` stamps `now_utc_iso8601()` as before.
 ///
 /// # Errors
 /// Returns [`ConvertError::Io`] if a template fails to render or a ZIP entry
@@ -38,6 +46,7 @@ pub fn write_epub(
     book: &Book,
     stamp: Option<&str>,
     stamp_profile: Option<&str>,
+    fixed_modified: Option<&str>,
 ) -> Result<Vec<u8>, ConvertError> {
     let opf_dir = parent_dir(&book.opf_path);
     let nav_path = book
@@ -172,7 +181,9 @@ pub fn write_epub(
         rights: meta.rights.clone().unwrap_or_default(),
         series: series.name,
         series_index: series.index.unwrap_or_default(),
-        modified: now_utc_iso8601(),
+        modified: fixed_modified
+            .map(str::to_string)
+            .unwrap_or_else(now_utc_iso8601),
         stamp: stamp.unwrap_or_default().to_string(),
         stamp_profile: stamp.and(stamp_profile).unwrap_or_default().to_string(),
         cover_id,
@@ -728,7 +739,7 @@ mod tests {
             nav_path: None,
             ncx_path: None,
         };
-        let bytes = write_epub(&book, stamp, stamp_profile).expect("write should succeed");
+        let bytes = write_epub(&book, stamp, stamp_profile, None).expect("write should succeed");
 
         let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).expect("output is a valid zip");
         let mut opf = String::new();
