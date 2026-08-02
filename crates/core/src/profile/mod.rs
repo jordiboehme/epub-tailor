@@ -42,6 +42,7 @@ use features::RawFeatures;
 pub const DEFAULT_APPENDIX: &str = "tailored";
 
 const EPUB_JSON: &str = include_str!("../../profiles/epub.json");
+const GENERIC_JSON: &str = include_str!("../../profiles/generic.json");
 const X4_JSON: &str = include_str!("../../profiles/x4.json");
 const X3_JSON: &str = include_str!("../../profiles/x3.json");
 
@@ -97,6 +98,15 @@ const BUILTINS: &[Builtin] = &[
         name: "epub",
         aliases: &["default"],
         layers: &[EPUB_JSON],
+    },
+    // A modifier, not a device. It layers alone - never over EPUB_JSON, whose
+    // explicit `false`s would switch off the device transforms of any layer
+    // beneath it - and defines no appendix or caps, so `x4,generic` and
+    // `generic,x4` resolve identically.
+    Builtin {
+        name: "generic",
+        aliases: &[],
+        layers: &[GENERIC_JSON],
     },
     // The Xteink readers are their own world: a microcontroller-class renderer
     // that needs every downgrade the pipeline has. They do not share the

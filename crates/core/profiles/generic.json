@@ -1,0 +1,10 @@
+{
+  "name": "generic",
+  "description": "Strip per-copy vendor watermarks and unreferenced files - composes on top of any device profile",
+  "features": {
+    "strip_media_metadata": true,
+    "strip_invisible_chars": true,
+    "normalize_identity": true,
+    "drop_unreferenced": true
+  }
+}

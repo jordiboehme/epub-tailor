@@ -48,6 +48,17 @@ pub struct Features {
     /// tones on a grayscale panel. Never applies on a color panel, whatever a
     /// profile claims (see `ConvertOptions::remap_active`).
     pub remap_colors: bool,
+    /// Strip EXIF/XMP/IPTC metadata from raster images and editor metadata
+    /// from SVG, losslessly - container surgery, never a re-encode.
+    pub strip_media_metadata: bool,
+    /// Remove invisible characters used for per-copy text fingerprinting,
+    /// script-aware so ZWNJ/ZWJ survive where the writing system needs them.
+    pub strip_invisible_chars: bool,
+    /// Replace per-copy identity in the package document with deterministic
+    /// values: a fixed `dcterms:modified` and vendor identifiers dropped.
+    pub normalize_identity: bool,
+    /// Drop resources nothing in the book references.
+    pub drop_unreferenced: bool,
 }
 
 impl Features {
@@ -77,6 +88,10 @@ impl Features {
             unicode_hygiene: true,
             chapter_split: true,
             remap_colors: true,
+            strip_media_metadata: false,
+            strip_invisible_chars: false,
+            normalize_identity: false,
+            drop_unreferenced: false,
         }
     }
 
@@ -100,6 +115,10 @@ impl Features {
             unicode_hygiene: true,
             chapter_split: false,
             remap_colors: false,
+            strip_media_metadata: false,
+            strip_invisible_chars: false,
+            normalize_identity: false,
+            drop_unreferenced: false,
         }
     }
 }
@@ -125,6 +144,10 @@ pub(crate) struct RawFeatures {
     pub unicode_hygiene: Option<bool>,
     pub chapter_split: Option<bool>,
     pub remap_colors: Option<bool>,
+    pub strip_media_metadata: Option<bool>,
+    pub strip_invisible_chars: Option<bool>,
+    pub normalize_identity: Option<bool>,
+    pub drop_unreferenced: Option<bool>,
 }
 
 impl RawFeatures {
@@ -152,6 +175,10 @@ impl RawFeatures {
             unicode_hygiene,
             chapter_split,
             remap_colors,
+            strip_media_metadata,
+            strip_invisible_chars,
+            normalize_identity,
+            drop_unreferenced,
         );
     }
 }

@@ -112,6 +112,7 @@ fn builtins_lists_every_shipped_profile() {
         names,
         vec![
             "epub",
+            "generic",
             "x4",
             "x3",
             "nomad",
@@ -149,7 +150,10 @@ fn every_builtin_names_itself_and_its_own_appendix() {
     for profile in builtins() {
         let resolved = resolve_specs(&[&profile.name]).expect("built-in resolves by its own name");
         assert_eq!(resolved.name, profile.name);
-        if profile.name != "epub" {
+        // Only these two are device-neutral, so only these two are exempt from
+        // the appendix check below: every actual device must still name its
+        // own output file, or this test must fail.
+        if profile.name != "epub" && profile.name != "generic" {
             assert_eq!(
                 resolved.appendix.as_deref(),
                 Some(profile.name.as_str()),
@@ -447,4 +451,46 @@ fn filter_rules_parse_targets_with_text_default() {
     assert_eq!(rule.action, FilterAction::Remove);
     assert!(rule.targets_text());
     assert!(!rule.targets_href());
+}
+
+#[test]
+fn generic_enables_the_de_marking_features_and_nothing_else() {
+    let p = epub_tailor_core::profile::resolve(&["generic".to_string()]).expect("resolves");
+    assert!(p.features.strip_media_metadata);
+    assert!(p.features.strip_invisible_chars);
+    assert!(p.features.normalize_identity);
+    assert!(p.features.drop_unreferenced);
+    // A modifier, not a device: it must not turn on any device transform.
+    assert!(!p.features.transcode_images, "generic is device-neutral");
+    assert!(!p.features.strip_fonts, "generic is device-neutral");
+    // No appendix and no device caps, so it composes in either order.
+    assert!(p.appendix.is_none(), "generic must not rename the output");
+    // The permissive baseline `base_profile()` starts from, unchanged: a
+    // modifier must not impose a device.
+    assert_eq!(
+        p.caps,
+        DeviceCaps::permissive(),
+        "generic must not impose a screen"
+    );
+}
+
+#[test]
+fn generic_composes_with_a_device_profile_in_either_order() {
+    let a = epub_tailor_core::profile::resolve(&["x4".to_string(), "generic".to_string()])
+        .expect("resolves");
+    let b = epub_tailor_core::profile::resolve(&["generic".to_string(), "x4".to_string()])
+        .expect("resolves");
+    assert_eq!(a.features, b.features, "order must not change features");
+    assert_eq!(
+        a.appendix, b.appendix,
+        "order must not change the output name"
+    );
+    assert_eq!(a.caps, b.caps, "order must not change the device");
+    assert_eq!(
+        a.appendix.as_deref(),
+        Some("x4"),
+        "the device names the file"
+    );
+    assert!(a.features.transcode_images, "the device layer survives");
+    assert!(a.features.normalize_identity, "the generic layer survives");
 }
