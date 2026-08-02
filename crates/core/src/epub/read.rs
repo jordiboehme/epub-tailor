@@ -55,7 +55,7 @@ pub fn read_epub(bytes: &[u8]) -> Result<ReadEpub, ConvertError> {
     let mut archive = ZipArchive::new(Cursor::new(bytes))
         .map_err(|e| ConvertError::InvalidEpub(format!("not a valid ZIP archive: {e}")))?;
 
-    let encryption_class = check_drm(&mut archive, &mut warnings)?;
+    check_drm(&mut archive, &mut warnings)?;
     check_zip64(&mut archive)?;
 
     let ArchiveEntries {
@@ -175,7 +175,6 @@ pub fn read_epub(bytes: &[u8]) -> Result<ReadEpub, ConvertError> {
         opf_path,
         nav_path: parsed_opf.nav_path,
         ncx_path: parsed_opf.ncx_path,
-        encryption_class,
     };
 
     Ok(ReadEpub { book, warnings })
@@ -188,8 +187,7 @@ pub fn read_epub(bytes: &[u8]) -> Result<ReadEpub, ConvertError> {
 /// What `META-INF/encryption.xml` declares, once at least one `EncryptedData`
 /// entry is present (an absent file is not represented here; callers check
 /// presence first).
-#[derive(Debug, Clone, Copy)]
-pub enum EncryptionClass {
+pub(crate) enum EncryptionClass {
     /// Every `EncryptedData` entry uses a font-obfuscation algorithm: not
     /// DRM (the fonts are stripped anyway, so de-obfuscating them would be
     /// pointless work), but worth a nod since the book does carry the file.
@@ -230,13 +228,10 @@ pub(crate) fn classify_encryption_xml(text: &str) -> Result<EncryptionClass, Con
     }
 }
 
-/// Check for DRM and, when `META-INF/encryption.xml` is present but not DRM
-/// (font obfuscation only), report its [`EncryptionClass`] so callers can
-/// stash it on the [`Book`]. `Ok(None)` means there was no such file.
 fn check_drm<R: Read + Seek>(
     archive: &mut ZipArchive<R>,
     warnings: &mut Vec<Warning>,
-) -> Result<Option<EncryptionClass>, ConvertError> {
+) -> Result<(), ConvertError> {
     let mut enc_bytes = Vec::new();
     match archive.by_name("META-INF/encryption.xml") {
         Ok(mut file) => {
@@ -244,7 +239,7 @@ fn check_drm<R: Read + Seek>(
                 ConvertError::InvalidEpub(format!("could not read META-INF/encryption.xml: {e}"))
             })?;
         }
-        Err(zip::result::ZipError::FileNotFound) => return Ok(None),
+        Err(zip::result::ZipError::FileNotFound) => return Ok(()),
         Err(e) => {
             return Err(ConvertError::InvalidEpub(format!(
                 "could not read META-INF/encryption.xml: {e}"
@@ -262,7 +257,7 @@ fn check_drm<R: Read + Seek>(
                     .to_string(),
                 file: None,
             });
-            Ok(Some(EncryptionClass::FontObfuscationOnly))
+            Ok(())
         }
     }
 }

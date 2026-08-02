@@ -576,11 +576,7 @@ pub fn convert(input: Input, opts: &ConvertOptions) -> Result<Converted, Convert
     // Identity normalization runs late, after every content transform, so the
     // metadata it inspects is final.
     if opts.features.normalize_identity {
-        let obfuscated = matches!(
-            book.encryption_class,
-            Some(crate::epub::read::EncryptionClass::FontObfuscationOnly)
-        ) && !opts.features.strip_fonts;
-        generic::identity::normalize(&mut book, obfuscated, &mut transformations, &mut warnings);
+        generic::identity::normalize(&mut book, &mut transformations);
     }
 
     // The writer regenerates the OPF, nav document and NCX from
@@ -1936,7 +1932,6 @@ mod tests {
             opf_path: "OEBPS/content.opf".to_string(),
             nav_path: None,
             ncx_path: None,
-            encryption_class: None,
         }
     }
 
@@ -2168,7 +2163,6 @@ mod tests {
             opf_path: "content.opf".to_string(),
             nav_path: None,
             ncx_path: None,
-            encryption_class: None,
         };
 
         let opts = ConvertOptions {

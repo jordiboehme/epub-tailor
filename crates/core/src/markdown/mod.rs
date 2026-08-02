@@ -179,7 +179,6 @@ pub fn build_book(
         opf_path,
         nav_path: None,
         ncx_path: None,
-        encryption_class: None,
     };
 
     Ok((book, warnings))
