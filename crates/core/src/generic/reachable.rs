@@ -732,11 +732,13 @@ mod tests {
     }
 
     #[test]
-    fn an_unterminated_trailing_url_does_not_panic_or_lose_earlier_matches() {
+    fn an_unterminated_trailing_url_does_not_lose_the_earlier_match() {
         // The `url(` that opens here never closes anywhere in the rest of the
         // string (it is the last thing in the sheet) - the old code's `else
         // { break }` on this exact shape aborted the whole scan; it must not
-        // take the already-collected earlier match down with it.
+        // take the already-collected earlier match down with it. Only the
+        // trailing-unterminated shape is covered here; nothing in this test
+        // exercises a panic path at all.
         let refs = css_refs(
             "a { background: url(good.png); } b { background: url(unterminated",
             "OEBPS",
