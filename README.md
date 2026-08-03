@@ -154,7 +154,7 @@ Reruns are idempotent, three ways. Every book `fit` produces carries an invisibl
 
 ## Profiles
 
-A profile is a JSON file bundling device capabilities, feature switches, tunables, an output filename appendix and content filter rules. Twenty-seven ship built in, one per device we have actually researched. Output lands as `book.<profile>.epub`.
+A profile is a JSON file bundling device capabilities, feature switches, tunables, an output filename appendix and content filter rules. Twenty-eight ship built in: one per device we have actually researched, plus `epub` and `generic`. Output lands as `book.<profile>.epub`.
 
 | Name   | Screen  | Panel | What it is |
 |--------|---------|-------|------------|

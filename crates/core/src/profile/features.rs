@@ -48,8 +48,8 @@ pub struct Features {
     /// tones on a grayscale panel. Never applies on a color panel, whatever a
     /// profile claims (see `ConvertOptions::remap_active`).
     pub remap_colors: bool,
-    /// Strip EXIF/XMP/IPTC metadata from raster images and editor metadata
-    /// from SVG, losslessly - container surgery, never a re-encode.
+    /// Strip EXIF/XMP/IPTC metadata from JPEG and PNG images, losslessly -
+    /// container surgery, never a re-encode.
     pub strip_media_metadata: bool,
     /// Remove invisible characters used for per-copy text fingerprinting,
     /// script-aware so ZWNJ/ZWJ survive where the writing system needs them.

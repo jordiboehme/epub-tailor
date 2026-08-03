@@ -246,9 +246,10 @@ should tailor to byte-identical output. What each switch removes:
   profiles are kept on purpose - dropping one changes how the image renders.
 - **Invisible characters.** Zero-width fingerprinting characters are removed
   from parsed text nodes, book metadata and TOC titles. This is script-aware:
-  `U+200C` and `U+200D` are semantically required in Persian, Arabic, Hebrew
-  and the Indic scripts, and also join emoji sequences, so they are kept
-  wherever the surrounding text needs them rather than stripped everywhere.
+  `U+200C` and `U+200D` are semantically required in scripts including
+  Persian, Arabic, Hebrew, Syriac, Thai, Tibetan, Khmer and the Indic family,
+  and also join emoji sequences, so they are kept wherever the surrounding
+  text needs them rather than stripped everywhere.
 - **Identity.** `dcterms:modified` is pinned to a fixed
   `1970-01-01T00:00:00Z`, regardless of what the source file carried.
   Additional per-copy `dc:identifier` values are dropped outright. If the
