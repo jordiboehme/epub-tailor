@@ -898,9 +898,18 @@ fn write_output(path: &Path, data: &[u8], in_place: bool) -> std::io::Result<()>
     Ok(())
 }
 
+/// Transformation kinds that name a single dropped file's evidence rather
+/// than a repeatable class of change: collapsing them into a per-kind count
+/// (like every other transformation) would throw away the filename and the
+/// payload preview - the whole point of reporting them per-file in the first
+/// place (see `epub_tailor_core::epub::read`'s `meta_inf_preview`). Printed
+/// as their own lines in [`print_human_report`] instead.
+const UNCOUNTED_TRANSFORMATION_KINDS: &[&str] = &["meta-inf-dropped"];
+
 /// Human report for a conversion, in three sections: "Transformed" (counts
-/// per transformation kind), "Warnings" (one line each) and "Stats"
-/// (aligned counters).
+/// per transformation kind, except [`UNCOUNTED_TRANSFORMATION_KINDS`], which
+/// print their file and detail individually), "Warnings" (one line each) and
+/// "Stats" (aligned counters).
 fn print_human_report(converted: &Converted, output_path: &Path, dry_run: bool) {
     let report = &converted.report;
     if dry_run {
@@ -914,8 +923,13 @@ fn print_human_report(converted: &Converted, output_path: &Path, dry_run: bool) 
     if report.transformations.is_empty() {
         println!("  nothing");
     } else {
+        let (uncounted, counted): (Vec<_>, Vec<_>) = report
+            .transformations
+            .iter()
+            .partition(|t| UNCOUNTED_TRANSFORMATION_KINDS.contains(&t.kind.as_str()));
+
         let mut counts: Vec<(&str, usize)> = Vec::new();
-        for t in &report.transformations {
+        for t in &counted {
             match counts.iter_mut().find(|(kind, _)| *kind == t.kind) {
                 Some((_, n)) => *n += 1,
                 None => counts.push((&t.kind, 1)),
@@ -924,6 +938,12 @@ fn print_human_report(converted: &Converted, output_path: &Path, dry_run: bool) 
         let width = counts.iter().map(|(kind, _)| kind.len()).max().unwrap_or(0);
         for (kind, n) in &counts {
             println!("  {kind:<width$}  {n:>4}");
+        }
+        for t in &uncounted {
+            match &t.file {
+                Some(file) => println!("  - [{file}] {}", t.detail),
+                None => println!("  - {}", t.detail),
+            }
         }
     }
     println!();

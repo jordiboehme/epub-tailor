@@ -2,7 +2,7 @@ mod common;
 
 use std::path::{Path, PathBuf};
 
-use common::{bin, book_in, temp_dir};
+use common::{bin, book_in, book_with_meta_inf_in, temp_dir};
 
 /// A real, tiny, valid baseline JPEG (same fixture style as the core tests).
 const TINY_JPEG: &[u8] = &[
@@ -862,6 +862,45 @@ fn check_human_report_has_a_one_line_summary() {
     assert!(
         stdout.contains("0 error(s)"),
         "expected a one-line summary, got:\n{stdout}"
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// The default (human) report must name the dropped META-INF file and show
+/// its payload, not just roll it into a count: a marker file is the whole
+/// answer to "was my copy marked?", and that answer must not require
+/// `--report json` to see.
+#[test]
+fn default_human_report_names_a_dropped_meta_inf_file_and_its_payload() {
+    let dir = temp_dir("meta-inf-human");
+    let book = book_with_meta_inf_in(&dir, "marked", "META-INF/cdp.info", "SHTX001.635962014");
+    let out = dir.join("marked.tailored.epub");
+
+    let output = bin()
+        .args([
+            "fit",
+            book.to_str().unwrap(),
+            "--profile",
+            "generic",
+            "-o",
+            out.to_str().unwrap(),
+        ])
+        .output()
+        .expect("failed to run binary");
+    assert!(
+        output.status.success(),
+        "fit failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("META-INF/cdp.info"),
+        "the default report must name the dropped file, got:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("SHTX001.635962014"),
+        "the default report must show the payload, not just a count, got:\n{stdout}"
     );
 
     std::fs::remove_dir_all(&dir).ok();

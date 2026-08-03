@@ -461,7 +461,8 @@ fn two_marked_copies_converge_to_identical_bytes() {
         exif_payload: "BUYER-A",
         invisible_payload: "\u{200B}\u{200B}\u{200C}",
         vendor_identifier: "urn:uuid:6f2a1e40-8c31-4b7e-9a55-1d0c2f9b7e31",
-        stray_file: Some(("OEBPS/a-marker.txt", "A")),
+        // One stray, mid-archive.
+        strays: vec![("OEBPS/nav.xhtml", "OEBPS/a-marker.txt", "A")],
         zip_epoch: 2026,
     });
     let copy_b = common::marked_copy(common::CopyMarks {
@@ -470,15 +471,63 @@ fn two_marked_copies_converge_to_identical_bytes() {
         exif_payload: "BUYER-B",
         invisible_payload: "\u{2060}\u{200B}",
         vendor_identifier: "urn:uuid:11111111-2222-3333-4444-555555555555",
-        stray_file: Some(("OEBPS/b-marker.txt", "B")),
+        // A DIFFERENT count (two, not one) at DIFFERENT positions - one
+        // right after the dropped META-INF file (so it lands first among
+        // surviving resources), one after the image (so it lands last).
+        // A single trailing stray in the same slot for both copies (the
+        // original shape of this test) is exactly the position where
+        // `IndexMap::swap_remove` and `shift_remove` are indistinguishable -
+        // mutation testing proved that shape leaves the ordering hazard
+        // `generic::reachable::prune` depends on (order-preserving removal)
+        // completely unexercised. This shape catches it: see
+        // `common::CopyMarks::strays`.
+        strays: vec![
+            ("META-INF/cdp.info", "OEBPS/b-marker-1.txt", "B1"),
+            ("OEBPS/pic.jpg", "OEBPS/b-marker-2.txt", "B2"),
+        ],
         zip_epoch: 2019,
     });
     assert_ne!(copy_a, copy_b, "the fixtures must actually differ");
+
+    // Guard against a fixture regression that would make the whole test
+    // vacuous by accident: each per-copy channel's raw input bytes must
+    // actually differ between the two copies, not just the archive as a
+    // whole (which could pass this check with six of seven channels
+    // accidentally identical).
+    assert_ne!(
+        common::entry(&copy_a, "OEBPS/content.opf"),
+        common::entry(&copy_b, "OEBPS/content.opf"),
+        "the two OPFs must differ (dcterms:modified and the vendor identifier)"
+    );
+    assert_ne!(
+        common::entry(&copy_a, "OEBPS/chapter.xhtml"),
+        common::entry(&copy_b, "OEBPS/chapter.xhtml"),
+        "the two chapters must differ (the invisible-character payload)"
+    );
+    assert_ne!(
+        common::entry(&copy_a, "OEBPS/pic.jpg"),
+        common::entry(&copy_b, "OEBPS/pic.jpg"),
+        "the two JPEGs must differ (the EXIF payload)"
+    );
+    assert_ne!(
+        common::entry(&copy_a, "META-INF/cdp.info"),
+        common::entry(&copy_b, "META-INF/cdp.info"),
+        "the two cdp.info blobs must differ"
+    );
 
     let a = convert(Input::Epub(copy_a), &opts_for(&["generic"])).expect("converts");
     let b = convert(Input::Epub(copy_b), &opts_for(&["generic"])).expect("converts");
     assert_eq!(
         a.epub, b.epub,
         "two copies of one edition must strip to identical bytes"
+    );
+    // The `modified` channel (see `CopyMarks` docs) does not reach the model
+    // at all, so it cannot make the assertion above catch a regression on
+    // its own - assert directly that the two differing per-copy values
+    // converged on the pinned epoch in the actual output.
+    assert!(
+        opf_of(&a.epub).contains("<meta property=\"dcterms:modified\">1970-01-01T00:00:00Z</meta>"),
+        "the differing per-copy dcterms:modified values must converge on the pinned epoch:\n{}",
+        opf_of(&a.epub)
     );
 }

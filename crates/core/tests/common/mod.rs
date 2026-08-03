@@ -243,19 +243,45 @@ pub fn book_with_meta_inf(path: &str, data: &[u8]) -> Vec<u8> {
     ])
 }
 
-/// The seven per-copy marker channels a shop can use to fingerprint an
-/// individual sale of the same edition: a META-INF transaction-id file, the
+/// The per-copy marker channels a shop can use to fingerprint an individual
+/// sale of the same edition: a META-INF transaction-id file, the
 /// `dcterms:modified` timestamp, a JPEG EXIF payload, a payload of invisible
 /// (zero-width) characters embedded in chapter prose, a per-copy `dc:identifier`
-/// (the classic "vendor UUID"), an optional stray unreferenced file, and the
-/// zip entry timestamps themselves. See [`marked_copy`].
+/// (the classic "vendor UUID"), any number of stray unreferenced files
+/// (see `strays`), and the zip entry timestamps themselves. See [`marked_copy`].
+///
+/// `modified` deliberately reaches nothing: `read_epub` never parses
+/// `dcterms:modified` into the `Book` model at all (the writer pins the
+/// output value directly from `Features::normalize_identity`, not from
+/// anything read back), so this field cannot itself make the convergence
+/// test catch a regression. It stays here, and the two convergence fixtures
+/// still give it different values, purely to document that a per-copy
+/// `dcterms:modified` is a real-world watermark channel that `generic` must
+/// (and does) pin the same way for every copy; the pinned-epoch behavior
+/// itself is separately - and directly - asserted inside the convergence
+/// test by checking the output OPF, not inferred from this field.
 pub struct CopyMarks<'a> {
     pub cdp_info: &'a str,
     pub modified: &'a str,
     pub exif_payload: &'a str,
     pub invisible_payload: &'a str,
     pub vendor_identifier: &'a str,
-    pub stray_file: Option<(&'a str, &'a str)>,
+    /// Stray unreferenced files to interleave into the archive, each as
+    /// `(anchor, path, content)`: the stray is inserted immediately after
+    /// the fixed entry named `anchor` (one of `"mimetype"`,
+    /// `"META-INF/container.xml"`, `"META-INF/cdp.info"`,
+    /// `"OEBPS/content.opf"`, `"OEBPS/nav.xhtml"`, `"OEBPS/chapter.xhtml"`,
+    /// `"OEBPS/pic.jpg"`). Two or more strays may share an anchor; they are
+    /// then inserted in the order given.
+    ///
+    /// The convergence test deliberately gives the two copies different
+    /// *counts and positions* here, not just different content - a single
+    /// trailing stray (the position where `IndexMap::swap_remove` and
+    /// `shift_remove` are indistinguishable) would leave the order hazard
+    /// `generic::reachable::prune` depends on (`shift_remove`, which
+    /// preserves the order of what survives) completely untested. See the
+    /// module docs on [`marked_copy`].
+    pub strays: Vec<(&'a str, &'a str, &'a str)>,
     pub zip_epoch: u16,
 }
 
@@ -272,13 +298,19 @@ fn jpeg_with_exif_payload(payload: &str) -> Vec<u8> {
     out
 }
 
-/// Build a structurally identical EPUB3 book carrying every mark in `marks`:
-/// the real-world shape of two copies of one shop edition, differing only in
-/// per-copy watermark channels. Both callers of [`marked_copy`] MUST build
-/// from this single function (not two hand-written fixtures) so the zip
-/// entry order - which the reader preserves via `IndexMap` insertion order -
-/// stays identical between copies regardless of what the marks themselves
-/// contain; only the per-copy VALUES vary, never the entry list or order.
+/// Build an EPUB3 book carrying every mark in `marks`: the real-world shape
+/// of a copy of a shop edition, watermarked on several independent channels
+/// at once. Both callers of [`marked_copy`] in the convergence test build
+/// from this single function (not two hand-written fixtures), so the fixed
+/// skeleton entries (`mimetype`, the OPF, the nav doc, the chapter, the
+/// image) always appear in the same relative order regardless of what the
+/// marks themselves contain - only the per-copy VALUES vary there. That
+/// still leaves `marks.strays` free to place a different number of stray
+/// files at different points in the archive between the two copies
+/// (deliberately - see [`CopyMarks::strays`]): this is what makes the
+/// convergence test actually exercise whether `drop_unreferenced` preserves
+/// survivor order (correct) rather than merely never having reordered
+/// anything in the first place (an untested fixture, not a proven property).
 pub fn marked_copy(marks: CopyMarks) -> Vec<u8> {
     let content_opf = format!(
         r##"<?xml version="1.0" encoding="UTF-8"?>
@@ -313,7 +345,7 @@ pub fn marked_copy(marks: CopyMarks) -> Vec<u8> {
     );
     let jpeg = jpeg_with_exif_payload(marks.exif_payload);
 
-    let mut entries: Vec<(&str, &[u8])> = vec![
+    let fixed: [(&str, &[u8]); 7] = [
         ("mimetype", b"application/epub+zip"),
         ("META-INF/container.xml", CONTAINER_XML),
         ("META-INF/cdp.info", marks.cdp_info.as_bytes()),
@@ -322,8 +354,14 @@ pub fn marked_copy(marks: CopyMarks) -> Vec<u8> {
         ("OEBPS/chapter.xhtml", chapter.as_bytes()),
         ("OEBPS/pic.jpg", &jpeg),
     ];
-    if let Some((path, data)) = marks.stray_file {
-        entries.push((path, data.as_bytes()));
+    let mut entries: Vec<(&str, &[u8])> = Vec::with_capacity(fixed.len() + marks.strays.len());
+    for (name, data) in fixed {
+        entries.push((name, data));
+        for (anchor, path, stray_data) in &marks.strays {
+            if *anchor == name {
+                entries.push((*path, stray_data.as_bytes()));
+            }
+        }
     }
 
     build_epub_with_epoch(&entries, marks.zip_epoch)

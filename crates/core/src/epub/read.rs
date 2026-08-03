@@ -104,17 +104,12 @@ pub fn read_epub(bytes: &[u8]) -> Result<ReadEpub, ConvertError> {
     }
     let mut transformations = Vec::new();
     for (name, data) in dropped_meta_inf {
-        // Deleting the evidence before the user can read it is the wrong
-        // default for a privacy feature: a short text payload is the whole
-        // answer to "was my copy marked?", so it goes in the report.
-        let preview = std::str::from_utf8(&data)
-            .ok()
-            .filter(|t| data.len() <= 256 && !t.trim().is_empty())
-            .map(|t| format!(" containing {:?}", t.trim()))
-            .unwrap_or_default();
         transformations.push(Transformation {
             kind: "meta-inf-dropped".to_string(),
-            detail: format!("dropped unsupported META-INF file{preview}"),
+            detail: format!(
+                "dropped unsupported META-INF file{}",
+                meta_inf_preview(&data)
+            ),
             file: Some(name),
         });
     }
@@ -193,6 +188,24 @@ pub fn read_epub(bytes: &[u8]) -> Result<ReadEpub, ConvertError> {
         warnings,
         transformations,
     })
+}
+
+/// The `" containing \"...\""` suffix for a dropped META-INF file's
+/// `meta-inf-dropped` transformation detail, or `""` when `data` is not a
+/// short, non-blank, valid-UTF-8 text payload.
+///
+/// Deleting the evidence before the user can read it is the wrong default
+/// for a privacy feature: a short text payload (a shop transaction id, most
+/// often) is the whole answer to "was my copy marked?", so it goes in the
+/// report. The 256-byte cap keeps a large binary blob (an accidental
+/// `Thumbs.db` or the like) out of the report; a longer text payload still
+/// gets a plain "dropped" with no preview, same as non-UTF-8 data.
+fn meta_inf_preview(data: &[u8]) -> String {
+    std::str::from_utf8(data)
+        .ok()
+        .filter(|t| data.len() <= 256 && !t.trim().is_empty())
+        .map(|t| format!(" containing {:?}", t.trim()))
+        .unwrap_or_default()
 }
 
 // ---------------------------------------------------------------------
@@ -1108,6 +1121,41 @@ fn collapse_whitespace(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn meta_inf_preview_includes_text_at_exactly_the_256_byte_cap() {
+        let data = "x".repeat(256);
+        assert_eq!(data.len(), 256);
+        assert_eq!(
+            meta_inf_preview(data.as_bytes()),
+            format!(" containing {:?}", data)
+        );
+    }
+
+    #[test]
+    fn meta_inf_preview_omits_text_one_byte_over_the_cap() {
+        let data = "x".repeat(257);
+        assert_eq!(data.len(), 257);
+        assert_eq!(meta_inf_preview(data.as_bytes()), "");
+    }
+
+    #[test]
+    fn meta_inf_preview_omits_non_utf8_data() {
+        assert_eq!(meta_inf_preview(&[0xFF, 0xFE, 0x00, 0x01]), "");
+    }
+
+    #[test]
+    fn meta_inf_preview_omits_blank_text() {
+        assert_eq!(meta_inf_preview(b"   \n\t  "), "");
+    }
+
+    #[test]
+    fn meta_inf_preview_trims_surrounding_whitespace() {
+        assert_eq!(
+            meta_inf_preview(b"  SHTX001.635962014  \n"),
+            " containing \"SHTX001.635962014\""
+        );
+    }
 
     #[test]
     fn rewrite_declared_encoding_rewrites_xml_decl() {

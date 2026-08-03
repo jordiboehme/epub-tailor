@@ -1306,6 +1306,7 @@ dependencies = [
  "epub-tailor-core",
  "serde_json",
  "ureq",
+ "zip 8.6.0",
 ]
 
 [[package]]

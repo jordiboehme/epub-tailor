@@ -18,5 +18,10 @@ serde_json.workspace = true
 epub-tailor-core.workspace = true
 ureq = { workspace = true, optional = true }
 
+[dev-dependencies]
+# Only for hand-building EPUB fixtures with content `md` cannot produce (e.g.
+# a stray META-INF file), the same way `epub-tailor-core`'s own test fixtures do.
+zip.workspace = true
+
 [lints]
 workspace = true
