@@ -174,13 +174,28 @@ fn repair_profile_drops_meta_inf_junk() {
             .any(|n| n == "META-INF/com.apple.ibooks.display-options.xml"),
         "junk META-INF entries must be dropped"
     );
+    // Task 7: each dropped META-INF file gets its own `Transformation` (with
+    // its payload, when short text) instead of one aggregate warning - the
+    // report must still mention both dropped entries, just through the new
+    // channel.
     assert!(
         converted
             .report
-            .warnings
+            .transformations
             .iter()
-            .any(|w| w.message.contains("META-INF")),
-        "the report must mention the dropped entries"
+            .any(|t| t.kind == "meta-inf-dropped" && t.file.as_deref() == Some("META-INF/cdp.info")),
+        "the report must mention the dropped cdp.info entry: {:#?}",
+        converted.report.transformations
+    );
+    assert!(
+        converted
+            .report
+            .transformations
+            .iter()
+            .any(|t| t.kind == "meta-inf-dropped"
+                && t.file.as_deref() == Some("META-INF/com.apple.ibooks.display-options.xml")),
+        "the report must mention the dropped display-options entry: {:#?}",
+        converted.report.transformations
     );
 }
 

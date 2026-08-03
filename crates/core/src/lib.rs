@@ -121,6 +121,7 @@ pub fn convert(input: Input, opts: &ConvertOptions) -> Result<Converted, Convert
         ReadEpub {
             mut book,
             mut warnings,
+            transformations: read_transformations,
         },
     ) = match input {
         Input::Epub(bytes) => {
@@ -130,7 +131,14 @@ pub fn convert(input: Input, opts: &ConvertOptions) -> Result<Converted, Convert
         Input::Markdown { text, assets } => {
             let bytes_in = text.len() as u64;
             let (book, warnings) = markdown::build_book(&text, assets.as_ref(), opts)?;
-            (bytes_in, ReadEpub { book, warnings })
+            (
+                bytes_in,
+                ReadEpub {
+                    book,
+                    warnings,
+                    transformations: Vec::new(),
+                },
+            )
         }
     };
 
@@ -142,7 +150,10 @@ pub fn convert(input: Input, opts: &ConvertOptions) -> Result<Converted, Convert
         return Err(ConvertError::EmptySpine);
     }
 
-    let mut transformations = Vec::new();
+    // Reported right after the read, ahead of every downstream transform, so
+    // a dropped META-INF payload always appears first, in read order - the
+    // same rule `read_epub`'s own warnings already followed.
+    let mut transformations = read_transformations;
 
     // User-supplied metadata lands first, so the filters below see the finished
     // article: a watermark in a description we just filled is still a watermark.

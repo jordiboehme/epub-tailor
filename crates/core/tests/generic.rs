@@ -430,3 +430,55 @@ fn generic_keeps_an_svg_cover_raster_referenced_only_via_xlink_href() {
         "the raster an SVG cover wraps via xlink:href must survive drop_unreferenced"
     );
 }
+
+#[test]
+fn a_dropped_marker_file_reports_its_payload() {
+    let mut epub = common::book_with_meta_inf("META-INF/cdp.info", b"SHTX001.635962014");
+    let out = convert(
+        Input::Epub(std::mem::take(&mut epub)),
+        &opts_for(&["generic"]),
+    )
+    .expect("converts");
+    let reported = out
+        .report
+        .transformations
+        .iter()
+        .any(|t| t.kind == "meta-inf-dropped" && t.detail.contains("SHTX001.635962014"));
+    assert!(
+        reported,
+        "the payload must be reported, not just the filename: {:#?}",
+        out.report.transformations
+    );
+}
+
+/// The property the whole feature exists for: two copies of one edition,
+/// differing only in per-copy marker channels, must converge byte for byte.
+#[test]
+fn two_marked_copies_converge_to_identical_bytes() {
+    let copy_a = common::marked_copy(common::CopyMarks {
+        cdp_info: "SHTX001.635962014",
+        modified: "2026-08-02T13:18:00Z",
+        exif_payload: "BUYER-A",
+        invisible_payload: "\u{200B}\u{200B}\u{200C}",
+        vendor_identifier: "urn:uuid:6f2a1e40-8c31-4b7e-9a55-1d0c2f9b7e31",
+        stray_file: Some(("OEBPS/a-marker.txt", "A")),
+        zip_epoch: 2026,
+    });
+    let copy_b = common::marked_copy(common::CopyMarks {
+        cdp_info: "SHTX001.999999999",
+        modified: "2026-01-09T04:55:11Z",
+        exif_payload: "BUYER-B",
+        invisible_payload: "\u{2060}\u{200B}",
+        vendor_identifier: "urn:uuid:11111111-2222-3333-4444-555555555555",
+        stray_file: Some(("OEBPS/b-marker.txt", "B")),
+        zip_epoch: 2019,
+    });
+    assert_ne!(copy_a, copy_b, "the fixtures must actually differ");
+
+    let a = convert(Input::Epub(copy_a), &opts_for(&["generic"])).expect("converts");
+    let b = convert(Input::Epub(copy_b), &opts_for(&["generic"])).expect("converts");
+    assert_eq!(
+        a.epub, b.epub,
+        "two copies of one edition must strip to identical bytes"
+    );
+}

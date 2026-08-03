@@ -11,7 +11,7 @@ use crate::epub::model::{
     normalize_href,
 };
 use crate::error::ConvertError;
-use crate::report::Warning;
+use crate::report::{Transformation, Warning};
 
 /// The result of successfully reading an EPUB: the parsed [`Book`] plus any
 /// non-fatal warnings encountered along the way.
@@ -22,6 +22,10 @@ pub struct ReadEpub {
     /// Non-fatal issues encountered while reading (missing metadata,
     /// transcoded encodings, dropped files, dangling references, ...).
     pub warnings: Vec<Warning>,
+    /// Transformations made while reading (currently: dropped META-INF
+    /// payloads). Separate from `warnings` because these are reportable
+    /// changes to the content, not just issues noticed in passing.
+    pub transformations: Vec<Transformation>,
 }
 
 /// Font-obfuscation algorithms that `META-INF/encryption.xml` may declare
@@ -84,7 +88,7 @@ pub fn read_epub(bytes: &[u8]) -> Result<ReadEpub, ConvertError> {
 
     // Partition entries into resources (in zip order) vs. dropped META-INF
     // extras, excluding `mimetype` and `META-INF/` itself.
-    let mut dropped_meta_inf = Vec::new();
+    let mut dropped_meta_inf: Vec<(String, Vec<u8>)> = Vec::new();
     let mut resources_raw: IndexMap<String, Vec<u8>> = IndexMap::new();
     for (name, data) in all_entries {
         if name == "mimetype" {
@@ -92,19 +96,26 @@ pub fn read_epub(bytes: &[u8]) -> Result<ReadEpub, ConvertError> {
         }
         if let Some(rest) = name.strip_prefix("META-INF/") {
             if rest != "container.xml" && rest != "encryption.xml" {
-                dropped_meta_inf.push(name);
+                dropped_meta_inf.push((name, data));
             }
             continue;
         }
         resources_raw.insert(name, data);
     }
-    if !dropped_meta_inf.is_empty() {
-        warnings.push(Warning {
-            message: format!(
-                "unsupported META-INF file(s) dropped: {}",
-                dropped_meta_inf.join(", ")
-            ),
-            file: None,
+    let mut transformations = Vec::new();
+    for (name, data) in dropped_meta_inf {
+        // Deleting the evidence before the user can read it is the wrong
+        // default for a privacy feature: a short text payload is the whole
+        // answer to "was my copy marked?", so it goes in the report.
+        let preview = std::str::from_utf8(&data)
+            .ok()
+            .filter(|t| data.len() <= 256 && !t.trim().is_empty())
+            .map(|t| format!(" containing {:?}", t.trim()))
+            .unwrap_or_default();
+        transformations.push(Transformation {
+            kind: "meta-inf-dropped".to_string(),
+            detail: format!("dropped unsupported META-INF file{preview}"),
+            file: Some(name),
         });
     }
 
@@ -177,7 +188,11 @@ pub fn read_epub(bytes: &[u8]) -> Result<ReadEpub, ConvertError> {
         ncx_path: parsed_opf.ncx_path,
     };
 
-    Ok(ReadEpub { book, warnings })
+    Ok(ReadEpub {
+        book,
+        warnings,
+        transformations,
+    })
 }
 
 // ---------------------------------------------------------------------

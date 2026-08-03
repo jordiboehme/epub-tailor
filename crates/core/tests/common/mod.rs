@@ -211,6 +211,151 @@ pub fn book_with_css_referenced_asset() -> Vec<u8> {
     ])
 }
 
+/// A minimal EPUB3 book with one extra `META-INF/`-rooted file at `path`
+/// (e.g. `"META-INF/cdp.info"`) carrying `data`: neither `container.xml` nor
+/// `encryption.xml`, so `read_epub` drops it and (per Task 7) reports its
+/// payload rather than silently discarding the evidence. Otherwise identical
+/// to [`book_with_extra_file`].
+pub fn book_with_meta_inf(path: &str, data: &[u8]) -> Vec<u8> {
+    const CONTENT_OPF: &[u8] = br##"<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="pub-id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="pub-id">urn:uuid:dddd1111-2222-4333-8444-555555555555</dc:identifier>
+    <dc:title>Book</dc:title>
+    <dc:language>en</dc:language>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="ch" href="chapter.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine><itemref idref="ch"/></spine>
+</package>"##;
+    const CHAPTER: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>C</title></head>
+<body><p>Text.</p></body></html>"#;
+    build_epub(&[
+        ("mimetype", b"application/epub+zip"),
+        ("META-INF/container.xml", CONTAINER_XML),
+        (path, data),
+        ("OEBPS/content.opf", CONTENT_OPF),
+        ("OEBPS/nav.xhtml", NAV_XHTML),
+        ("OEBPS/chapter.xhtml", CHAPTER),
+    ])
+}
+
+/// The seven per-copy marker channels a shop can use to fingerprint an
+/// individual sale of the same edition: a META-INF transaction-id file, the
+/// `dcterms:modified` timestamp, a JPEG EXIF payload, a payload of invisible
+/// (zero-width) characters embedded in chapter prose, a per-copy `dc:identifier`
+/// (the classic "vendor UUID"), an optional stray unreferenced file, and the
+/// zip entry timestamps themselves. See [`marked_copy`].
+pub struct CopyMarks<'a> {
+    pub cdp_info: &'a str,
+    pub modified: &'a str,
+    pub exif_payload: &'a str,
+    pub invisible_payload: &'a str,
+    pub vendor_identifier: &'a str,
+    pub stray_file: Option<(&'a str, &'a str)>,
+    pub zip_epoch: u16,
+}
+
+/// A one-pixel-ish JPEG (SOI, an APP1/EXIF segment carrying `payload`, a
+/// minimal scan, EOI) used by [`marked_copy`] to carry the per-copy EXIF mark.
+fn jpeg_with_exif_payload(payload: &str) -> Vec<u8> {
+    let mut out = vec![0xFF, 0xD8]; // SOI
+    let exif = format!("Exif\0\0{payload}");
+    let exif = exif.as_bytes();
+    out.extend_from_slice(&[0xFF, 0xE1]);
+    out.extend_from_slice(&((exif.len() + 2) as u16).to_be_bytes());
+    out.extend_from_slice(exif);
+    out.extend_from_slice(&[0xFF, 0xDA, 0x00, 0x02, 0xFF, 0xD9]);
+    out
+}
+
+/// Build a structurally identical EPUB3 book carrying every mark in `marks`:
+/// the real-world shape of two copies of one shop edition, differing only in
+/// per-copy watermark channels. Both callers of [`marked_copy`] MUST build
+/// from this single function (not two hand-written fixtures) so the zip
+/// entry order - which the reader preserves via `IndexMap` insertion order -
+/// stays identical between copies regardless of what the marks themselves
+/// contain; only the per-copy VALUES vary, never the entry list or order.
+pub fn marked_copy(marks: CopyMarks) -> Vec<u8> {
+    let content_opf = format!(
+        r##"<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="pub-id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="pub-id">{vendor_identifier}</dc:identifier>
+    <dc:identifier id="isbn">9783407868213</dc:identifier>
+    <meta refines="#isbn" property="identifier-type">ISBN</meta>
+    <dc:title>Marked Book</dc:title>
+    <dc:language>en</dc:language>
+    <meta property="dcterms:modified">{modified}</meta>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="ch" href="chapter.xhtml" media-type="application/xhtml+xml"/>
+    <item id="img" href="pic.jpg" media-type="image/jpeg"/>
+  </manifest>
+  <spine><itemref idref="ch"/></spine>
+</package>"##,
+        vendor_identifier = marks.vendor_identifier,
+        modified = marks.modified,
+    );
+    // The invisible-character payload sits between two plain Latin letters,
+    // where every character `scrub` recognizes as a fingerprint - the
+    // unconditional set and ZWNJ/ZWJ alike - is unconditionally removed, so
+    // two different payloads still converge to the same scrubbed text.
+    let chapter = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>C</title></head>
+<body><p>Water{invisible}mark.</p><img src="pic.jpg"/></body></html>"#,
+        invisible = marks.invisible_payload,
+    );
+    let jpeg = jpeg_with_exif_payload(marks.exif_payload);
+
+    let mut entries: Vec<(&str, &[u8])> = vec![
+        ("mimetype", b"application/epub+zip"),
+        ("META-INF/container.xml", CONTAINER_XML),
+        ("META-INF/cdp.info", marks.cdp_info.as_bytes()),
+        ("OEBPS/content.opf", content_opf.as_bytes()),
+        ("OEBPS/nav.xhtml", NAV_XHTML),
+        ("OEBPS/chapter.xhtml", chapter.as_bytes()),
+        ("OEBPS/pic.jpg", &jpeg),
+    ];
+    if let Some((path, data)) = marks.stray_file {
+        entries.push((path, data.as_bytes()));
+    }
+
+    build_epub_with_epoch(&entries, marks.zip_epoch)
+}
+
+/// Like [`build_epub`], but every entry's zip "last modified" timestamp is
+/// set to `year`-01-01 instead of the crate default - the vector for the
+/// zip-entry-timestamp per-copy mark that [`marked_copy`] exercises.
+/// `epub_tailor_core` never reads or echoes zip entry timestamps, so this
+/// exists purely to prove that stays true under the convergence property.
+fn build_epub_with_epoch(entries: &[(&str, &[u8])], year: u16) -> Vec<u8> {
+    let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
+    let when = zip::DateTime::from_date_and_time(year, 1, 1, 0, 0, 0).expect("valid zip date");
+    let stored = SimpleFileOptions::default()
+        .compression_method(CompressionMethod::Stored)
+        .last_modified_time(when);
+    let deflated = SimpleFileOptions::default()
+        .compression_method(CompressionMethod::Deflated)
+        .last_modified_time(when);
+
+    for (name, data) in entries {
+        let options = if *name == "mimetype" {
+            stored
+        } else {
+            deflated
+        };
+        writer.start_file(*name, options).expect("start_file");
+        writer.write_all(data).expect("write entry data");
+    }
+    writer.finish().expect("finish zip").into_inner()
+}
+
 /// Read one zip entry's raw bytes by name, if present.
 pub fn entry(epub: &[u8], name: &str) -> Option<Vec<u8>> {
     use std::io::Read;
