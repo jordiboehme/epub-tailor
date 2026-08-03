@@ -287,6 +287,74 @@ pub fn book_with_orphan_chapter_srcset_image() -> Vec<u8> {
     ])
 }
 
+/// A minimal EPUB3 book whose FIRST spine chapter is deliberately oversize
+/// (several padded top-level blocks, so `chapter_split` really does cut it
+/// into `big-1.xhtml`, `big-2.xhtml`, ... parts) and carries a single `<img
+/// srcset="only.png 2x">` with no `src`. `only.png` has no manifest item, so
+/// the stripped `srcset` is the one and only edge that reaches it.
+///
+/// The nav document deliberately links `other.xhtml`, NOT `big.xhtml`: a nav
+/// href pointing at the pre-split path would re-reach the srcset map's
+/// original key by accident and mask the very stranding this fixture exists
+/// to expose (`common::NAV_XHTML` links `chapter.xhtml`, which is why no
+/// other fixture can see it). `other.xhtml` is a second, small spine chapter
+/// that gives the nav something real to point at.
+///
+/// Callers must lower `ConvertOptions::max_chapter_bytes` below this
+/// chapter's serialized size; the fixture is padded to roughly 2KB so any
+/// limit under about 1KB splits it.
+pub fn book_with_split_chapter_srcset_image() -> Vec<u8> {
+    const CONTENT_OPF: &[u8] = br##"<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="pub-id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="pub-id">urn:uuid:aaaa1111-2222-4333-8444-555555555555</dc:identifier>
+    <dc:title>Book</dc:title>
+    <dc:language>en</dc:language>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="big" href="big.xhtml" media-type="application/xhtml+xml"/>
+    <item id="other" href="other.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine><itemref idref="big"/><itemref idref="other"/></spine>
+</package>"##;
+    const NAV: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+<head><title>Nav</title></head>
+<body>
+<nav epub:type="toc">
+<ol>
+<li><a href="other.xhtml">Other</a></li>
+</ol>
+</nav>
+</body>
+</html>"#;
+    const OTHER: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>Other</title></head>
+<body><p>Other.</p></body></html>"#;
+    const ONLY_PNG: &[u8] = &[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+    let pad = "x".repeat(400);
+    let mut body = String::new();
+    for i in 1..=4 {
+        body.push_str(&format!("<h1 id=\"sec{i}\">Section {i}</h1><p>{pad}</p>"));
+    }
+    body.push_str("<p><img srcset=\"only.png 2x\"/></p>");
+    let big = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>Big</title></head>
+<body>{body}</body></html>"#
+    );
+    build_epub(&[
+        ("mimetype", b"application/epub+zip"),
+        ("META-INF/container.xml", CONTAINER_XML),
+        ("OEBPS/content.opf", CONTENT_OPF),
+        ("OEBPS/nav.xhtml", NAV),
+        ("OEBPS/big.xhtml", big.as_bytes()),
+        ("OEBPS/other.xhtml", OTHER),
+        ("OEBPS/only.png", ONLY_PNG),
+    ])
+}
+
 /// A minimal EPUB3 book with one extra `META-INF/`-rooted file at `path`
 /// (e.g. `"META-INF/cdp.info"`) carrying `data`: neither `container.xml` nor
 /// `encryption.xml`, so `read_epub` drops it and reports its payload rather

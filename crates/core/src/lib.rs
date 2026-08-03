@@ -561,13 +561,35 @@ pub fn convert(input: Input, opts: &ConvertOptions) -> Result<Converted, Convert
     // hrefs so nothing dangles. Runs last among the content transforms, once
     // every chapter's final DOM (anchors, images, CSS links) is settled.
     let chapters_split = if opts.features.chapter_split {
-        chapter_split::split_oversize_chapters(
+        let outcome = chapter_split::split_oversize_chapters(
             &mut book,
             &mut chapters,
             opts,
             &mut transformations,
             &mut warnings,
-        )
+        );
+        // Re-key the srcset edges onto the parts. The map above is keyed by
+        // each chapter's path *before* the split; a split chapter's path is
+        // gone from the book by now (`shift_remove`d) and the spine points at
+        // the numbered parts instead, so the walk would never visit the old
+        // key and the targets it owned would be deleted as unreferenced.
+        // Every part inherits its source chapter's targets: the stripped
+        // `srcset` attribute is no longer in any DOM to say which part
+        // actually holds the `<img>`, and over-attributing keeps a real image
+        // alive (the safe direction) while still binding the targets to
+        // documents rather than making them roots - the property N2 fixed.
+        for (original, parts) in &outcome.parts_of {
+            let Some(targets) = srcset_by_document.remove(original) else {
+                continue;
+            };
+            for part in parts {
+                srcset_by_document
+                    .entry(part.clone())
+                    .or_default()
+                    .extend(targets.iter().cloned());
+            }
+        }
+        outcome.chapters_split
     } else {
         0
     };

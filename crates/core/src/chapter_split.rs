@@ -46,10 +46,27 @@ const HEADINGS: [&str; 6] = ["h1", "h2", "h3", "h4", "h5", "h6"];
 /// uses, and for the same reason.
 type AnchorMap = HashMap<(String, String), String>;
 
+/// What a split run changed, for callers that hold their own bookkeeping
+/// keyed by a chapter path: the count for the report, and the original ->
+/// parts mapping so a caller can re-key anything it recorded against a path
+/// this pass has just removed from the book.
+pub(crate) struct SplitOutcome {
+    /// How many chapters were split (not the number of parts produced).
+    pub(crate) chapters_split: u32,
+    /// Original chapter path -> its ordered part paths, for chapters that
+    /// actually split. Empty when nothing was over the limit.
+    pub(crate) parts_of: HashMap<String, Vec<String>>,
+}
+
 /// Split every spine chapter in `chapters` whose serialized size exceeds
 /// `opts.max_chapter_bytes`, retargeting `book.spine`, `book.toc` and every
-/// chapter's internal `<a href>`s so nothing dangles. Returns how many
-/// chapters were split (not the number of parts produced).
+/// chapter's internal `<a href>`s so nothing dangles.
+///
+/// The returned [`SplitOutcome::parts_of`] is what lets a caller repair
+/// *its own* path-keyed state: a split chapter's path is `shift_remove`d
+/// from `book.resources` here, so anything the caller recorded under that
+/// path (today, `convert`'s `<img srcset>` reachability edges) points at a
+/// file that no longer exists and would otherwise be silently stranded.
 ///
 /// Chapters below the limit are left in `chapters` untouched, so existing
 /// small fixtures never trigger a split.
@@ -59,7 +76,7 @@ pub(crate) fn split_oversize_chapters(
     opts: &ConvertOptions,
     transformations: &mut Vec<Transformation>,
     warnings: &mut Vec<Warning>,
-) -> u32 {
+) -> SplitOutcome {
     let mut reserved: HashSet<String> = book.resources.keys().cloned().collect();
     let mut parts_of: HashMap<String, Vec<String>> = HashMap::new();
     let mut anchor_map: AnchorMap = HashMap::new();
@@ -103,7 +120,10 @@ pub(crate) fn split_oversize_chapters(
     }
 
     *chapters = new_chapters;
-    chapters_split
+    SplitOutcome {
+        chapters_split,
+        parts_of,
+    }
 }
 
 /// One part produced by splitting a chapter: its new zip-absolute path, its
@@ -639,7 +659,8 @@ mod tests {
             &opts,
             &mut transformations,
             &mut warnings,
-        );
+        )
+        .chapters_split;
         assert_eq!(split, 0);
         assert_eq!(book.spine, vec!["text/a.xhtml", "text/b.xhtml"]);
         assert!(transformations.is_empty());
@@ -659,7 +680,8 @@ mod tests {
             &opts,
             &mut transformations,
             &mut warnings,
-        );
+        )
+        .chapters_split;
         assert_eq!(split, 0, "exactly-at-limit must not trigger a split");
         assert!(transformations.is_empty());
     }
@@ -677,7 +699,8 @@ mod tests {
             &opts,
             &mut transformations,
             &mut warnings,
-        );
+        )
+        .chapters_split;
         assert_eq!(split, 0);
         assert!(
             warnings
@@ -728,7 +751,8 @@ mod tests {
             &opts,
             &mut transformations,
             &mut warnings,
-        );
+        )
+        .chapters_split;
 
         assert_eq!(split, 1, "only chapter A should have split");
         assert_eq!(

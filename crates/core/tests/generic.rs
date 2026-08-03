@@ -475,6 +475,39 @@ fn generic_drops_an_img_srcset_target_owned_by_an_orphan_chapter() {
     );
 }
 
+/// Regression coverage for round 4's R1: `chapter_split` runs *after* the
+/// srcset map is keyed by the pre-split chapter path, then `shift_remove`s
+/// that path and retargets the spine to the numbered parts - so the map's key
+/// became a path the reachability walk never visits, and the image it owned
+/// was deleted. Fires under the `x4,generic` composition the docs recommend,
+/// where `chapter_split` and `drop_unreferenced` are both on.
+///
+/// The fixture's nav deliberately does NOT link the oversize chapter: a stale
+/// nav href pointing at the pre-split path accidentally re-reaches the map's
+/// original key and masks the stranding entirely.
+#[test]
+fn generic_keeps_a_srcset_target_of_a_chapter_that_was_split() {
+    let mut opts = opts_for(&["x4", "generic"]);
+    // Well under the fixture's ~2KB chapter, so the split really happens.
+    opts.max_chapter_bytes = 800;
+    let mut epub = common::book_with_split_chapter_srcset_image();
+    let out = convert(Input::Epub(std::mem::take(&mut epub)), &opts).expect("converts");
+
+    assert!(
+        out.report
+            .transformations
+            .iter()
+            .any(|t| t.kind == "chapter-split"),
+        "the fixture must actually split, or this test proves nothing: {:#?}",
+        out.report.transformations
+    );
+    assert!(
+        common::entry(&out.epub, "OEBPS/only.png").is_some(),
+        "a srcset target must survive its owning chapter being split: {:#?}",
+        out.report.transformations
+    );
+}
+
 #[test]
 fn a_dropped_marker_file_reports_its_payload() {
     let mut epub = common::book_with_meta_inf("META-INF/cdp.info", b"SHTX001.635962014");
