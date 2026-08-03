@@ -174,9 +174,9 @@ fn repair_profile_drops_meta_inf_junk() {
             .any(|n| n == "META-INF/com.apple.ibooks.display-options.xml"),
         "junk META-INF entries must be dropped"
     );
-    // Task 7: each dropped META-INF file gets its own `Transformation` (with
-    // its payload, when short text) instead of one aggregate warning - the
-    // report must still mention both dropped entries, just through the new
+    // Each dropped META-INF file gets its own `Transformation` (with its
+    // payload, when short text) instead of one aggregate warning - the
+    // report must still mention both dropped entries, just through that
     // channel.
     assert!(
         converted

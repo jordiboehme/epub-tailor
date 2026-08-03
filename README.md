@@ -82,7 +82,7 @@ The app keeps itself current. When a new version ships it mentions it, quietly, 
 
 **With the `generic` profile:**
 
-- Strips EXIF, XMP and IPTC from every JPEG and PNG without re-encoding, so pixel data is untouched and color profiles stay put.
+- Strips EXIF, XMP and IPTC from every JPEG and PNG without re-encoding, so pixel data is untouched and color profiles stay put. Detects the image by its actual bytes, not the manifest's declared type, so a mislabeled or oddly cased media type is not missed.
 - Removes invisible fingerprinting characters from the text, script-aware - Persian, Arabic, Hebrew and Indic text and emoji sequences keep the zero-width joiners they actually need.
 - Pins `dcterms:modified` to a fixed date, drops per-copy identifiers and replaces a per-copy unique identifier with one derived from the title and authors, while a real ISBN, ISSN or DOI is always kept.
 - Deletes files nothing in the book references.
@@ -159,6 +159,7 @@ A profile is a JSON file bundling device capabilities, feature switches, tunable
 | Name   | Screen  | Panel | What it is |
 |--------|---------|-------|------------|
 | `epub` | -       | -      | The default: repair and cleanup only, everything the EPUB standard allows stays. |
+| `generic` | -    | -      | Modifier, not a device: strips per-copy watermark channels so two copies of the same shop edition converge to the same file. Composes with any device profile. |
 | `x4`   | 480x800 | gray4  | Xteink X4 running CrossPoint firmware, the full conversion. |
 | `x3`   | 528x792 | gray4  | Xteink X3, same treatment with its own geometry. |
 | `nomad` | 1404x1872 | gray16 | Supernote A6X2 Nomad running Chauvet. |

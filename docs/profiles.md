@@ -241,9 +241,12 @@ The goal is convergence, not anonymization: two copies of the same shop
 edition, differing only in the per-copy watermark channels a vendor bakes in,
 should tailor to byte-identical output. What each switch removes:
 
-- **Image metadata.** EXIF, XMP and IPTC are dropped from JPEG and PNG
-  losslessly, with no re-encode, so pixel data is untouched. ICC color
-  profiles are kept on purpose - dropping one changes how the image renders.
+- **Image metadata.** EXIF, XMP and IPTC are dropped from every JPEG and PNG
+  losslessly, with no re-encode, so pixel data is untouched. Detection is by
+  magic bytes, not the manifest's declared media type, so a JPEG mislabeled
+  `image/jpg`, an odd-cased `IMAGE/JPEG` or one sitting behind
+  `application/octet-stream` is still caught. ICC color profiles are kept on
+  purpose - dropping one changes how the image renders.
 - **Invisible characters.** Zero-width fingerprinting characters are removed
   from parsed text nodes, book metadata and TOC titles. This is script-aware:
   `U+200C` and `U+200D` are semantically required in scripts including
@@ -258,14 +261,13 @@ should tailor to byte-identical output. What each switch removes:
   ISBN-13, ISSN or DOI (checksum-validated where applicable, not just
   digit-counted) is always kept, since that identifier is shared across
   copies rather than per-copy.
-- **Unreferenced files.** Anything the book does not actually reach - by
-  walking spine, navigation, NCX and CSS/HTML/SVG references, not by manifest
-  membership - is deleted and reported with its size.
-
-Dropped `META-INF` marker files report their payload alongside the filename
-whenever the content is short enough to show, for example
-`META-INF/cdp.info` reporting `SHTX001.635962014`, so you can see whether your
-copy was marked before the evidence is gone.
+- **Unreferenced files.** Anything the book does not actually reach is
+  deleted and reported with its size. Reachability is a real graph walk, not
+  manifest membership: it roots at the package document, the navigation
+  document, the NCX, the cover and every spine document, then follows
+  spine/CSS/HTML/SVG references, SMIL media-overlay documents (`<audio>`,
+  `<text>` and similar `src` targets) and the OPF's own `media-overlay` and
+  `fallback` manifest links.
 
 **Limits, stated honestly - `generic` is not a complete anonymization tool:**
 
@@ -281,6 +283,23 @@ copy was marked before the evidence is gone.
 - **Font `name` tables** are not scrubbed.
 - **Attribute values** (`alt`, `title`, `aria-label` and similar) are not
   scrubbed for invisible characters, only text nodes.
+- **Other free-text metadata channels are not touched**, and can still carry a
+  per-copy value: `dc:rights`, `dc:description`, `dc:contributor`,
+  `dc:publisher`, a per-copy CSS comment and a per-copy SVG `<desc>`. These
+  are left alone deliberately, not by oversight - stripping `dc:rights` or
+  `dc:publisher` would destroy legitimate, shared publisher metadata, and a
+  single copy gives no way to tell a shared value from a per-copy one the way
+  a checksummed ISBN or a `urn:uuid:` shape does.
 - **Convergence holds only across the same tool version and the same profile
   stack.** A different `epub-tailor` release or a different composed stack is
   not guaranteed to produce a matching result.
+
+## Dropped `META-INF` files
+
+Any `META-INF`-rooted file that is neither `container.xml` nor
+`encryption.xml` is dropped while the book is read, and reports its payload
+alongside the filename whenever the content is short enough to show - for
+example `META-INF/cdp.info` reporting `SHTX001.635962014`. This happens
+during `read_epub` on every conversion, regardless of profile, not only under
+`generic`, so you can see whether your copy was marked even before deciding
+how to convert it.

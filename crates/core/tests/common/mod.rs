@@ -249,9 +249,9 @@ pub fn book_with_srcset_only_image() -> Vec<u8> {
 
 /// A minimal EPUB3 book with one extra `META-INF/`-rooted file at `path`
 /// (e.g. `"META-INF/cdp.info"`) carrying `data`: neither `container.xml` nor
-/// `encryption.xml`, so `read_epub` drops it and (per Task 7) reports its
-/// payload rather than silently discarding the evidence. Otherwise identical
-/// to [`book_with_extra_file`].
+/// `encryption.xml`, so `read_epub` drops it and reports its payload rather
+/// than silently discarding the evidence. Otherwise identical to
+/// [`book_with_extra_file`].
 pub fn book_with_meta_inf(path: &str, data: &[u8]) -> Vec<u8> {
     const CONTENT_OPF: &[u8] = br##"<?xml version="1.0" encoding="UTF-8"?>
 <package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="pub-id">
