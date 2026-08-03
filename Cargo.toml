@@ -64,3 +64,13 @@ epub-tailor-core = { path = "crates/core", version = "0.7.0" }
 # inspection in an interactive debugger. `profile.test` inherits this;
 # release is untouched.
 debug = "line-tables-only"
+
+# Build every DEPENDENCY (not our own workspace members - those stay at the
+# unoptimized default so `cargo build`/`nextest run` on this crate's own code
+# keeps recompiling fast) at opt-level 2. `resvg`, `image`, `lightningcss` and
+# `proptest` are unoptimized-numeric-code-heavy and dominate test wall time
+# when built at opt-level 0; `profile.test` inherits `profile.dev`, including
+# package overrides, so this applies to `cargo nextest run` too. Costs one
+# slow rebuild whenever this line (or a pinned dependency version) changes.
+[profile.dev.package."*"]
+opt-level = 2
