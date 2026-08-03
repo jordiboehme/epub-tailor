@@ -339,21 +339,6 @@ should tailor to byte-identical output. What each switch removes:
   checksum-valid thirteen-digit ISBN under `978`/`979`, or as a checksum-valid
   eight-digit ISSN, survives exactly as a forged DOI does, because a checksum
   proves a value well-formed and never proves it shared.
-- **A malformed CSS rule can hide the reference in the rule after it**, and
-  the file that reference pointed at is then deleted as unreferenced. The
-  `url()` scanner is deliberately naive, a scan for `url(` and its closing
-  parenthesis rather than a full CSS parser, so an unclosed rule swallows the
-  rule that follows and the `url()` inside it is never seen:
-  `a{background:url(broken.png}` ahead of `p.b{background:url(good.png)}`
-  costs `good.png`, which the same book keeps without the broken rule. This is
-  not silent. The independent safety net searches every surviving document for
-  each dropped file's basename and warns, naming both the dropped file and the
-  document still mentioning it, so check the report before keeping the output.
-  The net is a plain basename search, not a second parser, so it catches this
-  case rather than every case. `drop_unreferenced` is also opt-in. Widening
-  the scanner into a real parser is the fix, and is deliberately not attempted
-  here: the reference surface is exactly where widening has caused regressions
-  on this feature before.
 - **Convergence holds only across the same tool version and the same profile
   stack.** A different `epub-tailor` release or a different composed stack is
   not guaranteed to produce a matching result.
