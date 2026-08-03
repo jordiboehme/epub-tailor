@@ -671,16 +671,6 @@ pub(crate) fn rewrite_refs(
                 // stranding the return value exists to prevent, one step
                 // further along. Only a target that was neither renamed nor
                 // split is reported as itself.
-                // Follow the same rename/split remapping the `src` branch
-                // below applies. The resource this entry named may already
-                // have been re-encoded to a new path (`pic.png` -> `pic.jpg`)
-                // or sliced into page tiles by the time this runs, and the
-                // *old* path is gone from the book. Reporting it would hand
-                // `prune` an edge to a file that no longer exists, leaving the
-                // real resource unreachable and silently deleted - the same
-                // stranding the return value exists to prevent, one step
-                // further along. Only a target that was neither renamed nor
-                // split is reported as itself.
                 let target = normalize_href(chapter_dir, path);
                 if let Some(tiles) = splits.get(&target) {
                     srcset_targets.extend(tiles.iter().cloned());
