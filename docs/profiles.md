@@ -175,6 +175,10 @@ declaration survives with its value intact rather than being dropped.
 | `unicode_hygiene` | NFC-normalize text, strip XML-invalid characters. |
 | `chapter_split` | Split chapters over `options.max_chapter_kb` at heading boundaries. |
 | `remap_colors` | Remap text (CSS) and diagram (SVG) colors to perceptually spaced gray tones: each color keeps its apparent brightness while staying distinguishable on the panel's gray levels. Document colors get one solve per book, each SVG its own. Never applies on a color panel. |
+| `strip_media_metadata` | Remove EXIF, XMP and IPTC from JPEG and PNG, and metadata/comment blocks from SVG, without re-encoding. |
+| `strip_invisible_chars` | Remove zero-width and other invisible fingerprinting characters from text nodes, book metadata and TOC titles, script-aware. |
+| `normalize_identity` | Pin `dcterms:modified` to a fixed epoch and drop per-copy `dc:identifier` values that are not a valid ISBN or ISSN. |
+| `drop_unreferenced` | Delete archive files nothing in the book reaches, by walking the real reference graph rather than manifest membership. |
 
 ## `options` - tunables
 
@@ -220,3 +224,60 @@ Targets:
 Known v1 limitation: a text match cannot span inline element boundaries
 (`Some<b>Stamp</b>.example` will not match as text). Matching the link target
 with `href` covers the common watermark case robustly.
+
+## The `generic` profile
+
+`generic` is a modifier, not a device: it turns on the four switches above
+(`strip_media_metadata`, `strip_invisible_chars`, `normalize_identity`,
+`drop_unreferenced`) over the `epub` baseline and sets nothing else - no
+`output.appendix`, no `device` caps, no `options`. That is what makes it safe
+to compose with a device profile in either order: `--profile x4 --profile
+generic` and `--profile generic --profile x4` resolve to the same features,
+the same screen caps (from `x4`) and the same output filename. Used on its own,
+with no device profile in the stack, it falls back to the default
+`.tailored.epub` appendix like `epub` does.
+
+The goal is convergence, not anonymization: two copies of the same shop
+edition, differing only in the per-copy watermark channels a vendor bakes in,
+should tailor to byte-identical output. What each switch removes:
+
+- **Image metadata.** EXIF, XMP and IPTC are dropped from JPEG and PNG
+  losslessly, with no re-encode, so pixel data is untouched. ICC color
+  profiles are kept on purpose - dropping one changes how the image renders.
+- **Invisible characters.** Zero-width fingerprinting characters are removed
+  from parsed text nodes, book metadata and TOC titles. This is script-aware:
+  `U+200C` and `U+200D` are semantically required in Persian, Arabic, Hebrew
+  and the Indic scripts, and also join emoji sequences, so they are kept
+  wherever the surrounding text needs them rather than stripped everywhere.
+- **Identity.** `dcterms:modified` is pinned to a fixed
+  `1970-01-01T00:00:00Z`, regardless of what the source file carried.
+  Additional per-copy `dc:identifier` values are dropped and replaced with a
+  deterministic one; a real ISBN-10, ISBN-13 or ISSN (checksum-validated, not
+  just digit-counted) is always kept, since that identifier is shared across
+  copies rather than per-copy.
+- **Unreferenced files.** Anything the book does not actually reach - by
+  walking spine, navigation, NCX and CSS/HTML/SVG references, not by manifest
+  membership - is deleted and reported with its size.
+
+Dropped `META-INF` marker files report their payload alongside the filename
+whenever the content is short enough to show, for example
+`META-INF/cdp.info` reporting `SHTX001.635962014`, so you can see whether your
+copy was marked before the evidence is gone.
+
+**Limits, stated honestly - `generic` is not a complete anonymization tool:**
+
+- **Content-embedded watermarks** - a visible "this copy belongs to..." line,
+  or per-copy wording and whitespace choices - cannot be detected from a
+  single copy. BooXtream, the dominant vendor in this market, advertises
+  exactly this technique. The existing content filter rules (see above) remain
+  the answer for those.
+- **Pixel-domain steganography** survives `generic`, which never re-encodes
+  images. A device profile destroys it as a side effect of its own
+  transcoding, so `--profile x4 --profile generic` covers more than `generic`
+  alone.
+- **Font `name` tables** are not scrubbed.
+- **Attribute values** (`alt`, `title`, `aria-label` and similar) are not
+  scrubbed for invisible characters, only text nodes.
+- **Convergence holds only across the same tool version and the same profile
+  stack.** A different `epub-tailor` release or a different composed stack is
+  not guaranteed to produce a matching result.

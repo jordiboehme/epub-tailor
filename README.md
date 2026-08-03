@@ -80,6 +80,14 @@ The app keeps itself current. When a new version ships it mentions it, quietly, 
 - Rescues and scopes chapter `<style>` blocks the firmware would otherwise ignore or misapply.
 - Splits oversized chapters at heading boundaries before they stall the indexer.
 
+**With the `generic` profile:**
+
+- Strips EXIF, XMP and IPTC from every JPEG and PNG without re-encoding, so pixel data is untouched and color profiles stay put.
+- Removes invisible fingerprinting characters from the text, script-aware - Persian, Arabic, Hebrew and Indic text and emoji sequences keep the zero-width joiners they actually need.
+- Pins `dcterms:modified` to a fixed date and drops per-copy identifiers, while a real ISBN or ISSN is always kept.
+- Deletes files nothing in the book references.
+- Composes with any device profile in either order (`--profile x4 --profile generic` or the reverse) and, used alone, produces `book.tailored.epub` like the repair core. It will not catch a watermark baked into the visible text or the picture itself - content filter rules and a device profile's own image re-encoding are still the tools for that.
+
 ## The command line
 
 The same engine, undressed. Everything the app does lives in one binary that scripts, pipes, reports in JSON and processes a folder of a thousand books without drawing a single pixel - the pro option, and the only option if your books live on a headless NAS.
