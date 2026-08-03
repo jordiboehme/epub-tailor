@@ -10,9 +10,19 @@
 //! module fails to recognize looks identical, from the outside, to a resource
 //! nothing points at, and gets deleted right along with genuine stray files.
 //! So the element/attribute scan below is deliberately broad (every element,
-//! not a hand-picked tag list) and a post-removal sanity pass (see
-//! [`prune`]'s tail) warns - rather than silently corrupting the book - if a
-//! surviving document still names something this pass just dropped.
+//! not a hand-picked tag list).
+//!
+//! [`prune`]'s tail also runs an independent safety-net scan over what
+//! survives. It is deliberately NOT built from [`refs_of`] (the walk's own
+//! extraction): a walk-based check can only ever re-derive the same edges the
+//! walk already found, so it is structurally incapable of catching the walk's
+//! own blind spots - exactly the failure mode that shipped once already (a
+//! dead `xlink:href` lookup silently deleted real cover art, and a check
+//! built from the same broken extraction would have re-derived the same
+//! empty result and stayed silent too). So the net here shares no code with
+//! the walk at all: a plain byte-substring search for each dropped file's
+//! basename inside every surviving textual document. Cruder, but independent
+//! - which is the entire point of a safety net.
 
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -28,6 +38,20 @@ use crate::report::{Transformation, Warning};
 /// `xlink:href`, whose local name html5ever's foreign-content adjustment
 /// rewrites to plain `href` in a non-null namespace.
 const REF_ATTRS: &[&str] = &["src", "href", "poster", "data"];
+
+/// Normalized media types [`prune`]'s independent substring safety net treats
+/// as text worth searching - every format the walk itself understands, since
+/// a non-textual (raster/font) resource can never itself *name* another
+/// resource.
+const TEXTUAL_MEDIA_TYPES: &[&str] = &[
+    "application/xhtml+xml",
+    "text/html",
+    "text/css",
+    "image/svg+xml",
+    "application/smil+xml",
+    "application/x-dtbncx+xml",
+    "application/oebps-package+xml",
+];
 
 /// Parent directory of a zip-absolute path (`""` if it has no `/`).
 fn parent_dir(path: &str) -> String {
@@ -218,9 +242,10 @@ fn opf_refs(opf: &str, base_dir: &str) -> Vec<String> {
 }
 
 /// Every path `resource` (whose directory is `dir`) names, dispatched by its
-/// (normalized) media type. The single source of truth for "what does this
-/// resource point at" - used both by the graph walk and by the post-removal
-/// dangling-reference check in [`prune`], so the two can never disagree.
+/// (normalized) media type. The graph walk's only extraction logic -
+/// deliberately NOT reused by [`prune`]'s post-removal safety net, which
+/// exists specifically to catch what this function fails to extract (see the
+/// module docs).
 fn refs_of(resource: &Resource, dir: &str) -> Vec<String> {
     match normalize_media_type(&resource.media_type).as_str() {
         "text/css" => match std::str::from_utf8(&resource.data) {
@@ -259,18 +284,21 @@ fn refs_of(resource: &Resource, dir: &str) -> Vec<String> {
                     continue;
                 }
                 for attr in REF_ATTRS {
-                    if let Some(raw) = get_attr_local(&node, attr)
-                        && let Some(p) = resolve(dir, &raw)
-                    {
-                        refs.push(p);
+                    // An element can carry more than one spelling of the same
+                    // local name (`href` and `xlink:href` naming different
+                    // targets) - every match is collected, not just the first.
+                    for raw in get_attr_local(&node, attr) {
+                        if let Some(p) = resolve(dir, &raw) {
+                            refs.push(p);
+                        }
                     }
                 }
-                if let Some(srcset) = get_attr_local(&node, "srcset") {
+                for srcset in get_attr_local(&node, "srcset") {
                     refs.extend(srcset_refs(&srcset, dir));
                 }
                 // An inline `style="background:url(...)"` references assets
                 // exactly like a `<style>` block does.
-                if let Some(style) = get_attr_local(&node, "style") {
+                for style in get_attr_local(&node, "style") {
                     refs.extend(css_refs(&style, dir));
                 }
             }
@@ -312,13 +340,20 @@ pub(crate) fn prune(
         queue.extend(refs_of(resource, &dir));
     }
 
-    let dropped: HashSet<String> = book
+    // Resource order (an `IndexMap` preserves it), not `HashSet` iteration
+    // order: `Transformation` entries land in `ConvertReport` and, per
+    // process, `HashSet`'s `RandomState` seed varies - iterating a set here
+    // would make report order nondeterministic run to run even though the
+    // EPUB bytes themselves are unaffected (`shift_remove` alone decides
+    // those, and set membership is deterministic).
+    let dropped_ordered: Vec<String> = book
         .resources
         .keys()
         .filter(|p| !reachable.contains(*p))
         .cloned()
         .collect();
-    for path in &dropped {
+
+    for path in &dropped_ordered {
         let size = book.resources[path].data.len();
         transformations.push(Transformation {
             kind: "generic-unreferenced".to_string(),
@@ -326,24 +361,33 @@ pub(crate) fn prune(
             file: Some(path.clone()),
         });
     }
-    for path in &dropped {
+    for path in &dropped_ordered {
         book.resources.shift_remove(path);
     }
 
-    // Safety net: verify no *surviving* document still names something this
-    // pass just dropped. Every reference type above already feeds the walk,
-    // so a correct edge never reaches this point - this exists for the edge
-    // type nobody has found yet (this pass already shipped once with a dead
-    // `xlink:href` lookup that silently deleted real cover art). A pass that
-    // can break a book must not do so silently.
-    for (path, resource) in &book.resources {
-        let dir = parent_dir(path);
-        for target in refs_of(resource, &dir) {
-            if dropped.contains(&target) {
+    // Independent safety net: for each dropped file's basename, a plain byte
+    // search over every surviving textual document's raw bytes. See the
+    // module docs for why this shares no code with the walk above - that
+    // independence is what lets it catch an edge type `refs_of` itself
+    // fails to extract, which a check built from `refs_of` provably cannot.
+    // Cheap false positives (a basename mentioned in prose) are the accepted
+    // cost; a silent deletion is not.
+    for dropped_path in &dropped_ordered {
+        let Some(basename) = dropped_path.rsplit('/').next().filter(|b| !b.is_empty()) else {
+            continue;
+        };
+        let needle = basename.as_bytes();
+        for (path, resource) in &book.resources {
+            if !TEXTUAL_MEDIA_TYPES.contains(&normalize_media_type(&resource.media_type).as_str()) {
+                continue;
+            }
+            if resource.data.len() >= needle.len()
+                && resource.data.windows(needle.len()).any(|w| w == needle)
+            {
                 warnings.push(Warning {
                     message: format!(
-                        "{path} still references {target}, which was dropped as unreferenced - \
-                         the reachability graph may be missing an edge"
+                        "{path} still mentions {basename} (from {dropped_path}, dropped as \
+                         unreferenced) - the reachability graph may be missing an edge"
                     ),
                     file: Some(path.clone()),
                 });
@@ -683,6 +727,105 @@ mod tests {
         assert_eq!(
             refs,
             vec!["OEBPS/one.png".to_string(), "OEBPS/two.png".to_string()]
+        );
+    }
+
+    #[test]
+    fn generic_unreferenced_transformations_are_reported_in_resource_order() {
+        // Insertion order deliberately does not sort alphabetically (z, a,
+        // m): a `HashSet`-driven push loop would reorder these
+        // nondeterministically (a different `RandomState` seed per process),
+        // which broke `ConvertReport` reproducibility even though the EPUB
+        // bytes themselves were always fine.
+        let mut book = book_with(
+            vec![
+                ("OEBPS/content.opf", "application/oebps-package+xml", b""),
+                (
+                    "OEBPS/chapter.xhtml",
+                    "application/xhtml+xml",
+                    b"<html><body><p>Hi</p></body></html>",
+                ),
+                ("OEBPS/z-stray.txt", "application/octet-stream", b"z"),
+                ("OEBPS/a-stray.txt", "application/octet-stream", b"a"),
+                ("OEBPS/m-stray.txt", "application/octet-stream", b"m"),
+            ],
+            vec!["OEBPS/chapter.xhtml"],
+        );
+        let (transformations, _) = prune_book(&mut book);
+        let dropped_files: Vec<&str> = transformations
+            .iter()
+            .map(|t| t.file.as_deref().unwrap())
+            .collect();
+        assert_eq!(
+            dropped_files,
+            vec![
+                "OEBPS/z-stray.txt",
+                "OEBPS/a-stray.txt",
+                "OEBPS/m-stray.txt"
+            ],
+            "transformation order must follow resource (insertion) order, not hash order"
+        );
+    }
+
+    #[test]
+    fn both_spellings_of_the_same_local_name_survive() {
+        // `<image href="dual.png" xlink:href="dual2.png"/>`: two attributes,
+        // same local name (`href`), different targets. `get_attr_local`
+        // returning only the first match would keep one and silently delete
+        // the other - deletion is the dangerous direction, so both must
+        // survive even though this shape is vanishingly rare in practice.
+        let mut book = book_with(
+            vec![
+                ("OEBPS/content.opf", "application/oebps-package+xml", b""),
+                (
+                    "OEBPS/cover.svg",
+                    "image/svg+xml",
+                    br#"<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"><image href="dual.png" xlink:href="dual2.png"/></svg>"#,
+                ),
+                ("OEBPS/dual.png", "image/png", b"\x89PNG"),
+                ("OEBPS/dual2.png", "image/png", b"\x89PNG"),
+            ],
+            vec![],
+        );
+        book.cover = Some("OEBPS/cover.svg".to_string());
+        prune_book(&mut book);
+        assert!(book.resources.contains_key("OEBPS/dual.png"));
+        assert!(book.resources.contains_key("OEBPS/dual2.png"));
+    }
+
+    #[test]
+    fn independent_substring_scan_warns_when_the_walk_misses_a_real_edge() {
+        // `<meta name="og:image" content="...">` is a real, currently-true
+        // gap in the attribute walk: `content` is not in `REF_ATTRS`, so
+        // `refs_of` never sees it and `social.png` gets dropped as
+        // "unreferenced" even though the chapter plainly still names it.
+        // This is exactly the class of bug a `refs_of`-based check could
+        // never catch (see the module docs) - the independent byte-substring
+        // scan must catch it. If `content` is ever added to `REF_ATTRS`, this
+        // stops being droppable and this test needs a different genuine gap
+        // - do not delete the assertion that the walk actually drops it.
+        let mut book = book_with(
+            vec![
+                ("OEBPS/content.opf", "application/oebps-package+xml", b""),
+                (
+                    "OEBPS/chapter.xhtml",
+                    "application/xhtml+xml",
+                    br#"<html><head><meta name="og:image" content="social.png"/></head><body><p>Hi</p></body></html>"#,
+                ),
+                ("OEBPS/social.png", "image/png", b"\x89PNG"),
+            ],
+            vec!["OEBPS/chapter.xhtml"],
+        );
+        let (_, warnings) = prune_book(&mut book);
+        assert!(
+            !book.resources.contains_key("OEBPS/social.png"),
+            "precondition: the attribute walk genuinely does not see `content=`"
+        );
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.message.contains("social.png") && w.message.contains("chapter.xhtml")),
+            "the independent substring scan must catch what the walk missed: {warnings:?}"
         );
     }
 }

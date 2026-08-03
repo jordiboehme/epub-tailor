@@ -61,7 +61,10 @@ pub(crate) fn get_attr(node: &NodeRef, name: &str) -> Option<String> {
     }
 }
 
-/// Get an attribute's value by LOCAL NAME alone, whatever its namespace.
+/// Get every attribute's value that matches LOCAL NAME alone, whatever its
+/// namespace - an element can carry more than one (`href` and `xlink:href`
+/// both present, potentially naming different targets), so this returns all
+/// of them rather than just the first.
 ///
 /// [`get_attr`] only ever matches the null namespace (see kuchikiki's
 /// `Attributes::get`), which silently misses a foreign-content attribute like
@@ -71,16 +74,17 @@ pub(crate) fn get_attr(node: &NodeRef, name: &str) -> Option<String> {
 /// `"xlink:href"` or `"href"` comes back empty. This scans every attribute's
 /// local name instead, so `href`/`xlink:href`/any other namespaced spelling
 /// of the same local name all resolve the same way.
-pub(crate) fn get_attr_local(node: &NodeRef, local: &str) -> Option<String> {
+pub(crate) fn get_attr_local(node: &NodeRef, local: &str) -> Vec<String> {
     match node.data() {
         NodeData::Element(e) => e
             .attributes
             .borrow()
             .map
             .iter()
-            .find(|(k, _)| k.local.as_ref() == local)
-            .map(|(_, attr)| attr.value.clone()),
-        _ => None,
+            .filter(|(k, _)| k.local.as_ref() == local)
+            .map(|(_, attr)| attr.value.clone())
+            .collect(),
+        _ => Vec::new(),
     }
 }
 
