@@ -9,12 +9,74 @@ import { runSidecar } from "../api/sidecar";
 import { isCliFailure, parseReport } from "../api/contract";
 import type { Profile, ProfilesReport } from "../api/contract";
 import { settings } from "./settings.svelte";
+import type { ProfileLayer } from "./settings.svelte";
 
 const FALLBACK_APPENDIX = "tailored";
 
-/** A file layer's display name: the last path segment, either separator. */
-function baseName(path: string): string {
+/**
+ * A file layer's display name: the last path segment, either separator.
+ * Exported so `ProfilePicker` renders the same label it stamps into
+ * `stackLabel()`, instead of keeping a second copy that could drift.
+ */
+export function baseName(path: string): string {
   return path.split(/[/\\]/).pop() || path;
+}
+
+/**
+ * Append a built-in layer, unless it is already in the stack - a duplicate
+ * built-in is meaningless (it would just shadow itself) and would corrupt
+ * `stackLabel()`'s output. Returns the same array reference when it is a
+ * no-op, so a caller can tell nothing changed.
+ */
+export function addBuiltinLayer(stack: ProfileLayer[], name: string): ProfileLayer[] {
+  if (stack.some((layer) => layer.kind === "builtin" && layer.name === name)) return stack;
+  return [...stack, { kind: "builtin", name }];
+}
+
+/** Append a file layer, unless the same path is already in the stack. */
+export function addFileLayer(stack: ProfileLayer[], path: string): ProfileLayer[] {
+  if (stack.some((layer) => layer.kind === "file" && layer.path === path)) return stack;
+  return [...stack, { kind: "file", path }];
+}
+
+/**
+ * Remove the layer at `index`, refusing when it is the only one left - a
+ * stack of zero layers is never a valid composition (see
+ * `migrateProfileStack`'s docstring in `settings.svelte.ts`). Returns the
+ * same array reference on refusal.
+ */
+export function removeLayerAt(stack: ProfileLayer[], index: number): ProfileLayer[] {
+  if (stack.length <= 1) return stack;
+  return stack.filter((_, i) => i !== index);
+}
+
+/**
+ * Swap the layer at `index` with its neighbour `delta` away (-1 to move up,
+ * +1 to move down). A move past either end is a no-op, returning the same
+ * array reference.
+ */
+export function moveLayer(stack: ProfileLayer[], index: number, delta: number): ProfileLayer[] {
+  const target = index + delta;
+  if (target < 0 || target >= stack.length) return stack;
+  const next = [...stack];
+  [next[index], next[target]] = [next[target], next[index]];
+  return next;
+}
+
+/**
+ * True when more than one layer carries a device screen, which means the
+ * CLI's last-layer-wins composition silently discards all but the last
+ * screen. `generic` and `epub` have no screen (`screen_w` is 0) and never
+ * count, so pairing either with one device profile does not warn.
+ */
+export function hasDeviceClash(stack: ProfileLayer[], builtins: Profile[]): boolean {
+  return (
+    stack.filter(
+      (layer) =>
+        layer.kind === "builtin" &&
+        (builtins.find((p) => p.name === layer.name)?.caps.screen_w ?? 0) > 0,
+    ).length > 1
+  );
 }
 
 /** The `profiles <specs> --report json` payload: one resolved composition. */

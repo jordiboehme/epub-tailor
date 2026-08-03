@@ -10,12 +10,65 @@ vi.mock("@tauri-apps/plugin-shell", () => ({
   Command: { sidecar: vi.fn() },
 }));
 
-import { profiles } from "../lib/stores/profiles.svelte";
+import {
+  profiles,
+  baseName,
+  addBuiltinLayer,
+  addFileLayer,
+  removeLayerAt,
+  moveLayer,
+  hasDeviceClash,
+} from "../lib/stores/profiles.svelte";
 import { settings } from "../lib/stores/settings.svelte";
 import type { ProfileLayer } from "../lib/stores/settings.svelte";
+import type { Profile } from "../lib/api/contract";
 
 function setStack(stack: ProfileLayer[]): void {
   settings.profileStack = stack;
+}
+
+/** A minimal built-in `Profile`, enough to exercise `hasDeviceClash`. */
+function builtin(name: string, screen: { w: number; h: number } = { w: 0, h: 0 }): Profile {
+  return {
+    name,
+    description: "",
+    caps: {
+      screen_w: screen.w,
+      screen_h: screen.h,
+      ppi: 0,
+      panel: "gray4",
+      max_src_px: [0, 0],
+      inline_max: [0, 0],
+      cover_max: [0, 0],
+      inline_budget_bytes: 0,
+      cover_budget_bytes: 0,
+      css_max_bytes: 0,
+      css_max_rules: 0,
+    },
+    features: {
+      strip_fonts: false,
+      filter_css: false,
+      sanitize_css: false,
+      relocate_styles: false,
+      transcode_images: false,
+      rasterize_svg: false,
+      linearize_tables: false,
+      degrade_boxes: false,
+      bake_ordered_lists: false,
+      preserve_code_blocks: false,
+      normalize_footnotes: false,
+      relocate_anchors: false,
+      dedupe_ids: false,
+      unicode_hygiene: false,
+      chapter_split: false,
+    },
+    jpeg_quality: 0,
+    tables: "text",
+    split_tall_images: false,
+    max_chapter_bytes: 0,
+    appendix: null,
+    filters: [],
+  };
 }
 
 describe("activeProfileSpecs", () => {
@@ -50,5 +103,154 @@ describe("stackLabel", () => {
     ]);
     expect(profiles.stackLabel()).toBe("x4+manga.json");
     expect(profiles.stackLabel()).not.toContain("/home/reader");
+  });
+});
+
+describe("baseName", () => {
+  it("keeps the last path segment across either separator", () => {
+    expect(baseName("/home/reader/manga.json")).toBe("manga.json");
+    expect(baseName("C:\\Users\\reader\\manga.json")).toBe("manga.json");
+  });
+
+  it("returns a bare filename unchanged", () => {
+    expect(baseName("manga.json")).toBe("manga.json");
+  });
+});
+
+describe("addBuiltinLayer", () => {
+  it("appends a new built-in layer", () => {
+    const stack: ProfileLayer[] = [{ kind: "builtin", name: "epub" }];
+    expect(addBuiltinLayer(stack, "x4")).toEqual([
+      { kind: "builtin", name: "epub" },
+      { kind: "builtin", name: "x4" },
+    ]);
+  });
+
+  it("refuses a built-in already in the stack, returning the same reference", () => {
+    const stack: ProfileLayer[] = [{ kind: "builtin", name: "x4" }];
+    expect(addBuiltinLayer(stack, "x4")).toBe(stack);
+  });
+});
+
+describe("addFileLayer", () => {
+  it("appends a new file layer", () => {
+    const stack: ProfileLayer[] = [{ kind: "builtin", name: "epub" }];
+    expect(addFileLayer(stack, "/home/reader/manga.json")).toEqual([
+      { kind: "builtin", name: "epub" },
+      { kind: "file", path: "/home/reader/manga.json" },
+    ]);
+  });
+
+  it("refuses a path already in the stack, returning the same reference", () => {
+    const stack: ProfileLayer[] = [{ kind: "file", path: "/home/reader/manga.json" }];
+    expect(addFileLayer(stack, "/home/reader/manga.json")).toBe(stack);
+  });
+});
+
+describe("removeLayerAt", () => {
+  it("removes the layer at the given index", () => {
+    const stack: ProfileLayer[] = [
+      { kind: "builtin", name: "x4" },
+      { kind: "builtin", name: "generic" },
+    ];
+    expect(removeLayerAt(stack, 0)).toEqual([{ kind: "builtin", name: "generic" }]);
+  });
+
+  it("refuses to empty the last remaining layer, returning the same reference", () => {
+    const stack: ProfileLayer[] = [{ kind: "builtin", name: "epub" }];
+    expect(removeLayerAt(stack, 0)).toBe(stack);
+  });
+});
+
+describe("moveLayer", () => {
+  it("swaps a layer with its upward neighbour", () => {
+    const stack: ProfileLayer[] = [
+      { kind: "builtin", name: "x4" },
+      { kind: "builtin", name: "generic" },
+    ];
+    expect(moveLayer(stack, 1, -1)).toEqual([
+      { kind: "builtin", name: "generic" },
+      { kind: "builtin", name: "x4" },
+    ]);
+  });
+
+  it("swaps a layer with its downward neighbour", () => {
+    const stack: ProfileLayer[] = [
+      { kind: "builtin", name: "x4" },
+      { kind: "builtin", name: "generic" },
+    ];
+    expect(moveLayer(stack, 0, 1)).toEqual([
+      { kind: "builtin", name: "generic" },
+      { kind: "builtin", name: "x4" },
+    ]);
+  });
+
+  it("refuses to move past either end, returning the same reference", () => {
+    const stack: ProfileLayer[] = [
+      { kind: "builtin", name: "x4" },
+      { kind: "builtin", name: "generic" },
+    ];
+    expect(moveLayer(stack, 0, -1)).toBe(stack);
+    expect(moveLayer(stack, 1, 1)).toBe(stack);
+  });
+});
+
+describe("hasDeviceClash", () => {
+  const x4 = builtin("x4", { w: 758, h: 1024 });
+  const kobo = builtin("kobo", { w: 1264, h: 1680 });
+  const generic = builtin("generic");
+  const epub = builtin("epub");
+  const builtins = [x4, kobo, generic, epub];
+
+  it("is false for a single device profile", () => {
+    expect(hasDeviceClash([{ kind: "builtin", name: "x4" }], builtins)).toBe(false);
+  });
+
+  it("is false pairing a device profile with generic, which has no screen", () => {
+    expect(
+      hasDeviceClash(
+        [
+          { kind: "builtin", name: "x4" },
+          { kind: "builtin", name: "generic" },
+        ],
+        builtins,
+      ),
+    ).toBe(false);
+  });
+
+  it("is false pairing a device profile with epub, which has no screen", () => {
+    expect(
+      hasDeviceClash(
+        [
+          { kind: "builtin", name: "epub" },
+          { kind: "builtin", name: "x4" },
+        ],
+        builtins,
+      ),
+    ).toBe(false);
+  });
+
+  it("is true when two device profiles are both in the stack", () => {
+    expect(
+      hasDeviceClash(
+        [
+          { kind: "builtin", name: "x4" },
+          { kind: "builtin", name: "kobo" },
+        ],
+        builtins,
+      ),
+    ).toBe(true);
+  });
+
+  it("ignores a file layer, which is not resolvable to caps without the CLI", () => {
+    expect(
+      hasDeviceClash(
+        [
+          { kind: "builtin", name: "x4" },
+          { kind: "file", path: "/home/reader/custom.json" },
+        ],
+        builtins,
+      ),
+    ).toBe(false);
   });
 });
