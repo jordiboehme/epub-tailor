@@ -452,7 +452,7 @@ mod tests {
     }
 
     proptest! {
-        #![proptest_config(ProptestConfig::with_cases(300))]
+        #![proptest_config(ProptestConfig::with_cases(crate::testing::proptest_cases(300)))]
 
         #[test]
         fn solved_tones_satisfy_every_constraint(

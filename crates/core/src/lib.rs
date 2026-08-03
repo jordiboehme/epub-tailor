@@ -28,6 +28,7 @@ pub mod metadata;
 pub mod options;
 pub mod profile;
 pub mod report;
+pub mod testing;
 pub mod validate;
 
 use std::collections::{HashMap, HashSet};

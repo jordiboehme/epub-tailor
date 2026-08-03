@@ -8,6 +8,7 @@
 //! a serializer writing stable garbage (0.4.0/0.4.1's `:xmlns` corruption was
 //! such a fixed point), which is what the strict-XML property is for.
 
+use epub_tailor_core::testing::proptest_cases;
 use epub_tailor_core::{find_invalid_qname, parse_xhtml, serialize_xhtml};
 use proptest::prelude::*;
 
@@ -277,7 +278,7 @@ fn document_from(nodes: &[Node]) -> String {
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(400))]
+    #![proptest_config(ProptestConfig::with_cases(proptest_cases(400)))]
 
     #[test]
     fn parse_serialize_is_a_fixed_point(nodes in proptest::collection::vec(node_strategy(), 0..6)) {

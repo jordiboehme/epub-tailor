@@ -813,7 +813,7 @@ sub { vertical-align: sub; }
     }
 
     proptest! {
-        #![proptest_config(ProptestConfig::with_cases(400))]
+        #![proptest_config(ProptestConfig::with_cases(crate::testing::proptest_cases(400)))]
 
         #[test]
         fn output_is_conformant_and_idempotent(
