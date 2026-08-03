@@ -20,4 +20,14 @@ describe("profile stack migration", () => {
       { kind: "builtin", name: "epub" },
     ]);
   });
+
+  it("rebuilds from the legacy keys when the stored stack is empty, not just absent", () => {
+    // A zero-layer stack is never a valid composition, so it is treated the
+    // same as no stack at all rather than accepted as "the user's choice".
+    const stack = migrateProfileStack([], "x4", ["/tmp/manga.json"]);
+    expect(stack).toEqual<ProfileLayer[]>([
+      { kind: "builtin", name: "x4" },
+      { kind: "file", path: "/tmp/manga.json" },
+    ]);
+  });
 });

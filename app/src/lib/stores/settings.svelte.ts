@@ -63,10 +63,12 @@ export type ProfileLayer = { kind: "builtin"; name: string } | { kind: "file"; p
  * built-in plus N user JSON files under two separate keys (`profile` and
  * `userProfilePaths`); anyone upgrading has those two keys on disk and no
  * `profileStack` yet, so it is rebuilt from them here rather than silently
- * dropped. A `profileStack` that is already present (including an empty
- * array, which is never produced by this app but is not this function's call
- * to correct) wins outright - it is the current shape and the legacy keys
- * beside it are stale leftovers, not a second source of truth.
+ * dropped. A `profileStack` that is already present wins outright only when
+ * it is non-empty - it is the current shape and the legacy keys beside it are
+ * stale leftovers, not a second source of truth. An empty stack is treated
+ * the same as an absent one and rebuilt from the legacy keys (falling back to
+ * `epub` with none of those either): a stack with zero layers is never a
+ * valid composition for this app, so there is nothing worth preserving in it.
  */
 export function migrateProfileStack(
   stored: ProfileLayer[] | undefined,
