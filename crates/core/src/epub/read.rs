@@ -544,6 +544,24 @@ fn refinement(metadata_node: Node, id: &str, property: &str) -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
+/// A `dc:identifier`'s scheme (e.g. `ISBN`), from the EPUB2 `opf:scheme`
+/// attribute or an EPUB3 `identifier-type` refinement. Shared by the unique
+/// identifier and every secondary one, so both read the scheme the same way
+/// and a scheme-typed unique identifier is never treated differently from
+/// the same value typed as a secondary one.
+fn identifier_scheme_of(metadata_node: Node, id_node: Node) -> Option<String> {
+    ["scheme", "opf:scheme"]
+        .iter()
+        .find_map(|a| id_node.attribute(*a))
+        .map(collapse_whitespace)
+        .or_else(|| {
+            id_node
+                .attribute("id")
+                .and_then(|id| refinement(metadata_node, id, "identifier-type"))
+        })
+        .filter(|s| !s.is_empty())
+}
+
 /// Read a `dc:creator` / `dc:contributor`, taking its sort key and role from
 /// either the EPUB2 attributes or the EPUB3 refinements.
 fn parse_creator(metadata_node: Node, node: Node) -> Option<Creator> {
@@ -654,6 +672,7 @@ fn parse_metadata(
     let identifier = unique_node
         .map(|n| collapse_whitespace(&collect_text(n)))
         .filter(|s| !s.is_empty());
+    let identifier_scheme = unique_node.and_then(|n| identifier_scheme_of(metadata_node, n));
 
     let identifiers: Vec<Identifier> = id_nodes
         .iter()
@@ -663,15 +682,7 @@ fn parse_metadata(
             if value.is_empty() {
                 return None;
             }
-            let scheme = ["scheme", "opf:scheme"]
-                .iter()
-                .find_map(|a| n.attribute(*a))
-                .map(collapse_whitespace)
-                .or_else(|| {
-                    n.attribute("id")
-                        .and_then(|id| refinement(metadata_node, id, "identifier-type"))
-                })
-                .filter(|s| !s.is_empty());
+            let scheme = identifier_scheme_of(metadata_node, *n);
             Some(Identifier { value, scheme })
         })
         .collect();
@@ -682,6 +693,7 @@ fn parse_metadata(
         contributors: creators("contributor"),
         language,
         identifier,
+        identifier_scheme,
         identifiers,
         description: first_dc(metadata_node, "description"),
         publisher: first_dc(metadata_node, "publisher"),

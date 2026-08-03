@@ -12,6 +12,57 @@ use crate::report::Transformation;
 /// buyer, so they converge and are kept.
 const SHARED_SCHEMES: &[&str] = &["isbn", "issn", "doi"];
 
+/// Leading scheme prefixes that mark a value as an already-typed ISBN/ISSN/
+/// DOI, matched case-insensitively and stripped before validating. Every
+/// prefix is tried and the value is only ever stripped once, so listing the
+/// longest form (`urn:isbn:`) before its own suffix (`isbn:`) is not
+/// required for correctness; the pairs are simply kept next to each other
+/// for readability.
+const SCHEME_PREFIXES: &[&str] = &[
+    "urn:isbn:",
+    "isbn:",
+    "urn:issn:",
+    "issn:",
+    "urn:doi:",
+    "doi:",
+];
+
+/// Strip a leading identifier-scheme prefix - `urn:isbn:`, `isbn:`,
+/// `urn:issn:`, `issn:`, `urn:doi:`, `doi:`, or the bare-word `ISBN `/`ISSN `
+/// spelling (`ISBN 978-3-407-86821-3`) - case-insensitively, so
+/// `urn:isbn:9783407868213` (the canonical EPUB 3 spelling) checksums
+/// exactly like the bare digits. Returns `value` unchanged when nothing
+/// matches.
+fn strip_scheme_prefix(value: &str) -> &str {
+    let lower = value.to_ascii_lowercase();
+    for prefix in SCHEME_PREFIXES {
+        if lower.starts_with(prefix) {
+            return value[prefix.len()..].trim_start();
+        }
+    }
+    for word in ["isbn ", "issn "] {
+        if lower.starts_with(word) {
+            return value[word.len()..].trim_start();
+        }
+    }
+    value
+}
+
+/// Whether `value` has the DOI shape `10.<registrant>/<suffix>`: a numeric
+/// registrant code, a slash, then a non-empty suffix (the DOI spec allows
+/// almost any character there, so this is a shape check, not a registry
+/// lookup - good enough to keep a legitimate DOI out of the per-copy bucket).
+/// `value` is expected to already have any `doi:`/`urn:doi:` prefix stripped.
+fn looks_like_doi(value: &str) -> bool {
+    let Some(rest) = value.strip_prefix("10.") else {
+        return false;
+    };
+    let Some((registrant, suffix)) = rest.split_once('/') else {
+        return false;
+    };
+    !registrant.is_empty() && registrant.chars().all(|c| c.is_ascii_digit()) && !suffix.is_empty()
+}
+
 /// Whether `value` looks like it was minted per copy rather than per edition.
 ///
 /// The `urn:uuid:` substring check is deliberately tried before
@@ -27,16 +78,23 @@ fn is_per_copy(value: &str) -> bool {
     if v.to_ascii_lowercase().contains("urn:uuid:") || looks_like_uuid(v) {
         return true;
     }
+    // A scheme prefix (`urn:isbn:`, `doi:`, the bare `ISBN ` word, ...) is
+    // stripped before every check below, so a correctly-prefixed identifier
+    // checksums (or shape-matches, for a DOI) exactly like its bare form.
+    let core = strip_scheme_prefix(v);
+    if looks_like_doi(core) {
+        return false;
+    }
     // A long digit run only reads as per-copy if it is not a real, checksum-
     // valid ISBN/ISSN: a 13-digit millisecond timestamp has the same *length*
     // as an ISBN-13 but fails its check digit, and an ISBN-10 ending in `X`
     // has only 9 digits - shape alone (as opposed to a real checksum) gets
     // both of those wrong.
-    let digit_count = v.chars().filter(char::is_ascii_digit).count();
+    let digit_count = core.chars().filter(char::is_ascii_digit).count();
     if digit_count < 8 {
         return false;
     }
-    let stripped = strip_separators(v);
+    let stripped = strip_separators(core);
     !(is_valid_isbn13(&stripped) || is_valid_isbn10(&stripped) || is_valid_issn(&stripped))
 }
 
@@ -62,11 +120,17 @@ fn check_char_value(c: u8) -> Option<u32> {
     }
 }
 
-/// ISBN-13: 13 digits, alternating weights 1,3,1,3,…; valid when the
-/// weighted sum is a multiple of 10.
+/// ISBN-13: 13 digits under the `978`/`979` GS1 Bookland prefix, alternating
+/// weights 1,3,1,3,…; valid when the weighted sum is a multiple of 10. The
+/// prefix check matters: without it, roughly 1 in 10 arbitrary 13-digit
+/// numbers (a vendor transaction id, say) passes the checksum alone by pure
+/// chance.
 fn is_valid_isbn13(s: &str) -> bool {
     let bytes = s.as_bytes();
     if bytes.len() != 13 || !bytes.iter().all(u8::is_ascii_digit) {
+        return false;
+    }
+    if !(s.starts_with("978") || s.starts_with("979")) {
         return false;
     }
     let sum: u32 = bytes
@@ -152,7 +216,17 @@ pub(crate) fn normalize(book: &mut Book, transformations: &mut Vec<Transformatio
         });
     }
 
-    let unique_is_per_copy = book.metadata.identifier.as_deref().is_some_and(is_per_copy);
+    // Uses `is_shared`, not `is_per_copy` directly, so the unique identifier
+    // gets the same scheme shortcut a secondary identifier already gets: an
+    // explicit `<meta refines="#pub-id" property="identifier-type">ISBN</meta>`
+    // on the *unique* identifier must protect it exactly as it would a
+    // secondary one, not just when the value also happens to checksum. No
+    // identifier at all is, as before, nothing to replace.
+    let unique_is_per_copy = book
+        .metadata
+        .identifier
+        .as_deref()
+        .is_some_and(|v| !is_shared(v, book.metadata.identifier_scheme.as_deref()));
     if !unique_is_per_copy {
         return;
     }
@@ -169,6 +243,7 @@ pub(crate) fn normalize(book: &mut Book, transformations: &mut Vec<Transformatio
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::epub::Metadata;
 
     #[test]
     fn a_hyphenated_isbn13_is_kept() {
@@ -224,6 +299,15 @@ mod tests {
     }
 
     #[test]
+    fn isbn13_requires_the_gs1_bookland_prefix() {
+        // 13 digits with a genuinely valid mod-10 checksum, but under the 977
+        // (ISSN-derived) prefix rather than 978/979 - without the prefix
+        // check, roughly 1 in 10 arbitrary 13-digit numbers would false-
+        // accept this way.
+        assert!(!is_valid_isbn13("9771234567898"));
+    }
+
+    #[test]
     fn isbn10_checksum_accepts_an_x_check_character() {
         assert!(is_valid_isbn10("080442957X"));
         assert!(is_valid_isbn10("080442957x"));
@@ -249,5 +333,138 @@ mod tests {
     #[test]
     fn is_shared_drops_a_vendor_id_with_no_scheme() {
         assert!(!is_shared("SHTX001.635962014", None));
+    }
+
+    // -- scheme-prefixed and DOI spellings, every one measured as wrongly
+    // -- REPLACED before the prefix/DOI fix (see the module's callers) -----
+
+    #[test]
+    fn a_bare_isbn13_is_kept() {
+        assert!(!is_per_copy("9783407868213"));
+    }
+
+    #[test]
+    fn a_urn_isbn_prefixed_isbn13_is_kept() {
+        assert!(!is_per_copy("urn:isbn:9783407868213"));
+    }
+
+    #[test]
+    fn an_upper_case_urn_isbn_prefix_is_kept() {
+        assert!(!is_per_copy("URN:ISBN:9783407868213"));
+    }
+
+    #[test]
+    fn a_bare_isbn_scheme_prefix_is_kept() {
+        assert!(!is_per_copy("isbn:9783407868213"));
+    }
+
+    #[test]
+    fn an_isbn_word_prefix_with_a_hyphenated_value_is_kept() {
+        assert!(!is_per_copy("ISBN 978-3-407-86821-3"));
+    }
+
+    #[test]
+    fn a_urn_isbn_prefixed_isbn10_ending_in_x_is_kept() {
+        assert!(!is_per_copy("urn:isbn:080442957X"));
+    }
+
+    #[test]
+    fn a_urn_issn_prefixed_issn_is_kept() {
+        assert!(!is_per_copy("urn:issn:2049-3630"));
+    }
+
+    #[test]
+    fn a_bare_doi_is_kept() {
+        assert!(!is_per_copy("10.1016/j.jbi.2020.103545"));
+    }
+
+    #[test]
+    fn a_doi_scheme_prefixed_doi_is_kept() {
+        assert!(!is_per_copy("doi:10.1016/j.jbi.2020.103545"));
+    }
+
+    #[test]
+    fn a_urn_doi_prefixed_doi_is_kept() {
+        assert!(!is_per_copy("urn:doi:10.1016/j.jbi.2020.103545"));
+    }
+
+    #[test]
+    fn a_value_shaped_like_the_start_of_a_doi_but_missing_the_slash_is_not_mistaken_for_one() {
+        // Starts like a DOI (`10.`) but never has the `/` that separates
+        // registrant from suffix, so `looks_like_doi` must not match it; it
+        // falls through to the checksum path instead and (correctly, since
+        // it is not a real ISBN/ISSN either) reads as per-copy.
+        assert!(is_per_copy("10.123456789"));
+    }
+
+    // -- the still-dropped per-copy cases, re-pinned after the prefix/DOI
+    // -- fix touched the same function ---------------------------------
+
+    #[test]
+    fn a_millisecond_timestamp_is_still_dropped_after_the_prefix_fix() {
+        assert!(is_per_copy("1735689600000"));
+    }
+
+    #[test]
+    fn a_vendor_transaction_id_is_still_dropped_after_the_prefix_fix() {
+        assert!(is_per_copy("SHTX001.635962014"));
+    }
+
+    #[test]
+    fn a_bare_uuid_is_still_dropped_after_the_prefix_fix() {
+        assert!(is_per_copy("6f2a1e40-8c31-4b7e-9a55-1d0c2f9b7e31"));
+    }
+
+    #[test]
+    fn an_email_address_is_still_dropped_after_the_prefix_fix() {
+        assert!(is_per_copy("buyer42@example.com"));
+    }
+
+    // -- the unique-identifier path must agree with the secondary path -----
+
+    fn book_with_identifier(identifier: &str, scheme: Option<&str>) -> Book {
+        Book {
+            metadata: Metadata {
+                identifier: Some(identifier.to_string()),
+                identifier_scheme: scheme.map(str::to_string),
+                ..Metadata::default()
+            },
+            resources: indexmap::IndexMap::new(),
+            spine: Vec::new(),
+            toc: Vec::new(),
+            cover: None,
+            opf_path: "content.opf".to_string(),
+            nav_path: None,
+            ncx_path: None,
+        }
+    }
+
+    #[test]
+    fn an_explicit_identifier_type_refinement_protects_the_unique_identifier_too() {
+        // 13 digits that fail the ISBN-13 checksum outright (same value the
+        // secondary-identifier path already pins in
+        // `an_invalid_checksum_13_digit_number_is_dropped`), exercised
+        // through `normalize()` on the *unique* identifier instead - the
+        // exact disagreement the two-paths bug produced: the shape heuristic
+        // alone reads this as per-copy, but an explicit `identifier-type`
+        // refinement must protect it here exactly as it protects a
+        // secondary identifier carrying the same value and scheme.
+        let mut book = book_with_identifier("1234567890123", Some("ISBN"));
+        let mut transformations = Vec::new();
+        normalize(&mut book, &mut transformations);
+        assert_eq!(book.metadata.identifier.as_deref(), Some("1234567890123"));
+        assert!(
+            transformations.is_empty(),
+            "a scheme-protected unique identifier must not be replaced, got: {transformations:?}"
+        );
+    }
+
+    #[test]
+    fn a_per_copy_unique_identifier_with_no_scheme_is_still_replaced() {
+        let mut book = book_with_identifier("SHTX001.635962014", None);
+        let mut transformations = Vec::new();
+        normalize(&mut book, &mut transformations);
+        assert_eq!(book.metadata.identifier, None);
+        assert_eq!(transformations.len(), 1);
     }
 }

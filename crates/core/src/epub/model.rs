@@ -56,6 +56,13 @@ pub struct Metadata {
     /// orphans the user's bookmarks. New identifiers are *added* to
     /// [`Self::identifiers`] instead.
     pub identifier: Option<String>,
+    /// The unique identifier's scheme, from `opf:scheme` or an EPUB3
+    /// `identifier-type` refinement - the same source [`Identifier::scheme`]
+    /// reads for a secondary identifier, kept alongside the value it
+    /// describes rather than folded into it. Read-only metadata: the writer
+    /// never re-emits it, since [`Self::identifier`] itself is regenerated
+    /// wholesale on any per-copy replacement (see `generic::identity`).
+    pub identifier_scheme: Option<String>,
     /// Every *other* `dc:identifier`: ISBNs, DOIs, vendor ids.
     pub identifiers: Vec<Identifier>,
     /// `dc:description` - the blurb.
