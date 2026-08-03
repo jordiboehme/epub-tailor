@@ -105,6 +105,44 @@ pub fn book_with_image(path: &str, data: &[u8]) -> Vec<u8> {
     ])
 }
 
+/// A minimal EPUB3 book whose cover is the classic SVG-1.1 wrapper pattern:
+/// `cover.svg` (the manifest's `properties="cover-image"` item, and
+/// `book.cover`) frames a raster purely through `<image xlink:href="...">`.
+/// `cover.jpg` has NO manifest item of its own - reachable only by following
+/// the SVG's `xlink:href`. Used to pin the `drop_unreferenced` fix for the
+/// dead null-namespace attribute lookup that used to delete this raster.
+pub fn book_with_svg_cover_wrapper() -> Vec<u8> {
+    const CONTENT_OPF: &[u8] = br##"<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="pub-id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="pub-id">urn:uuid:cccc1111-2222-4333-8444-555555555555</dc:identifier>
+    <dc:title>Book</dc:title>
+    <dc:language>en</dc:language>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="ch" href="chapter.xhtml" media-type="application/xhtml+xml"/>
+    <item id="cover-svg" href="cover.svg" media-type="image/svg+xml" properties="cover-image"/>
+  </manifest>
+  <spine><itemref idref="ch"/></spine>
+</package>"##;
+    const CHAPTER: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>C</title></head>
+<body><p>Text.</p></body></html>"#;
+    const COVER_SVG: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 10 10"><image width="10" height="10" xlink:href="cover.jpg"/></svg>"#;
+    const COVER_JPG_STUB: &[u8] = &[0xFF, 0xD8, 0xFF, 0xD9];
+    build_epub(&[
+        ("mimetype", b"application/epub+zip"),
+        ("META-INF/container.xml", CONTAINER_XML),
+        ("OEBPS/content.opf", CONTENT_OPF),
+        ("OEBPS/nav.xhtml", NAV_XHTML),
+        ("OEBPS/chapter.xhtml", CHAPTER),
+        ("OEBPS/cover.svg", COVER_SVG),
+        ("OEBPS/cover.jpg", COVER_JPG_STUB),
+    ])
+}
+
 /// A minimal EPUB3 book with one extra file at `path` (zip-relative, e.g.
 /// `"OEBPS/vendor-id.txt"`) carrying `data`: not in the manifest, not linked
 /// from the chapter, the nav doc or anywhere else. Used to prove that a

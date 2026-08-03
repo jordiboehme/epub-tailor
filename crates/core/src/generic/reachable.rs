@@ -5,17 +5,29 @@
 //! violation *and* common in the wild, and the writer's keep-and-promote
 //! behaviour is the correct repair for them. So the graph is walked from real
 //! roots along real references, and only what nothing points at is dropped.
+//!
+//! Under-collection here is the dangerous direction: a reference type this
+//! module fails to recognize looks identical, from the outside, to a resource
+//! nothing points at, and gets deleted right along with genuine stray files.
+//! So the element/attribute scan below is deliberately broad (every element,
+//! not a hand-picked tag list) and a post-removal sanity pass (see
+//! [`prune`]'s tail) warns - rather than silently corrupting the book - if a
+//! surviving document still names something this pass just dropped.
 
+use std::collections::HashMap;
 use std::collections::HashSet;
 
 use crate::epub::Book;
-use crate::epub::model::normalize_href;
-use crate::html::dom::{collect_by_name, get_attr};
+use crate::epub::model::{Resource, normalize_href};
+use crate::html::dom::{collect_by_name, get_attr_local, local_name};
 use crate::html::parse::parse_xhtml;
-use crate::report::Transformation;
+use crate::report::{Transformation, Warning};
 
-/// Attributes that can name another resource.
-const REF_ATTRS: &[&str] = &["src", "href", "poster", "xlink:href"];
+/// Attributes (by local name, namespace-agnostic - see [`get_attr_local`])
+/// that can name another resource. `href` also catches SVG1.1
+/// `xlink:href`, whose local name html5ever's foreign-content adjustment
+/// rewrites to plain `href` in a non-null namespace.
+const REF_ATTRS: &[&str] = &["src", "href", "poster", "data"];
 
 /// Parent directory of a zip-absolute path (`""` if it has no `/`).
 fn parent_dir(path: &str) -> String {
@@ -23,6 +35,20 @@ fn parent_dir(path: &str) -> String {
         Some(idx) => path[..idx].to_string(),
         None => String::new(),
     }
+}
+
+/// Normalize a declared media type for matching: trimmed, lowercased, with
+/// any `;`-separated parameter (`; charset=utf-8`, stray casing like
+/// `TEXT/CSS`) stripped. A manifest is free to declare either, and matching
+/// the raw string verbatim would silently fall through to "no references
+/// extracted" - deleting everything that stylesheet/document points at.
+fn normalize_media_type(media_type: &str) -> String {
+    media_type
+        .split(';')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase()
 }
 
 /// Whether `raw` opens with a URI scheme (`http:`, `data:`, `mailto:`,
@@ -57,21 +83,38 @@ fn resolve(base_dir: &str, raw: &str) -> Option<String> {
     }
 }
 
+/// Every URL a `srcset` list names (`"a.png 2x, b.png 1x"`), ignoring each
+/// entry's optional width/pixel-density descriptor.
+fn srcset_refs(srcset: &str, base_dir: &str) -> Vec<String> {
+    srcset
+        .split(',')
+        .filter_map(|entry| entry.split_whitespace().next())
+        .filter_map(|url| resolve(base_dir, url))
+        .collect()
+}
+
 /// Every path `css` names through `url(...)` or a `url()`-less
 /// `@import "file.css"` / `@import 'file.css'`.
 fn css_refs(css: &str, base_dir: &str) -> Vec<String> {
     let mut out = Vec::new();
 
     // `url(...)`: covers both a plain `url()` value and `@import url(...)`.
+    // A `url(` with no matching `)` skips just that occurrence and keeps
+    // scanning - one malformed declaration must not hide every later
+    // `url()` in the sheet.
     let mut rest = css;
     while let Some(start) = rest.find("url(") {
         let after = &rest[start + 4..];
-        let Some(end) = after.find(')') else { break };
-        let raw = after[..end].trim().trim_matches(['"', '\'']);
-        if let Some(p) = resolve(base_dir, raw) {
-            out.push(p);
+        match after.find(')') {
+            Some(end) => {
+                let raw = after[..end].trim().trim_matches(['"', '\'']);
+                if let Some(p) = resolve(base_dir, raw) {
+                    out.push(p);
+                }
+                rest = &after[end + 1..];
+            }
+            None => rest = after,
         }
-        rest = &after[end + 1..];
     }
 
     // `@import "file.css"`: the string-literal form, with no `url(...)`
@@ -118,8 +161,135 @@ fn ncx_refs(ncx: &str, base_dir: &str) -> Vec<String> {
     out
 }
 
+/// Every path a SMIL media-overlay document (`application/smil+xml`) names
+/// through an `<audio src>`, `<text src>` or similar `<par>`/`<seq>` child's
+/// `src` - the way a read-aloud EPUB 3 book's audio track and per-fragment
+/// text targets are named. `text@src` usually just repoints at a spine
+/// document already reachable, but the audio track is reachable only from
+/// here.
+fn smil_refs(smil: &str, base_dir: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let Ok(doc) = roxmltree::Document::parse(smil) else {
+        return out;
+    };
+    for node in doc.descendants().filter(|n| {
+        n.is_element() && matches!(n.tag_name().name(), "audio" | "text" | "video" | "img")
+    }) {
+        if let Some(src) = node.attribute("src")
+            && let Some(p) = resolve(base_dir, src)
+        {
+            out.push(p);
+        }
+    }
+    out
+}
+
+/// Every path the OPF names through a manifest item's `media-overlay` or
+/// `fallback` attribute (each an `idref` to another manifest item, not a
+/// path). Ordinary `<item href>` membership is deliberately NOT walked here -
+/// manifest membership is the wrong reachability test, the whole point of
+/// this module - but `media-overlay` (the SMIL doc driving a spine chapter's
+/// audio) and `fallback` (the resource a reading system falls back to for an
+/// unsupported type) are real edges a spine/content walk alone never sees.
+fn opf_refs(opf: &str, base_dir: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let Ok(doc) = roxmltree::Document::parse(opf) else {
+        return out;
+    };
+    let items: Vec<_> = doc
+        .descendants()
+        .filter(|n| n.is_element() && n.tag_name().name() == "item")
+        .collect();
+    let id_href: HashMap<&str, &str> = items
+        .iter()
+        .filter_map(|n| Some((n.attribute("id")?, n.attribute("href")?)))
+        .collect();
+    for item in &items {
+        for attr in ["media-overlay", "fallback"] {
+            if let Some(target_id) = item.attribute(attr)
+                && let Some(href) = id_href.get(target_id)
+                && let Some(p) = resolve(base_dir, href)
+            {
+                out.push(p);
+            }
+        }
+    }
+    out
+}
+
+/// Every path `resource` (whose directory is `dir`) names, dispatched by its
+/// (normalized) media type. The single source of truth for "what does this
+/// resource point at" - used both by the graph walk and by the post-removal
+/// dangling-reference check in [`prune`], so the two can never disagree.
+fn refs_of(resource: &Resource, dir: &str) -> Vec<String> {
+    match normalize_media_type(&resource.media_type).as_str() {
+        "text/css" => match std::str::from_utf8(&resource.data) {
+            Ok(text) => css_refs(text, dir),
+            Err(_) => Vec::new(),
+        },
+        // XML formats, parsed separately rather than through the HTML5 tree
+        // builder below, whose tag set/self-closing handling doesn't match
+        // arbitrary XML.
+        "application/x-dtbncx+xml" => match std::str::from_utf8(&resource.data) {
+            Ok(text) => ncx_refs(text, dir),
+            Err(_) => Vec::new(),
+        },
+        "application/smil+xml" => match std::str::from_utf8(&resource.data) {
+            Ok(text) => smil_refs(text, dir),
+            Err(_) => Vec::new(),
+        },
+        "application/oebps-package+xml" => match std::str::from_utf8(&resource.data) {
+            Ok(text) => opf_refs(text, dir),
+            Err(_) => Vec::new(),
+        },
+        "application/xhtml+xml" | "image/svg+xml" => {
+            let Ok(doc) = parse_xhtml(&resource.data) else {
+                return Vec::new();
+            };
+            let mut refs = Vec::new();
+            // Every element, not a hand-picked tag allow-list: `<object
+            // data>`, `<script src>`, `<track src>`, `<embed src>`, `<a
+            // xlink:href>` inside an inline `<svg>`, ... all use the same
+            // small set of reference-shaped attributes, so probing every
+            // element is both simpler and safer than enumerating tag names -
+            // over-collection here leaves harmless junk reachable,
+            // under-collection deletes real content.
+            for node in doc.inclusive_descendants() {
+                if local_name(&node).is_none() {
+                    continue;
+                }
+                for attr in REF_ATTRS {
+                    if let Some(raw) = get_attr_local(&node, attr)
+                        && let Some(p) = resolve(dir, &raw)
+                    {
+                        refs.push(p);
+                    }
+                }
+                if let Some(srcset) = get_attr_local(&node, "srcset") {
+                    refs.extend(srcset_refs(&srcset, dir));
+                }
+                // An inline `style="background:url(...)"` references assets
+                // exactly like a `<style>` block does.
+                if let Some(style) = get_attr_local(&node, "style") {
+                    refs.extend(css_refs(&style, dir));
+                }
+            }
+            // `<style>` blocks reference assets too.
+            for node in collect_by_name(&doc, "style") {
+                refs.extend(css_refs(&node.text_contents(), dir));
+            }
+            refs
+        }
+        _ => Vec::new(),
+    }
+}
+
 /// Drop every resource unreachable from the book's roots.
-pub(crate) fn prune(book: &mut Book, transformations: &mut Vec<Transformation>) {
+pub(crate) fn prune(
+    book: &mut Book,
+    transformations: &mut Vec<Transformation>,
+    warnings: &mut Vec<Warning>,
+) {
     let mut reachable: HashSet<String> = HashSet::new();
     let mut queue: Vec<String> = Vec::new();
 
@@ -139,60 +309,46 @@ pub(crate) fn prune(book: &mut Book, transformations: &mut Vec<Transformation>) 
             continue;
         };
         let dir = parent_dir(&path);
-        let found: Vec<String> = match resource.media_type.as_str() {
-            "text/css" => match std::str::from_utf8(&resource.data) {
-                Ok(text) => css_refs(text, &dir),
-                Err(_) => Vec::new(),
-            },
-            // The NCX is XML, not HTML: parsed separately rather than through
-            // the HTML5 tree builder below, whose tag set it does not share.
-            "application/x-dtbncx+xml" => match std::str::from_utf8(&resource.data) {
-                Ok(text) => ncx_refs(text, &dir),
-                Err(_) => Vec::new(),
-            },
-            "application/xhtml+xml" | "image/svg+xml" => {
-                let Ok(doc) = parse_xhtml(&resource.data) else {
-                    continue;
-                };
-                let mut refs = Vec::new();
-                for name in [
-                    "img", "image", "link", "a", "source", "video", "audio", "use",
-                ] {
-                    for node in collect_by_name(&doc, name) {
-                        for attr in REF_ATTRS {
-                            if let Some(raw) = get_attr(&node, attr)
-                                && let Some(p) = resolve(&dir, &raw)
-                            {
-                                refs.push(p);
-                            }
-                        }
-                    }
-                }
-                // Inline `<style>` blocks reference assets too.
-                for node in collect_by_name(&doc, "style") {
-                    refs.extend(css_refs(&node.text_contents(), &dir));
-                }
-                refs
-            }
-            _ => Vec::new(),
-        };
-        queue.extend(found);
+        queue.extend(refs_of(resource, &dir));
     }
 
-    let dropped: Vec<String> = book
+    let dropped: HashSet<String> = book
         .resources
         .keys()
         .filter(|p| !reachable.contains(*p))
         .cloned()
         .collect();
-    for path in dropped {
-        let size = book.resources[&path].data.len();
-        book.resources.shift_remove(&path);
+    for path in &dropped {
+        let size = book.resources[path].data.len();
         transformations.push(Transformation {
             kind: "generic-unreferenced".to_string(),
             detail: format!("dropped {size} bytes nothing references"),
-            file: Some(path),
+            file: Some(path.clone()),
         });
+    }
+    for path in &dropped {
+        book.resources.shift_remove(path);
+    }
+
+    // Safety net: verify no *surviving* document still names something this
+    // pass just dropped. Every reference type above already feeds the walk,
+    // so a correct edge never reaches this point - this exists for the edge
+    // type nobody has found yet (this pass already shipped once with a dead
+    // `xlink:href` lookup that silently deleted real cover art). A pass that
+    // can break a book must not do so silently.
+    for (path, resource) in &book.resources {
+        let dir = parent_dir(path);
+        for target in refs_of(resource, &dir) {
+            if dropped.contains(&target) {
+                warnings.push(Warning {
+                    message: format!(
+                        "{path} still references {target}, which was dropped as unreferenced - \
+                         the reachability graph may be missing an edge"
+                    ),
+                    file: Some(path.clone()),
+                });
+            }
+        }
     }
 }
 
@@ -225,6 +381,13 @@ mod tests {
         }
     }
 
+    fn prune_book(book: &mut Book) -> (Vec<Transformation>, Vec<Warning>) {
+        let mut transformations = Vec::new();
+        let mut warnings = Vec::new();
+        prune(book, &mut transformations, &mut warnings);
+        (transformations, warnings)
+    }
+
     #[test]
     fn drops_a_resource_nothing_references() {
         let mut book = book_with(
@@ -239,11 +402,11 @@ mod tests {
             ],
             vec!["OEBPS/chapter.xhtml"],
         );
-        let mut transformations = Vec::new();
-        prune(&mut book, &mut transformations);
+        let (transformations, warnings) = prune_book(&mut book);
         assert!(!book.resources.contains_key("OEBPS/stray.txt"));
         assert!(book.resources.contains_key("OEBPS/chapter.xhtml"));
         assert_eq!(transformations.len(), 1);
+        assert!(warnings.is_empty());
     }
 
     #[test]
@@ -261,8 +424,7 @@ mod tests {
             ],
             vec!["OEBPS/chapter.xhtml"],
         );
-        let mut transformations = Vec::new();
-        prune(&mut book, &mut transformations);
+        prune_book(&mut book);
         assert!(book.resources.contains_key("OEBPS/other.css"));
     }
 
@@ -287,8 +449,7 @@ mod tests {
             vec![],
         );
         book.ncx_path = Some("OEBPS/toc.ncx".to_string());
-        let mut transformations = Vec::new();
-        prune(&mut book, &mut transformations);
+        prune_book(&mut book);
         assert!(book.resources.contains_key("OEBPS/landmark.xhtml"));
     }
 
@@ -308,9 +469,220 @@ mod tests {
             ],
             vec!["OEBPS/chapter.xhtml"],
         );
-        let mut transformations = Vec::new();
         // Must not panic or otherwise choke on the absolute/data refs.
-        prune(&mut book, &mut transformations);
+        prune_book(&mut book);
         assert!(book.resources.contains_key("OEBPS/chapter.xhtml"));
+    }
+
+    #[test]
+    fn keeps_an_svg_cover_raster_referenced_only_through_xlink_href() {
+        // The classic cover-wrapper pattern (SVG 1.1): a standalone SVG,
+        // itself the book's cover root, framing a raster via `xlink:href`.
+        // html5ever's foreign-content adjustment stores that attribute in the
+        // xlink namespace with local name `href`, which a null-namespace-only
+        // lookup never matches - this pins the fix.
+        let mut book = book_with(
+            vec![
+                ("OEBPS/content.opf", "application/oebps-package+xml", b""),
+                (
+                    "OEBPS/cover.svg",
+                    "image/svg+xml",
+                    br#"<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"><image xlink:href="cover.jpg"/></svg>"#,
+                ),
+                ("OEBPS/cover.jpg", "image/jpeg", b"\xFF\xD8fake\xFF\xD9"),
+            ],
+            vec![],
+        );
+        book.cover = Some("OEBPS/cover.svg".to_string());
+        let (_, warnings) = prune_book(&mut book);
+        assert!(
+            book.resources.contains_key("OEBPS/cover.jpg"),
+            "the raster an SVG cover wraps via xlink:href must survive"
+        );
+        assert!(
+            warnings.is_empty(),
+            "a correctly-walked edge warns of nothing"
+        );
+    }
+
+    #[test]
+    fn keeps_a_file_referenced_only_from_an_inline_style_attribute() {
+        let mut book = book_with(
+            vec![
+                ("OEBPS/content.opf", "application/oebps-package+xml", b""),
+                (
+                    "OEBPS/chapter.xhtml",
+                    "application/xhtml+xml",
+                    br#"<html><body><div style="background-image:url(inline-bg.png)">Hi</div></body></html>"#,
+                ),
+                ("OEBPS/inline-bg.png", "image/png", b"\x89PNG"),
+            ],
+            vec!["OEBPS/chapter.xhtml"],
+        );
+        prune_book(&mut book);
+        assert!(book.resources.contains_key("OEBPS/inline-bg.png"));
+    }
+
+    #[test]
+    fn keeps_a_file_referenced_only_through_srcset() {
+        let mut book = book_with(
+            vec![
+                ("OEBPS/content.opf", "application/oebps-package+xml", b""),
+                (
+                    "OEBPS/chapter.xhtml",
+                    "application/xhtml+xml",
+                    br#"<html><body><picture><source srcset="hi.png 2x"/></picture></body></html>"#,
+                ),
+                ("OEBPS/hi.png", "image/png", b"\x89PNG"),
+            ],
+            vec!["OEBPS/chapter.xhtml"],
+        );
+        prune_book(&mut book);
+        assert!(book.resources.contains_key("OEBPS/hi.png"));
+    }
+
+    #[test]
+    fn keeps_targets_of_object_script_track_and_embed() {
+        let mut book = book_with(
+            vec![
+                ("OEBPS/content.opf", "application/oebps-package+xml", b""),
+                (
+                    "OEBPS/chapter.xhtml",
+                    "application/xhtml+xml",
+                    br#"<html><body>
+<object data="thing.pdf"></object>
+<script src="app.js"></script>
+<video><track src="subs.vtt"/></video>
+<embed src="widget.swf"/>
+</body></html>"#,
+                ),
+                ("OEBPS/thing.pdf", "application/pdf", b"pdf"),
+                ("OEBPS/app.js", "application/octet-stream", b"js"),
+                ("OEBPS/subs.vtt", "text/vtt", b"vtt"),
+                ("OEBPS/widget.swf", "application/x-shockwave-flash", b"swf"),
+            ],
+            vec!["OEBPS/chapter.xhtml"],
+        );
+        prune_book(&mut book);
+        assert!(book.resources.contains_key("OEBPS/thing.pdf"));
+        assert!(book.resources.contains_key("OEBPS/app.js"));
+        assert!(book.resources.contains_key("OEBPS/subs.vtt"));
+        assert!(book.resources.contains_key("OEBPS/widget.swf"));
+    }
+
+    #[test]
+    fn keeps_smil_audio_reached_through_a_manifest_media_overlay() {
+        let mut book = book_with(
+            vec![
+                (
+                    "OEBPS/content.opf",
+                    "application/oebps-package+xml",
+                    br#"<package xmlns="http://www.idpf.org/2007/opf">
+<manifest>
+<item id="ch1" href="chapter.xhtml" media-type="application/xhtml+xml" media-overlay="mo1"/>
+<item id="mo1" href="chapter.smil" media-type="application/smil+xml"/>
+</manifest>
+</package>"#,
+                ),
+                (
+                    "OEBPS/chapter.xhtml",
+                    "application/xhtml+xml",
+                    b"<html><body><p>Hi</p></body></html>",
+                ),
+                (
+                    "OEBPS/chapter.smil",
+                    "application/smil+xml",
+                    br#"<smil xmlns="http://www.w3.org/ns/SMIL"><body><par>
+<text src="chapter.xhtml"/><audio src="track.mp3"/>
+</par></body></smil>"#,
+                ),
+                ("OEBPS/track.mp3", "audio/mpeg", b"mp3"),
+            ],
+            vec!["OEBPS/chapter.xhtml"],
+        );
+        prune_book(&mut book);
+        assert!(book.resources.contains_key("OEBPS/chapter.smil"));
+        assert!(book.resources.contains_key("OEBPS/track.mp3"));
+    }
+
+    #[test]
+    fn keeps_a_fallback_chain_target() {
+        let mut book = book_with(
+            vec![
+                (
+                    "OEBPS/content.opf",
+                    "application/oebps-package+xml",
+                    br#"<package xmlns="http://www.idpf.org/2007/opf">
+<manifest>
+<item id="ch1" href="chapter.xhtml" media-type="application/xhtml+xml"/>
+<item id="weird" href="weird.xml" media-type="application/x-weird+xml" fallback="fb"/>
+<item id="fb" href="fallback.xhtml" media-type="application/xhtml+xml"/>
+</manifest>
+</package>"#,
+                ),
+                (
+                    "OEBPS/chapter.xhtml",
+                    "application/xhtml+xml",
+                    b"<html><body><p>Hi</p></body></html>",
+                ),
+                ("OEBPS/weird.xml", "application/x-weird+xml", b"<w/>"),
+                (
+                    "OEBPS/fallback.xhtml",
+                    "application/xhtml+xml",
+                    b"<html><body><p>Fallback</p></body></html>",
+                ),
+            ],
+            vec!["OEBPS/chapter.xhtml"],
+        );
+        prune_book(&mut book);
+        assert!(book.resources.contains_key("OEBPS/fallback.xhtml"));
+    }
+
+    #[test]
+    fn matches_a_media_type_with_parameters_and_odd_casing() {
+        let mut book = book_with(
+            vec![
+                ("OEBPS/content.opf", "application/oebps-package+xml", b""),
+                (
+                    "OEBPS/chapter.xhtml",
+                    "application/xhtml+xml",
+                    br#"<html><head><link rel="stylesheet" href="main.css"/></head><body/></html>"#,
+                ),
+                (
+                    "OEBPS/main.css",
+                    "TEXT/CSS; charset=utf-8",
+                    b"body { background: url(bg.png); }",
+                ),
+                ("OEBPS/bg.png", "image/png", b"\x89PNG"),
+            ],
+            vec!["OEBPS/chapter.xhtml"],
+        );
+        prune_book(&mut book);
+        assert!(book.resources.contains_key("OEBPS/bg.png"));
+    }
+
+    #[test]
+    fn an_unterminated_trailing_url_does_not_panic_or_lose_earlier_matches() {
+        // The `url(` that opens here never closes anywhere in the rest of the
+        // string (it is the last thing in the sheet) - the old code's `else
+        // { break }` on this exact shape aborted the whole scan; it must not
+        // take the already-collected earlier match down with it.
+        let refs = css_refs(
+            "a { background: url(good.png); } b { background: url(unterminated",
+            "OEBPS",
+        );
+        assert_eq!(refs, vec!["OEBPS/good.png".to_string()]);
+    }
+
+    #[test]
+    fn two_well_formed_urls_are_both_collected() {
+        let refs = css_refs(
+            "a { background: url(one.png); } b { background: url(two.png); }",
+            "OEBPS",
+        );
+        assert_eq!(
+            refs,
+            vec!["OEBPS/one.png".to_string(), "OEBPS/two.png".to_string()]
+        );
     }
 }

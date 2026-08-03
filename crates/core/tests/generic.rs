@@ -410,3 +410,23 @@ fn the_epub_profile_keeps_unreferenced_files() {
         "repair-only must not change what survives"
     );
 }
+
+/// Mandatory regression coverage for the review's Critical 1: a null-namespace
+/// attribute lookup made `xlink:href` a dead lookup, so a raster reachable
+/// only through an SVG cover wrapper's `<image xlink:href>` was silently
+/// deleted. Runs the real `convert()` pipeline, not just the unit-level
+/// `reachable` walk, so it also proves nothing upstream (cover detection, the
+/// SVG pass being off under plain `generic`) papers over the bug.
+#[test]
+fn generic_keeps_an_svg_cover_raster_referenced_only_via_xlink_href() {
+    let mut epub = common::book_with_svg_cover_wrapper();
+    let out = convert(
+        Input::Epub(std::mem::take(&mut epub)),
+        &opts_for(&["generic"]),
+    )
+    .expect("converts");
+    assert!(
+        common::entry(&out.epub, "OEBPS/cover.jpg").is_some(),
+        "the raster an SVG cover wraps via xlink:href must survive drop_unreferenced"
+    );
+}

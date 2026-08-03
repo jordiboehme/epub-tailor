@@ -61,6 +61,29 @@ pub(crate) fn get_attr(node: &NodeRef, name: &str) -> Option<String> {
     }
 }
 
+/// Get an attribute's value by LOCAL NAME alone, whatever its namespace.
+///
+/// [`get_attr`] only ever matches the null namespace (see kuchikiki's
+/// `Attributes::get`), which silently misses a foreign-content attribute like
+/// `xlink:href` on an `<svg>`-namespaced `<image>`: html5ever's SVG attribute
+/// adjustment rewrites it to `ExpandedName { ns: xlink, local: "href" }`
+/// before it ever reaches the tree, so a null-namespace lookup for either
+/// `"xlink:href"` or `"href"` comes back empty. This scans every attribute's
+/// local name instead, so `href`/`xlink:href`/any other namespaced spelling
+/// of the same local name all resolve the same way.
+pub(crate) fn get_attr_local(node: &NodeRef, local: &str) -> Option<String> {
+    match node.data() {
+        NodeData::Element(e) => e
+            .attributes
+            .borrow()
+            .map
+            .iter()
+            .find(|(k, _)| k.local.as_ref() == local)
+            .map(|(_, attr)| attr.value.clone()),
+        _ => None,
+    }
+}
+
 /// Set (or replace) an attribute value on an element node.
 pub(crate) fn set_attr(node: &NodeRef, name: &str, value: &str) {
     if let NodeData::Element(e) = node.data() {

@@ -593,7 +593,7 @@ pub fn convert(input: Input, opts: &ConvertOptions) -> Result<Converted, Convert
     // reference (image renames, SVG rasterization) and before identity
     // normalization, so the graph it walks reflects the final book.
     if opts.features.drop_unreferenced {
-        generic::reachable::prune(&mut book, &mut transformations);
+        generic::reachable::prune(&mut book, &mut transformations, &mut warnings);
     }
 
     // Identity normalization runs late, after every content transform, so the
