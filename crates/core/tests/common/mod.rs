@@ -410,6 +410,13 @@ pub struct CopyMarks<'a> {
     pub exif_payload: &'a str,
     pub invisible_payload: &'a str,
     pub vendor_identifier: &'a str,
+    /// A per-copy value dressed as a DOI, carried as a secondary
+    /// `dc:identifier` next to the edition's real ISBN. This is the channel
+    /// a shop reaches for once the bare `urn:uuid:` spelling is known to be
+    /// stripped: it looks bibliographic, so it reads as shared unless the
+    /// value itself is screened. Its own convergence rested on unit-level
+    /// classification alone until it was added here.
+    pub doi_identifier: &'a str,
     /// Stray unreferenced files to interleave into the archive, each as
     /// `(anchor, path, content)`: the stray is inserted immediately after
     /// the fixed entry named `anchor` (one of `"mimetype"`,
@@ -463,6 +470,8 @@ pub fn marked_copy(marks: CopyMarks) -> Vec<u8> {
     <dc:identifier id="pub-id">{vendor_identifier}</dc:identifier>
     <dc:identifier id="isbn">9783407868213</dc:identifier>
     <meta refines="#isbn" property="identifier-type">ISBN</meta>
+    <dc:identifier id="doi">{doi_identifier}</dc:identifier>
+    <meta refines="#doi" property="identifier-type">DOI</meta>
     <dc:title>Marked Book</dc:title>
     <dc:language>en</dc:language>
     <meta property="dcterms:modified">{modified}</meta>
@@ -475,6 +484,7 @@ pub fn marked_copy(marks: CopyMarks) -> Vec<u8> {
   <spine><itemref idref="ch"/></spine>
 </package>"##,
         vendor_identifier = marks.vendor_identifier,
+        doi_identifier = marks.doi_identifier,
         modified = marks.modified,
     );
     // The invisible-character payload sits between two plain Latin letters,

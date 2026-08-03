@@ -538,6 +538,7 @@ fn two_marked_copies_converge_to_identical_bytes() {
         exif_payload: "BUYER-A",
         invisible_payload: "\u{200B}\u{200B}\u{200C}",
         vendor_identifier: "urn:uuid:6f2a1e40-8c31-4b7e-9a55-1d0c2f9b7e31",
+        doi_identifier: "doi:10.0000/TXN-A",
         // One stray, mid-archive.
         strays: vec![("OEBPS/nav.xhtml", "OEBPS/a-marker.txt", "A")],
         zip_epoch: 2026,
@@ -548,6 +549,7 @@ fn two_marked_copies_converge_to_identical_bytes() {
         exif_payload: "BUYER-B",
         invisible_payload: "\u{2060}\u{200B}",
         vendor_identifier: "urn:uuid:11111111-2222-3333-4444-555555555555",
+        doi_identifier: "doi:10.0000/TXN-B",
         // A DIFFERENT count (two, not one) at DIFFERENT positions - one
         // right after the dropped META-INF file (so it lands first among
         // surviving resources), one after the image (so it lands last).
@@ -606,5 +608,19 @@ fn two_marked_copies_converge_to_identical_bytes() {
         opf_of(&a.epub).contains("<meta property=\"dcterms:modified\">1970-01-01T00:00:00Z</meta>"),
         "the differing per-copy dcterms:modified values must converge on the pinned epoch:\n{}",
         opf_of(&a.epub)
+    );
+    // The DOI-costumed channel, asserted directly as well as through the
+    // byte comparison: the fixture gives it an `identifier-type">DOI</meta>`
+    // refinement, which is exactly the one OPF line a shop adds to try to
+    // launder the value past the screen, so this also pins R3 end to end.
+    let out_opf = opf_of(&a.epub);
+    assert!(
+        !out_opf.contains("TXN-A") && !out_opf.contains("TXN-B"),
+        "a DOI-costumed per-copy identifier must be dropped despite its \
+         identifier-type refinement:\n{out_opf}"
+    );
+    assert!(
+        out_opf.contains("9783407868213"),
+        "the edition's real ISBN must survive next to the dropped DOI:\n{out_opf}"
     );
 }
