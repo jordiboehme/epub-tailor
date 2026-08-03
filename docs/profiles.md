@@ -326,6 +326,10 @@ should tailor to byte-identical output. What each switch removes:
   real DOI without querying a resolver, which this tool deliberately never
   does (it opens no sockets). Nothing here proves a DOI real - the only
   claim is that the shapes a shop is likely to reach for are screened out.
+  The checksummed types have the same hole: a per-copy value minted as a
+  checksum-valid thirteen-digit ISBN under `978`/`979`, or as a checksum-valid
+  eight-digit ISSN, survives exactly as a forged DOI does, because a checksum
+  proves a value well-formed and never proves it shared.
 - **Convergence holds only across the same tool version and the same profile
   stack.** A different `epub-tailor` release or a different composed stack is
   not guaranteed to produce a matching result.
