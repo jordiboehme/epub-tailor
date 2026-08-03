@@ -48,12 +48,47 @@ function toMode(value: unknown): AppMode {
   return value === "edit" || value === "fit" ? value : DEFAULT_MODE;
 }
 
+/**
+ * One layer of a profile composition: a built-in profile by name, or a user
+ * JSON file by path. The CLI's `--profile` flag is repeatable and composes
+ * left to right; this is the app-side mirror of that, kept as one ordered
+ * list so any layer can sit anywhere - previously the app only allowed a
+ * single built-in followed by user files, which made two built-ins together
+ * (e.g. `generic` + `x4`) unreachable.
+ */
+export type ProfileLayer = { kind: "builtin"; name: string } | { kind: "file"; path: string };
+
+/**
+ * Build the layer stack from persisted state. The app shipped with a single
+ * built-in plus N user JSON files under two separate keys (`profile` and
+ * `userProfilePaths`); anyone upgrading has those two keys on disk and no
+ * `profileStack` yet, so it is rebuilt from them here rather than silently
+ * dropped. A `profileStack` that is already present (including an empty
+ * array, which is never produced by this app but is not this function's call
+ * to correct) wins outright - it is the current shape and the legacy keys
+ * beside it are stale leftovers, not a second source of truth.
+ */
+export function migrateProfileStack(
+  stored: ProfileLayer[] | undefined,
+  legacyProfile: string | undefined,
+  legacyPaths: string[] | undefined,
+): ProfileLayer[] {
+  if (stored && stored.length > 0) return stored;
+  const stack: ProfileLayer[] = [{ kind: "builtin", name: legacyProfile ?? "epub" }];
+  for (const path of legacyPaths ?? []) stack.push({ kind: "file", path });
+  return stack;
+}
+
 class SettingsStore {
   // -- persisted --------------------------------------------------------------
-  /** Selected built-in profile name. */
-  profile = $state("epub");
-  /** Paths to user profile JSON layers, composed on top of the built-in. */
-  userProfilePaths = $state<string[]>([]);
+  /**
+   * The active profile composition, in application order. A lone built-in
+   * layer is exactly what the CLI takes as a bare `--profile <name>`, so a
+   * single-element stack round-trips to the same spec it always did and a
+   * previously fitted output's appendix - and therefore its filename - does
+   * not churn on upgrade.
+   */
+  profileStack = $state<ProfileLayer[]>([{ kind: "builtin", name: "epub" }]);
   /** Destination folder, or `null` to write alongside each original. */
   outputDir = $state<string | null>(null);
   /** Filename template; `{original}` keeps each book's own stem. */
@@ -85,8 +120,11 @@ class SettingsStore {
   /** Read persisted settings, then wire up write-back for future changes. */
   async load(): Promise<void> {
     const store = await Store.load(STORE_FILE, { defaults: {}, autoSave: AUTOSAVE_DEBOUNCE_MS });
-    this.profile = (await store.get<string>("profile")) ?? this.profile;
-    this.userProfilePaths = (await store.get<string[]>("userProfilePaths")) ?? this.userProfilePaths;
+    this.profileStack = migrateProfileStack(
+      await store.get<ProfileLayer[]>("profileStack"),
+      await store.get<string>("profile"),
+      await store.get<string[]>("userProfilePaths"),
+    );
     this.outputDir = (await store.get<string | null>("outputDir")) ?? this.outputDir;
     this.filenameTemplate = (await store.get<string>("filenameTemplate")) ?? this.filenameTemplate;
     this.quality = (await store.get<string | null>("quality")) ?? this.quality;
@@ -113,8 +151,7 @@ class SettingsStore {
     // changes, and the store debounces the actual disk write. Set up after the
     // reads above so the initial values are not clobbered before they load.
     $effect.root(() => {
-      $effect(() => void store.set("profile", this.profile));
-      $effect(() => void store.set("userProfilePaths", $state.snapshot(this.userProfilePaths)));
+      $effect(() => void store.set("profileStack", $state.snapshot(this.profileStack)));
       $effect(() => void store.set("outputDir", this.outputDir));
       $effect(() => void store.set("filenameTemplate", this.filenameTemplate));
       $effect(() => void store.set("quality", this.quality));
