@@ -6,10 +6,9 @@
 mod common;
 
 use std::io::{Cursor, Read};
-use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::path::PathBuf;
 
-use common::epub3_kitchen_sink;
+use common::{epub3_kitchen_sink, run_epubcheck};
 use epub_tailor_core::{ConvertOptions, Input, convert};
 use zip::ZipArchive;
 
@@ -168,18 +167,6 @@ fn kitchen_sink_transforms_produce_expected_markers() {
 // ---------------------------------------------------------------------
 // epubcheck gate (skip-if-unavailable), mirroring `epubcheck_roundtrip`.
 // ---------------------------------------------------------------------
-
-fn run_epubcheck(path: &Path) -> Option<Output> {
-    if let Ok(output) = Command::new("epubcheck").arg(path).output() {
-        return Some(output);
-    }
-    if let Ok(jar) = std::env::var("EPUBCHECK_JAR")
-        && let Ok(output) = Command::new("java").arg("-jar").arg(jar).arg(path).output()
-    {
-        return Some(output);
-    }
-    None
-}
 
 #[test]
 fn kitchen_sink_output_is_epubcheck_clean() {

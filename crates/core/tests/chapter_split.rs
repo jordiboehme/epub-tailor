@@ -7,23 +7,10 @@
 mod common;
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::path::PathBuf;
 
-use common::epub3_oversize_chapter;
+use common::{epub3_oversize_chapter, run_epubcheck};
 use epub_tailor_core::{ConvertOptions, Input, convert, read_epub};
-
-fn run_epubcheck(path: &Path) -> Option<Output> {
-    if let Ok(output) = Command::new("epubcheck").arg(path).output() {
-        return Some(output);
-    }
-    if let Ok(jar) = std::env::var("EPUBCHECK_JAR")
-        && let Ok(output) = Command::new("java").arg("-jar").arg(jar).arg(path).output()
-    {
-        return Some(output);
-    }
-    None
-}
 
 /// Which ids live in each spine resource, per the re-read book.
 fn ids_by_path(book: &epub_tailor_core::Book) -> HashMap<String, Vec<String>> {

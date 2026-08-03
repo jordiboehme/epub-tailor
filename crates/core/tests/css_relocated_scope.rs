@@ -13,10 +13,9 @@
 mod common;
 
 use std::io::{Cursor, Read};
-use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::path::PathBuf;
 
-use common::epub3_style_bleed;
+use common::{epub3_style_bleed, run_epubcheck};
 use epub_tailor_core::{ConvertOptions, DeviceCaps, Features, Input, convert, lint_epub};
 use zip::ZipArchive;
 
@@ -100,18 +99,6 @@ fn relocated_head_styles_are_scoped_per_chapter() {
 // ---------------------------------------------------------------------
 // epubcheck gate (skip-if-unavailable), mirroring the other integration tests.
 // ---------------------------------------------------------------------
-
-fn run_epubcheck(path: &Path) -> Option<Output> {
-    if let Ok(output) = Command::new("epubcheck").arg(path).output() {
-        return Some(output);
-    }
-    if let Ok(jar) = std::env::var("EPUBCHECK_JAR")
-        && let Ok(output) = Command::new("java").arg("-jar").arg(jar).arg(path).output()
-    {
-        return Some(output);
-    }
-    None
-}
 
 #[test]
 fn scoped_relocated_output_is_epubcheck_clean() {

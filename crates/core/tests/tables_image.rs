@@ -8,10 +8,9 @@
 mod common;
 
 use std::io::{Cursor, Read};
-use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::path::PathBuf;
 
-use common::{epub3_nested_tables, epub3_tables};
+use common::{epub3_nested_tables, epub3_tables, run_epubcheck};
 use epub_tailor_core::{ConvertOptions, Input, TableMode, convert};
 use zip::ZipArchive;
 
@@ -220,18 +219,6 @@ fn nested_table_rasterizes_to_one_image_marked_nested() {
 // ---------------------------------------------------------------------
 // epubcheck gate (skip-if-unavailable).
 // ---------------------------------------------------------------------
-
-fn run_epubcheck(path: &Path) -> Option<Output> {
-    if let Ok(output) = Command::new("epubcheck").arg(path).output() {
-        return Some(output);
-    }
-    if let Ok(jar) = std::env::var("EPUBCHECK_JAR")
-        && let Ok(output) = Command::new("java").arg("-jar").arg(jar).arg(path).output()
-    {
-        return Some(output);
-    }
-    None
-}
 
 fn assert_epubcheck_clean(name: &str, epub: &[u8]) {
     let out_path = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("{name}.tailored.epub"));

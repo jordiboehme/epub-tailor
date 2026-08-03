@@ -4,10 +4,12 @@
 //! separate from `crates/core/src/markdown/`'s own unit tests,
 //! which check `build_book` in isolation before `convert` ever runs.
 
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+mod common;
 
+use std::collections::HashMap;
+use std::path::PathBuf;
+
+use common::run_epubcheck;
 use epub_tailor_core::{AssetResolver, ConvertOptions, FsResolver, Input, convert};
 
 struct MapResolver(HashMap<String, Vec<u8>>);
@@ -188,21 +190,6 @@ fn path_traversal_does_not_escape_the_resolver_root() {
     }
 
     std::fs::remove_dir_all(&dir).ok();
-}
-
-/// Run epubcheck against `path`, preferring the `epubcheck` launcher on `PATH`
-/// and falling back to `java -jar $EPUBCHECK_JAR`. Returns `None` if neither is
-/// available (mirrors `tests/epubcheck_roundtrip.rs`).
-fn run_epubcheck(path: &Path) -> Option<Output> {
-    if let Ok(output) = Command::new("epubcheck").arg(path).output() {
-        return Some(output);
-    }
-    if let Ok(jar) = std::env::var("EPUBCHECK_JAR")
-        && let Ok(output) = Command::new("java").arg("-jar").arg(jar).arg(path).output()
-    {
-        return Some(output);
-    }
-    None
 }
 
 #[test]

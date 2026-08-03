@@ -7,10 +7,9 @@
 mod common;
 
 use std::io::{Cursor, Read};
-use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::path::PathBuf;
 
-use common::build_epub;
+use common::{build_epub, run_epubcheck};
 use epub_tailor_core::{ConvertOptions, Input, convert};
 use image::codecs::png::PngEncoder;
 use image::{DynamicImage, ExtendedColorType, ImageEncoder, RgbImage};
@@ -842,18 +841,6 @@ fn gradient_fill_stays_jpeg() {
 // ---------------------------------------------------------------------
 // epubcheck gate (skip-if-unavailable).
 // ---------------------------------------------------------------------
-
-fn run_epubcheck(path: &Path) -> Option<Output> {
-    if let Ok(output) = Command::new("epubcheck").arg(path).output() {
-        return Some(output);
-    }
-    if let Ok(jar) = std::env::var("EPUBCHECK_JAR")
-        && let Ok(output) = Command::new("java").arg("-jar").arg(jar).arg(path).output()
-    {
-        return Some(output);
-    }
-    None
-}
 
 fn assert_epubcheck_clean(name: &str, epub: &[u8]) {
     let out_path = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("{name}.tailored.epub"));

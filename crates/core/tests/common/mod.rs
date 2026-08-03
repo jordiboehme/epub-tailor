@@ -7,8 +7,36 @@
 #![allow(dead_code)]
 
 use std::io::{Cursor, Write};
+use std::path::Path;
+use std::process::{Command, Output};
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipWriter};
+
+/// Run epubcheck against `path`, preferring the `epubcheck` launcher on `PATH`
+/// and falling back to `java -jar $EPUBCHECK_JAR`. Returns `None` if neither is
+/// available, or if the epubcheck gate is not requested for this run - so the
+/// caller's test SKIPs the external validation rather than failing.
+///
+/// epubcheck is a JVM process (~5s of JVM startup dominates each call), so by
+/// default this gate only runs in CI (where `CI` is set, e.g. by GitHub
+/// Actions) - it is opt-in, not opt-out, on a local machine. To run it
+/// locally anyway: `EPUBCHECK_FORCE=1 cargo nextest run ...`.
+pub fn run_epubcheck(path: &Path) -> Option<Output> {
+    let wants_gate =
+        std::env::var_os("CI").is_some() || std::env::var_os("EPUBCHECK_FORCE").is_some();
+    if !wants_gate {
+        return None;
+    }
+    if let Ok(output) = Command::new("epubcheck").arg(path).output() {
+        return Some(output);
+    }
+    if let Ok(jar) = std::env::var("EPUBCHECK_JAR")
+        && let Ok(output) = Command::new("java").arg("-jar").arg(jar).arg(path).output()
+    {
+        return Some(output);
+    }
+    None
+}
 
 /// A minimal, valid `META-INF/container.xml` pointing at `OEBPS/content.opf`.
 /// Shared by fixtures that build their own OPF/chapters but still need a

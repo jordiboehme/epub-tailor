@@ -7,28 +7,15 @@
 
 mod common;
 
-use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::path::PathBuf;
 
-use common::{epub2_minimal, epub3_kitchen_sink, epub3_minimal};
+use common::{epub2_minimal, epub3_kitchen_sink, epub3_minimal, run_epubcheck};
 use epub_tailor_core::profile::{DeviceCaps, Features};
 use epub_tailor_core::{ConvertOptions, Input, convert};
 
 /// Run epubcheck against `path`, preferring the `epubcheck` launcher on `PATH`
 /// and falling back to `java -jar $EPUBCHECK_JAR`. Returns `None` if neither is
 /// available.
-fn run_epubcheck(path: &Path) -> Option<Output> {
-    if let Ok(output) = Command::new("epubcheck").arg(path).output() {
-        return Some(output);
-    }
-    if let Ok(jar) = std::env::var("EPUBCHECK_JAR")
-        && let Ok(output) = Command::new("java").arg("-jar").arg(jar).arg(path).output()
-    {
-        return Some(output);
-    }
-    None
-}
-
 fn assert_clean_roundtrip_with(name: &str, epub: Vec<u8>, opts: &ConvertOptions) {
     let converted = convert(Input::Epub(epub), opts).expect("conversion should succeed");
     assert!(

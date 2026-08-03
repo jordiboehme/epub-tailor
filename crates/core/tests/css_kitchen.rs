@@ -7,10 +7,9 @@
 mod common;
 
 use std::io::{Cursor, Read};
-use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::path::PathBuf;
 
-use common::epub3_css_kitchen;
+use common::{epub3_css_kitchen, run_epubcheck};
 use epub_tailor_core::{ConvertOptions, Input, convert};
 use zip::ZipArchive;
 
@@ -141,18 +140,6 @@ fn css_kitchen_filters_relocates_and_strips_fonts() {
 // ---------------------------------------------------------------------
 // epubcheck gate (skip-if-unavailable).
 // ---------------------------------------------------------------------
-
-fn run_epubcheck(path: &Path) -> Option<Output> {
-    if let Ok(output) = Command::new("epubcheck").arg(path).output() {
-        return Some(output);
-    }
-    if let Ok(jar) = std::env::var("EPUBCHECK_JAR")
-        && let Ok(output) = Command::new("java").arg("-jar").arg(jar).arg(path).output()
-    {
-        return Some(output);
-    }
-    None
-}
 
 #[test]
 fn css_kitchen_output_is_epubcheck_clean() {

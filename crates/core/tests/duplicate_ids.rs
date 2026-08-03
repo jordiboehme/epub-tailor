@@ -12,10 +12,9 @@
 
 mod common;
 
-use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::path::PathBuf;
 
-use common::epub3_gutenberg_style_ids;
+use common::{epub3_gutenberg_style_ids, run_epubcheck};
 use epub_tailor_core::{ConvertOptions, Input, Severity, convert, lint_epub};
 
 /// Read a single entry from an in-memory EPUB as a UTF-8 string.
@@ -106,18 +105,6 @@ fn lint_flags_the_raw_fixture_and_is_clean_after_convert() {
 // ---------------------------------------------------------------------
 // epubcheck gate (skip-if-unavailable), mirroring `epubcheck_roundtrip`.
 // ---------------------------------------------------------------------
-
-fn run_epubcheck(path: &Path) -> Option<Output> {
-    if let Ok(output) = Command::new("epubcheck").arg(path).output() {
-        return Some(output);
-    }
-    if let Ok(jar) = std::env::var("EPUBCHECK_JAR")
-        && let Ok(output) = Command::new("java").arg("-jar").arg(jar).arg(path).output()
-    {
-        return Some(output);
-    }
-    None
-}
 
 #[test]
 fn gutenberg_style_fixture_output_is_epubcheck_clean() {

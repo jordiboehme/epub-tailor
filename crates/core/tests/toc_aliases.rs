@@ -10,10 +10,9 @@
 
 mod common;
 
-use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::path::PathBuf;
 
-use common::build_epub;
+use common::{build_epub, run_epubcheck};
 use epub_tailor_core::{ConvertOptions, DeviceCaps, Features, Input, convert, lint_epub};
 
 const CONTAINER_XML: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
@@ -83,18 +82,6 @@ fn toc_fragment_follows_anchor_alias_through_convert() {
 // ---------------------------------------------------------------------
 // epubcheck gate (skip-if-unavailable), mirroring `duplicate_ids`.
 // ---------------------------------------------------------------------
-
-fn run_epubcheck(path: &Path) -> Option<Output> {
-    if let Ok(output) = Command::new("epubcheck").arg(path).output() {
-        return Some(output);
-    }
-    if let Ok(jar) = std::env::var("EPUBCHECK_JAR")
-        && let Ok(output) = Command::new("java").arg("-jar").arg(jar).arg(path).output()
-    {
-        return Some(output);
-    }
-    None
-}
 
 #[test]
 fn toc_alias_fixture_output_is_epubcheck_clean() {
