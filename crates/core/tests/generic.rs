@@ -401,6 +401,28 @@ fn generic_keeps_a_file_referenced_only_from_css() {
 }
 
 #[test]
+fn generic_keeps_an_import_target_reached_only_past_a_malformed_url_rule() {
+    // Regression a code review caught: swapping `css_refs`'s naive `url()`
+    // scanner for a real AST walk silently dropped the raw `@import`
+    // string-literal recovery the old scanner used to provide. lightningcss
+    // discards a misplaced `@import` per grammar (never valid after another
+    // rule) and, separately, a malformed `url(` ahead of it can make the
+    // tokenizer itself swallow everything up to the next `)` - either way
+    // the AST walk alone never reaches `sub.css`. Proven end to end through
+    // `convert()`, not just the unit-level `reachable` walk.
+    let mut epub = common::book_with_css_import_after_a_malformed_rule();
+    let out = convert(
+        Input::Epub(std::mem::take(&mut epub)),
+        &opts_for(&["generic"]),
+    )
+    .expect("converts");
+    assert!(
+        common::entry(&out.epub, "OEBPS/sub.css").is_some(),
+        "an @import target reached only past a malformed rule must survive"
+    );
+}
+
+#[test]
 fn the_epub_profile_keeps_unreferenced_files() {
     let mut epub = common::book_with_extra_file("OEBPS/vendor-id.txt", b"x");
     let out =

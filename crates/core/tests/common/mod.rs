@@ -239,6 +239,50 @@ pub fn book_with_css_referenced_asset() -> Vec<u8> {
     ])
 }
 
+/// A minimal EPUB3 book whose chapter links `style.css`, which references
+/// `sub.css` through a plain `@import "sub.css";` string literal placed
+/// *after* a malformed `url()` rule that a CSS AST parser cannot recover
+/// through cleanly (an unclosed `url(broken.png}` - see
+/// `generic::reachable::raw_url_refs`'s docs for why). `sub.css` has NO
+/// manifest item; it is reachable only by walking the CSS. Pins the
+/// regression a code review caught in this task: replacing the naive
+/// `url()`-scanning `css_refs` with an AST walk silently dropped the
+/// `@import` string-literal safety net the old scanner used to provide,
+/// costing exactly this shape (`@import` reachable only past a malformed
+/// rule) through `convert()` end to end, not just the unit-level
+/// `reachable` walk.
+pub fn book_with_css_import_after_a_malformed_rule() -> Vec<u8> {
+    const CONTENT_OPF: &[u8] = br##"<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="pub-id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="pub-id">urn:uuid:cccc1111-2222-4333-8444-555555555555</dc:identifier>
+    <dc:title>Book</dc:title>
+    <dc:language>en</dc:language>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="ch" href="chapter.xhtml" media-type="application/xhtml+xml"/>
+    <item id="css" href="style.css" media-type="text/css"/>
+  </manifest>
+  <spine><itemref idref="ch"/></spine>
+</package>"##;
+    const CHAPTER: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>C</title>
+<link rel="stylesheet" type="text/css" href="style.css"/></head>
+<body><p>Text.</p></body></html>"#;
+    const STYLE_CSS: &[u8] = b"a{background:url(broken.png}\n@import \"sub.css\";\n";
+    const SUB_CSS: &[u8] = b"body { color: red; }\n";
+    build_epub(&[
+        ("mimetype", b"application/epub+zip"),
+        ("META-INF/container.xml", CONTAINER_XML),
+        ("OEBPS/content.opf", CONTENT_OPF),
+        ("OEBPS/nav.xhtml", NAV_XHTML),
+        ("OEBPS/chapter.xhtml", CHAPTER),
+        ("OEBPS/style.css", STYLE_CSS),
+        ("OEBPS/sub.css", SUB_CSS),
+    ])
+}
+
 /// A minimal EPUB3 book whose chapter has a single `<img srcset="only.png
 /// 2x">` and, deliberately, NO `src` at all - the shape that goes
 /// permanently broken if `srcset` targets are not fed to the reachability

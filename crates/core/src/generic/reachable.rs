@@ -125,6 +125,56 @@ impl<'i> lightningcss::visitor::Visitor<'i> for UrlCollector {
     }
 }
 
+/// Upper bound on how far past a `url(` or an `@import`'s opening quote
+/// either raw safety-net scan below will search for its closing `)` or
+/// matching quote, and so on the length of any value either one pushes as a
+/// reference. No legitimate book-relative path is anywhere close to this
+/// long.
+///
+/// Without a bound, a stylesheet crafted as many thousands of nested,
+/// unclosed `url(url(url(...` tokens forces every single occurrence to
+/// search all the way to the end of the remaining text, one after another -
+/// O(occurrences * remaining length) time, allocating a same-sized substring
+/// on top. Measured on the scan as first written (no bound): 32 KB of such
+/// input produced 8000 references and ~122 MB of allocation; extrapolated, a
+/// few hundred KB of it is multiple GB and tens of seconds. This crate's
+/// input is an arbitrary downloaded EPUB, so that cost is attacker
+/// -controlled, not just a theoretical worst case.
+const MAX_RAW_SPAN: usize = 2048;
+
+/// The prefix of `s`, up to `max` bytes, walked back to the nearest char
+/// boundary so slicing it never panics - `max` bytes in is not guaranteed to
+/// land between two UTF-8 code points.
+fn bounded_prefix(s: &str, max: usize) -> &str {
+    let mut end = max.min(s.len());
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
+}
+
+/// Byte offset of the first case-insensitive occurrence of ASCII `needle` in
+/// `haystack`. CSS keywords and function names are ASCII case-insensitive
+/// (`url(`, `URL(`, `Url(` all name the same function; `@import`, `@IMPORT`
+/// the same at-rule), so a plain `str::find` alone would miss a
+/// bad-url-remnants or misplaced-`@import` trigger spelled anything but
+/// lowercase.
+///
+/// Safe to compare byte-wise even though `haystack` is UTF-8: every byte of
+/// `needle` is ASCII (< 0x80), and no UTF-8 continuation byte or lead byte of
+/// a multi-byte sequence ever equals an ASCII byte value, so a match can only
+/// ever start on a genuine character boundary.
+fn find_ci(haystack: &str, needle: &str) -> Option<usize> {
+    let haystack = haystack.as_bytes();
+    let needle = needle.as_bytes();
+    if needle.is_empty() || haystack.len() < needle.len() {
+        return None;
+    }
+    haystack
+        .windows(needle.len())
+        .position(|w| w.eq_ignore_ascii_case(needle))
+}
+
 /// A permissive, grammar-independent scan for every literal `url(...)`
 /// occurrence in `css`, run alongside the AST walk in [`css_refs`] as a
 /// safety net.
@@ -146,19 +196,24 @@ impl<'i> lightningcss::visitor::Visitor<'i> for UrlCollector {
 /// not to name any real resource resolves to a path nothing in the book has,
 /// so it is a silent no-op). So this scan re-finds every literal
 /// `url(` occurrence independently - never skipping past one already claimed
-/// by a still-open match - pairing each with its own nearest `)`. That
-/// recovers exactly the targets CSS's own grammar discards as ordinary text,
-/// at the cost of also picking up the malformed value itself as inert
-/// garbage.
+/// by a still-open match - pairing each with its own nearest `)` within
+/// [`MAX_RAW_SPAN`] bytes. A captured value containing `{`, `}` or a newline
+/// is discarded rather than pushed: no legitimate path contains any of
+/// those, so it is always the tokenizer's garbage, not a real reference -
+/// filtering it out here removes the inert junk this scan would otherwise
+/// hand back for a match like `broken.png}\np.b{background:url(good.png`.
 fn raw_url_refs(css: &str, base_dir: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut search_from = 0usize;
-    while let Some(rel) = css[search_from..].find("url(") {
+    while let Some(rel) = find_ci(&css[search_from..], "url(") {
         let start = search_from + rel;
         let after = start + "url(".len();
-        if let Some(rel_end) = css[after..].find(')') {
-            let raw = css[after..after + rel_end].trim().trim_matches(['"', '\'']);
-            if let Some(p) = resolve(base_dir, raw) {
+        let window = bounded_prefix(&css[after..], MAX_RAW_SPAN);
+        if let Some(rel_end) = window.find(')') {
+            let raw = window[..rel_end].trim().trim_matches(['"', '\'']);
+            if !raw.contains(['{', '}', '\n', '\r'])
+                && let Some(p) = resolve(base_dir, raw)
+            {
                 out.push(p);
             }
         }
@@ -166,6 +221,43 @@ fn raw_url_refs(css: &str, base_dir: &str) -> Vec<String> {
         // it (mis)consumed, so a later `url(` inside the same garbage span is
         // still found on its own.
         search_from = after;
+    }
+    out
+}
+
+/// A permissive, grammar-independent scan for every `@import "…"` /
+/// `@import '…'` string-literal form in `css` (the form with no `url(...)`
+/// wrapper), run alongside the AST walk in [`css_refs`] as a safety net,
+/// mirroring [`raw_url_refs`].
+///
+/// An `@import` is only valid as one of the first rules in a stylesheet
+/// (after only `@charset` and other `@import`/`@layer` statements); one
+/// anywhere else is invalid per CSS grammar, and lightningcss's
+/// `error_recovery` correctly discards it as a matter of what the grammar
+/// permits, not of malformed syntax it can repair - so it never reaches
+/// `sheet.rules.0` and the AST walk in [`css_refs`] never sees it, no matter
+/// how well-formed the `@import` itself is. Restores the raw-text recovery
+/// the pre-parser scanner used to provide for exactly this shape.
+fn raw_import_refs(css: &str, base_dir: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cursor = css;
+    while let Some(rel) = find_ci(cursor, "@import") {
+        let tail = &cursor[rel + "@import".len()..];
+        cursor = tail;
+        let trimmed = tail.trim_start();
+        let quote = trimmed.chars().next().filter(|c| *c == '"' || *c == '\'');
+        if let Some(q) = quote {
+            let rest = &trimmed[1..];
+            let window = bounded_prefix(rest, MAX_RAW_SPAN);
+            if let Some(end) = window.find(q) {
+                let raw = &rest[..end];
+                if !raw.contains(['{', '}', '\n', '\r'])
+                    && let Some(p) = resolve(base_dir, raw)
+                {
+                    out.push(p);
+                }
+            }
+        }
     }
     out
 }
@@ -180,10 +272,11 @@ fn raw_url_refs(css: &str, base_dir: &str) -> Vec<String> {
 /// `css::subset` uses), so a malformed rule is skipped and the rest of the
 /// sheet is still read.
 ///
-/// That alone is not sufficient, though: see [`raw_url_refs`] for why a
-/// malformed `url(` can hide a later, well-formed one from any spec-compliant
-/// parser, not just a naive scanner. Its result is folded in here as a
-/// pure safety net, deduplicated against what the AST walk already found.
+/// That alone is not sufficient, though: see [`raw_url_refs`] and
+/// [`raw_import_refs`] for the two shapes a spec-compliant AST walk cannot
+/// see by construction - one a tokenizer quirk, the other a grammar rule -
+/// and why each is restored here as a pure, deduplicated safety net rather
+/// than trusted as the primary signal.
 fn css_refs(css: &str, base_dir: &str) -> Vec<String> {
     use lightningcss::rules::CssRule;
     use lightningcss::stylesheet::{ParserOptions, StyleSheet};
@@ -195,6 +288,13 @@ fn css_refs(css: &str, base_dir: &str) -> Vec<String> {
     };
 
     let mut out: Vec<String> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+
+    // `StyleSheet::parse` only returns `Err` when `error_recovery` is off;
+    // with it on (set immediately above) every failure is recovered into a
+    // skipped rule or declaration instead, so this branch is defensive - not
+    // something normal, or even adversarial, input actually reaches - rather
+    // than a live path this function relies on.
     if let Ok(mut sheet) = StyleSheet::parse(css, options) {
         let mut collector = UrlCollector { found: Vec::new() };
         let _ = sheet.visit(&mut collector);
@@ -209,20 +309,22 @@ fn css_refs(css: &str, base_dir: &str) -> Vec<String> {
             }
         }
 
-        out.extend(
-            collector
-                .found
-                .iter()
-                .filter_map(|raw| resolve(base_dir, raw)),
-        );
+        for raw in &collector.found {
+            if let Some(p) = resolve(base_dir, raw)
+                && seen.insert(p.clone())
+            {
+                out.push(p);
+            }
+        }
     }
-    // Even when the sheet is unparseable outright, fall through to the raw
-    // scan below rather than returning nothing: the independent safety net
-    // in `prune` still warns if a surviving document names a file we
-    // dropped, but there is no reason to discard the one signal we do have.
 
-    let mut seen: HashSet<String> = out.iter().cloned().collect();
-    for extra in raw_url_refs(css, base_dir) {
+    // The two grammar-independent safety nets, folded in as pure additions
+    // and deduplicated against everything found so far - the AST walk above
+    // and each other alike - rather than only against the AST half.
+    for extra in raw_url_refs(css, base_dir)
+        .into_iter()
+        .chain(raw_import_refs(css, base_dir))
+    {
         if seen.insert(extra.clone()) {
             out.push(extra);
         }
@@ -1012,6 +1114,70 @@ p { background: url('img/bg.png'); }"#;
                 "missing {want} in {refs:?}"
             );
         }
+    }
+
+    #[test]
+    fn raw_url_refs_finds_a_url_hidden_inside_an_earlier_unclosed_one() {
+        // Pins the load-bearing invariant: after failing to close
+        // `url(broken.png}...`, the scan must advance only past the `url(`
+        // token it just matched, not past whatever the unmatched span
+        // (mis)consumed - otherwise a later, independent `url(` inside that
+        // same span is never found, exactly the old scanner's bug.
+        let refs = raw_url_refs(
+            "a{background:url(broken.png}\np.b{background:url(good.png)}",
+            "OEBPS",
+        );
+        assert!(refs.contains(&"OEBPS/good.png".to_string()), "got {refs:?}");
+    }
+
+    #[test]
+    fn raw_url_refs_is_case_insensitive() {
+        // CSS function names are ASCII case-insensitive; `URL(` must be
+        // found exactly like `url(`.
+        let refs = raw_url_refs("a { background: URL(shout.png); }", "OEBPS");
+        assert_eq!(refs, vec!["OEBPS/shout.png".to_string()]);
+    }
+
+    #[test]
+    fn raw_url_refs_discards_a_capture_spanning_a_brace_or_newline() {
+        // A captured value crossing a `{`, `}` or newline is always garbage
+        // (no legitimate path contains one), so it must not be pushed even
+        // when some later `)` eventually closes it.
+        let refs = raw_url_refs("a{background:url(one{two)three}", "OEBPS");
+        assert!(refs.is_empty(), "got {refs:?}");
+    }
+
+    #[test]
+    fn raw_import_refs_recovers_an_import_after_another_rule() {
+        // `@import` is only grammatically valid ahead of other rules, so
+        // lightningcss's AST drops a misplaced one outright even under
+        // `error_recovery` - restoring the pre-parser scanner's raw-text
+        // recovery for exactly this shape.
+        let refs = raw_import_refs("p{color:red}\n@import \"sub.css\";", "OEBPS");
+        assert_eq!(refs, vec!["OEBPS/sub.css".to_string()]);
+    }
+
+    #[test]
+    fn raw_import_refs_recovers_an_import_nested_in_a_media_block() {
+        let refs = raw_import_refs("@media print{@import \"sub.css\";}", "OEBPS");
+        assert_eq!(refs, vec!["OEBPS/sub.css".to_string()]);
+    }
+
+    #[test]
+    fn css_refs_recovers_an_import_after_a_malformed_url_rule() {
+        // The regression code review caught: a malformed `url()` rule ahead
+        // of an otherwise well-formed `@import` must not cost the import
+        // target either, the same guarantee
+        // `a_malformed_rule_does_not_hide_the_next_url` already pins for a
+        // later `url()`.
+        let refs = css_refs(
+            "a{background:url(broken.png}\n@import \"sub.css\";",
+            "OEBPS",
+        );
+        assert!(
+            refs.contains(&"OEBPS/sub.css".to_string()),
+            "sub.css must survive: got {refs:?}"
+        );
     }
 
     #[test]
