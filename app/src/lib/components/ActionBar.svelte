@@ -89,10 +89,9 @@
       });
 
       // The produced copies get tracked under their books with this badge.
-      // With user profile layers the CLI resolves the composed name into the
-      // file's own stamp; the selected built-in is the label we can offer
-      // without another CLI round-trip.
-      const fitMeta = { profileName: settings.profile, appendix };
+      // With a multi-layer stack the label is the layers joined with `+`; a
+      // single layer stays bare, so a previously fitted output still matches.
+      const fitMeta = { profileName: profiles.stackLabel(), appendix };
       jobs.runFit(books.refsFor(items), plans, opts, edits.snapshotFor(items.map((f) => f.id)), fitMeta);
     } catch (err) {
       planError = `Nothing was started: we could not work out where these books would go. ${String(err)}`;

@@ -78,6 +78,20 @@ describe("fitArgv", () => {
     expect(argv).not.toContain("--quality");
     expect(argv).not.toContain("--tables");
   });
+
+  it("emits one --profile pair per layer, in order", () => {
+    const argv = fitArgv("/books/b.epub", "/out.epub", {
+      profiles: ["x4", "generic"],
+      quality: null,
+      tables: null,
+      dryRun: false,
+    });
+    const pairs = argv.reduce<string[]>((acc, a, i) => {
+      if (a === "--profile") acc.push(argv[i + 1]);
+      return acc;
+    }, []);
+    expect(pairs).toEqual(["x4", "generic"]);
+  });
 });
 
 describe("mdArgv", () => {

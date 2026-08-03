@@ -12,6 +12,11 @@ import { settings } from "./settings.svelte";
 
 const FALLBACK_APPENDIX = "tailored";
 
+/** A file layer's display name: the last path segment, either separator. */
+function baseName(path: string): string {
+  return path.split(/[/\\]/).pop() || path;
+}
+
 /** The `profiles <specs> --report json` payload: one resolved composition. */
 interface ResolvedProfileReport {
   schema: 1;
@@ -34,9 +39,22 @@ class ProfilesStore {
     this.ready = true;
   }
 
-  /** The selected built-in name followed by any user JSON layers, composed left to right. */
+  /** Each layer as a CLI spec: a built-in name, or a path to a JSON file. */
   activeProfileSpecs(): string[] {
-    return [settings.profile, ...settings.userProfilePaths];
+    return settings.profileStack.map((layer) => (layer.kind === "builtin" ? layer.name : layer.path));
+  }
+
+  /**
+   * The stack as one label, for the output stamp and the copies index. A
+   * single-element stack renders as a bare name - not `name+` - so files
+   * fitted before stacking existed still match on their profile name and no
+   * rerun churn occurs. A `file` layer contributes its basename, not the full
+   * path: the label is for display and stamping, not round-tripping a spec.
+   */
+  stackLabel(): string {
+    return settings.profileStack
+      .map((layer) => (layer.kind === "builtin" ? layer.name : baseName(layer.path)))
+      .join("+");
   }
 
   /**
@@ -52,14 +70,12 @@ class ProfilesStore {
 
   /**
    * The appendix the active composition stamps onto a self-overwriting output.
-   * With no user layer this is just the selected built-in's appendix (from the
-   * already-loaded list); with a layer it is whatever the composed profile
-   * resolves to, so the CLI does the last-wins reasoning.
+   * Always resolved through the CLI's own composition: even a stack of only
+   * built-ins (e.g. `x4` + `generic`) is not simply the first layer's
+   * appendix, since a later layer can override it - last-layer-wins is the
+   * CLI's rule to apply, not ours to guess from the loaded built-in list.
    */
   async activeAppendix(): Promise<string> {
-    if (settings.userProfilePaths.length === 0) {
-      return this.builtinAppendix(settings.profile);
-    }
     const result = await runSidecar(["profiles", ...this.activeProfileSpecs(), "--report", "json"]);
     try {
       const report = parseReport<ResolvedProfileReport>(result.stdout, "profiles");

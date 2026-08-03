@@ -11,15 +11,14 @@
 
   // The appendix the planner stamps on an output that would land on its own
   // input - which the defaults ({original}, alongside originals) do for every
-  // book there is. Resolving it can mean asking the CLI to compose the user's
-  // profile layers, so it is kept in state and refreshed when they change.
+  // book there is. Resolving it can mean asking the CLI to compose the
+  // profile stack, so it is kept in state and refreshed when it changes.
   let appendix = $state("tailored");
   $effect(() => {
     // Read what the answer depends on here, in the effect's tracking scope; the
     // resolution itself is async, and a failed composition keeps the fallback.
     void profiles.builtins;
-    void settings.profile;
-    void settings.userProfilePaths;
+    void settings.profileStack;
     let live = true;
     void profiles
       .activeAppendix()
