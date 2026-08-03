@@ -632,16 +632,38 @@ fn kb(bytes: usize) -> usize {
 /// `chapter_dir` is the zip-absolute directory of the chapter, used to resolve
 /// and re-relativize hrefs. `renames` maps an old zip-absolute image path to its
 /// new one; `splits` maps an old path to its ordered tile paths.
+///
+/// Returns every zip-absolute path a stripped `<img srcset>` named, resolved
+/// against `chapter_dir` before the attribute is removed. `<img srcset>` runs
+/// well before `generic::reachable::prune`'s reference walk, so by the time
+/// that walk looks for what a `srcset` names, the attribute is already gone -
+/// the walk would otherwise never see the edge and delete the target as
+/// unreferenced (worst case, an `<img srcset>` with no `src` at all: the
+/// image goes permanently missing with zero warnings). The caller feeds this
+/// back to `prune` as extra roots so the target survives regardless.
 pub(crate) fn rewrite_refs(
     doc: &NodeRef,
     chapter_dir: &str,
     renames: &HashMap<String, String>,
     splits: &HashMap<String, Vec<String>>,
-) {
+) -> Vec<String> {
+    let mut srcset_targets = Vec::new();
     for img in collect_by_name(doc, "img") {
         // Stale intrinsic dimensions mislead the device scaler; drop them.
         remove_attr(&img, "width");
         remove_attr(&img, "height");
+        if let Some(srcset) = get_attr(&img, "srcset") {
+            for entry in srcset.split(',') {
+                let Some(url) = entry.split_whitespace().next() else {
+                    continue;
+                };
+                let (path, _suffix) = split_href_suffix(url);
+                if path.is_empty() {
+                    continue;
+                }
+                srcset_targets.push(normalize_href(chapter_dir, path));
+            }
+        }
         remove_attr(&img, "srcset");
 
         let Some(src) = get_attr(&img, "src") else {
@@ -700,6 +722,8 @@ pub(crate) fn rewrite_refs(
             );
         }
     }
+
+    srcset_targets
 }
 
 /// One `<p class="et-img"><img src="tile" alt="..."/></p>` wrapper for a split tile.
@@ -1243,6 +1267,45 @@ mod tests {
         assert!(
             out.contains(r#"src="../images/pic.jpg?v=2#note""#),
             "the query/fragment must survive the rewrite: {out}"
+        );
+    }
+
+    #[test]
+    fn srcset_targets_are_returned_before_the_attribute_is_stripped() {
+        // The whole point: `srcset` still names `hi.png`, but by the time
+        // the caller sees the DOM, the attribute is gone from it.
+        let doc = crate::html::testutil::doc_from_body(
+            r#"<p><img src="lo.png" srcset="hi.png 2x"/></p>"#,
+        );
+        let targets = rewrite_refs(&doc, "text", &HashMap::new(), &HashMap::new());
+        assert_eq!(targets, vec!["text/hi.png".to_string()]);
+        let out = crate::html::testutil::serialize(&doc);
+        assert!(
+            !out.contains("srcset"),
+            "srcset must still be stripped: {out}"
+        );
+    }
+
+    #[test]
+    fn an_img_srcset_with_no_src_still_returns_its_target() {
+        // No `src` at all: without the returned target, `hi.png` has nothing
+        // in the DOM naming it once `srcset` is stripped, and the
+        // reachability walk would delete it as unreferenced - leaving the
+        // image permanently broken.
+        let doc = crate::html::testutil::doc_from_body(r#"<p><img srcset="only.png 2x"/></p>"#);
+        let targets = rewrite_refs(&doc, "text", &HashMap::new(), &HashMap::new());
+        assert_eq!(targets, vec!["text/only.png".to_string()]);
+    }
+
+    #[test]
+    fn multiple_srcset_candidates_are_all_returned() {
+        let doc = crate::html::testutil::doc_from_body(
+            r#"<p><img src="lo.png" srcset="mid.png 1.5x, hi.png 2x"/></p>"#,
+        );
+        let targets = rewrite_refs(&doc, "text", &HashMap::new(), &HashMap::new());
+        assert_eq!(
+            targets,
+            vec!["text/mid.png".to_string(), "text/hi.png".to_string()]
         );
     }
 

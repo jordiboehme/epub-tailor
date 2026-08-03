@@ -334,6 +334,11 @@ pub fn convert(input: Input, opts: &ConvertOptions) -> Result<Converted, Convert
     let mut tables_rasterized = 0u32;
     let mut chapters: Vec<(String, NodeRef)> = Vec::new();
     let mut aliases: AliasMap = HashMap::new();
+    // Extra reachability roots for `generic::reachable::prune`: `<img
+    // srcset>` targets, collected here because `image::rewrite_refs` strips
+    // the attribute before the reachability walk ever runs (see that
+    // function's docs).
+    let mut srcset_roots: Vec<String> = Vec::new();
     let mut relocated_styles: Vec<(String, String)> = Vec::new();
     // 1-based index over chapters that actually yielded non-empty head/body
     // `<style>` CSS, used to scope each contributor's relocated rules to its own
@@ -403,7 +408,12 @@ pub fn convert(input: Input, opts: &ConvertOptions) -> Result<Converted, Convert
                 &mut warnings,
             );
         }
-        crate::image::rewrite_refs(&doc, &parent_dir(path), &renames, &splits);
+        srcset_roots.extend(crate::image::rewrite_refs(
+            &doc,
+            &parent_dir(path),
+            &renames,
+            &splits,
+        ));
         chapters.push((path.clone(), doc));
     }
 
@@ -593,7 +603,12 @@ pub fn convert(input: Input, opts: &ConvertOptions) -> Result<Converted, Convert
         if opts.features.strip_invisible_chars && book.nav_path.as_deref() != Some(path.as_str()) {
             generic::invisible::scrub_chapter(&doc, &mut transformations, &path);
         }
-        crate::image::rewrite_refs(&doc, &parent_dir(&path), &renames, &splits);
+        srcset_roots.extend(crate::image::rewrite_refs(
+            &doc,
+            &parent_dir(&path),
+            &renames,
+            &splits,
+        ));
         let bytes = serialize_xhtml(&doc);
         let resource = &mut book.resources[&path];
         resource.data = bytes;
@@ -604,7 +619,12 @@ pub fn convert(input: Input, opts: &ConvertOptions) -> Result<Converted, Convert
     // reference (image renames, SVG rasterization) and before identity
     // normalization, so the graph it walks reflects the final book.
     if opts.features.drop_unreferenced {
-        generic::reachable::prune(&mut book, &mut transformations, &mut warnings);
+        generic::reachable::prune(
+            &mut book,
+            &mut transformations,
+            &mut warnings,
+            &srcset_roots,
+        );
     }
 
     // Identity normalization runs late, after every content transform, so the

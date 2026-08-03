@@ -431,6 +431,26 @@ fn generic_keeps_an_svg_cover_raster_referenced_only_via_xlink_href() {
     );
 }
 
+/// Mandatory regression coverage for the review's Important 4: `<img
+/// srcset>`'s target must survive `drop_unreferenced` even with no `src` at
+/// all - the case where nothing else in the chapter names it once `srcset`
+/// itself has been stripped. Runs the real `convert()` pipeline (not just the
+/// unit-level `reachable`/`image::rewrite_refs` tests) so it also proves the
+/// two passes actually wire together correctly, not just each in isolation.
+#[test]
+fn generic_keeps_an_img_srcset_target_with_no_src() {
+    let mut epub = common::book_with_srcset_only_image();
+    let out = convert(
+        Input::Epub(std::mem::take(&mut epub)),
+        &opts_for(&["generic"]),
+    )
+    .expect("converts");
+    assert!(
+        common::entry(&out.epub, "OEBPS/only.png").is_some(),
+        "an <img srcset> target with no src must survive drop_unreferenced"
+    );
+}
+
 #[test]
 fn a_dropped_marker_file_reports_its_payload() {
     let mut epub = common::book_with_meta_inf("META-INF/cdp.info", b"SHTX001.635962014");

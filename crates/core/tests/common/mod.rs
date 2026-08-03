@@ -211,6 +211,42 @@ pub fn book_with_css_referenced_asset() -> Vec<u8> {
     ])
 }
 
+/// A minimal EPUB3 book whose chapter has a single `<img srcset="only.png
+/// 2x">` and, deliberately, NO `src` at all - the shape that goes
+/// permanently broken if `srcset` targets are not fed to the reachability
+/// walk: the attribute is stripped from the DOM before the walk ever runs
+/// (see `image::rewrite_refs`'s docs), and with no `src` either, nothing else
+/// in the chapter names `only.png`. `only.png` itself has NO manifest item -
+/// a stray zip entry, exactly like [`book_with_css_referenced_asset`]'s
+/// `bg.png`.
+pub fn book_with_srcset_only_image() -> Vec<u8> {
+    const CONTENT_OPF: &[u8] = br##"<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="pub-id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="pub-id">urn:uuid:eeee1111-2222-4333-8444-555555555555</dc:identifier>
+    <dc:title>Book</dc:title>
+    <dc:language>en</dc:language>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="ch" href="chapter.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine><itemref idref="ch"/></spine>
+</package>"##;
+    const CHAPTER: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>C</title></head>
+<body><p>Text.</p><img srcset="only.png 2x"/></body></html>"#;
+    const ONLY_PNG: &[u8] = &[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+    build_epub(&[
+        ("mimetype", b"application/epub+zip"),
+        ("META-INF/container.xml", CONTAINER_XML),
+        ("OEBPS/content.opf", CONTENT_OPF),
+        ("OEBPS/nav.xhtml", NAV_XHTML),
+        ("OEBPS/chapter.xhtml", CHAPTER),
+        ("OEBPS/only.png", ONLY_PNG),
+    ])
+}
+
 /// A minimal EPUB3 book with one extra `META-INF/`-rooted file at `path`
 /// (e.g. `"META-INF/cdp.info"`) carrying `data`: neither `container.xml` nor
 /// `encryption.xml`, so `read_epub` drops it and (per Task 7) reports its
