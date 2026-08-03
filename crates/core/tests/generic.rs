@@ -508,6 +508,36 @@ fn generic_keeps_a_srcset_target_of_a_chapter_that_was_split() {
     );
 }
 
+/// Regression coverage for the stranding found while verifying round 4: the
+/// image optimizer re-encodes `wm.png` to `wm.jpg` and drops the old path
+/// from the book, but `rewrite_refs` reported the srcset edge under the
+/// PRE-rename path, so `prune` never reached the renamed resource and deleted
+/// it. `<img src>` never hit this because that branch already followed the
+/// rename map. Every earlier srcset fixture used an undecodable 8-byte PNG
+/// stub, so no rename ever happened and no test could see it.
+#[test]
+fn generic_keeps_a_srcset_target_that_the_optimizer_renamed() {
+    let opts = opts_for(&["x4", "generic"]);
+    let out = convert(
+        Input::Epub(common::book_with_srcset_image_that_gets_re_encoded()),
+        &opts,
+    )
+    .expect("converts");
+    assert!(
+        out.report
+            .transformations
+            .iter()
+            .any(|t| t.kind == "image-optimized"),
+        "the fixture must really be re-encoded, or this test proves nothing: {:#?}",
+        out.report.transformations
+    );
+    assert!(
+        common::entry(&out.epub, "OEBPS/wm.jpg").is_some(),
+        "a srcset target must survive being re-encoded and renamed: {:#?}",
+        out.report.transformations
+    );
+}
+
 #[test]
 fn a_dropped_marker_file_reports_its_payload() {
     let mut epub = common::book_with_meta_inf("META-INF/cdp.info", b"SHTX001.635962014");

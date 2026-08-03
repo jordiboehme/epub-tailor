@@ -287,6 +287,58 @@ pub fn book_with_orphan_chapter_srcset_image() -> Vec<u8> {
     ])
 }
 
+/// A real, decodable 24x24 grayscale PNG. Every other srcset fixture here
+/// uses a bare 8-byte PNG *signature* that the image pipeline cannot decode,
+/// so it never re-encodes it and never renames it - which is exactly why a
+/// whole class of stranding went unseen. This one is a genuine image, so the
+/// optimizer really does re-encode it (to `.jpg`) and really does rename it.
+pub fn real_png() -> Vec<u8> {
+    let img =
+        image::GrayImage::from_fn(24, 24, |x, y| image::Luma([((x * 10 + y * 3) % 240) as u8]));
+    let mut out = Cursor::new(Vec::new());
+    image::DynamicImage::ImageLuma8(img)
+        .write_to(&mut out, image::ImageFormat::Png)
+        .expect("encode png");
+    out.into_inner()
+}
+
+/// A minimal EPUB3 book with one ordinary, nav-linked spine chapter carrying
+/// a single `<img srcset="wm.png 2x">` with no `src`, where `wm.png` is a
+/// REAL image the optimizer re-encodes and renames. No split, no orphan: the
+/// only thing under test is that the srcset edge follows the rename.
+pub fn book_with_srcset_image_that_gets_re_encoded() -> Vec<u8> {
+    const CONTENT_OPF: &[u8] = br##"<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="pub-id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="pub-id">urn:isbn:9783407868213</dc:identifier>
+    <dc:title>Book</dc:title>
+    <dc:language>en</dc:language>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="ch" href="chapter.xhtml" media-type="application/xhtml+xml"/>
+    <item id="im" href="wm.png" media-type="image/png"/>
+  </manifest>
+  <spine><itemref idref="ch"/></spine>
+</package>"##;
+    const NAV: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+<head><title>Nav</title></head><body><nav epub:type="toc"><ol>
+<li><a href="chapter.xhtml">One</a></li></ol></nav></body></html>"#;
+    const CH: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>One</title></head>
+<body><p>Text.</p><p><img srcset="wm.png 2x"/></p></body></html>"#;
+    let png = real_png();
+    build_epub(&[
+        ("mimetype", b"application/epub+zip"),
+        ("META-INF/container.xml", CONTAINER_XML),
+        ("OEBPS/content.opf", CONTENT_OPF),
+        ("OEBPS/nav.xhtml", NAV),
+        ("OEBPS/chapter.xhtml", CH),
+        ("OEBPS/wm.png", &png),
+    ])
+}
+
 /// A minimal EPUB3 book whose FIRST spine chapter is deliberately oversize
 /// (several padded top-level blocks, so `chapter_split` really does cut it
 /// into `big-1.xhtml`, `big-2.xhtml`, ... parts) and carries a single `<img

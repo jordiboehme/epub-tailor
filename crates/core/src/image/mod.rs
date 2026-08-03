@@ -661,7 +661,34 @@ pub(crate) fn rewrite_refs(
                 if path.is_empty() {
                     continue;
                 }
-                srcset_targets.push(normalize_href(chapter_dir, path));
+                // Follow the same rename/split remapping the `src` branch
+                // below applies. The resource this entry named may already
+                // have been re-encoded to a new path (`pic.png` -> `pic.jpg`)
+                // or sliced into page tiles by the time this runs, and the
+                // *old* path is gone from the book. Reporting it would hand
+                // `prune` an edge to a file that no longer exists, leaving the
+                // real resource unreachable and silently deleted - the same
+                // stranding the return value exists to prevent, one step
+                // further along. Only a target that was neither renamed nor
+                // split is reported as itself.
+                // Follow the same rename/split remapping the `src` branch
+                // below applies. The resource this entry named may already
+                // have been re-encoded to a new path (`pic.png` -> `pic.jpg`)
+                // or sliced into page tiles by the time this runs, and the
+                // *old* path is gone from the book. Reporting it would hand
+                // `prune` an edge to a file that no longer exists, leaving the
+                // real resource unreachable and silently deleted - the same
+                // stranding the return value exists to prevent, one step
+                // further along. Only a target that was neither renamed nor
+                // split is reported as itself.
+                let target = normalize_href(chapter_dir, path);
+                if let Some(tiles) = splits.get(&target) {
+                    srcset_targets.extend(tiles.iter().cloned());
+                } else if let Some(new_path) = renames.get(&target) {
+                    srcset_targets.push(new_path.clone());
+                } else {
+                    srcset_targets.push(target);
+                }
             }
         }
         remove_attr(&img, "srcset");
@@ -1306,6 +1333,38 @@ mod tests {
         assert_eq!(
             targets,
             vec!["text/mid.png".to_string(), "text/hi.png".to_string()]
+        );
+    }
+
+    #[test]
+    fn a_renamed_srcset_target_is_returned_under_its_new_path() {
+        // Measured regression: the optimizer re-encodes `hi.png` to `hi.jpg`
+        // and `hi.png` is gone from the book, so returning the old path hands
+        // `prune` an edge to a file that no longer exists - the real resource
+        // is then unreachable and silently deleted. Every earlier srcset
+        // fixture used an undecodable PNG stub, so no rename ever happened
+        // and nothing caught this.
+        let doc = crate::html::testutil::doc_from_body(r#"<p><img srcset="hi.png 2x"/></p>"#);
+        let mut renames = HashMap::new();
+        renames.insert("text/hi.png".to_string(), "text/hi.jpg".to_string());
+        let targets = rewrite_refs(&doc, "text", &renames, &HashMap::new());
+        assert_eq!(targets, vec!["text/hi.jpg".to_string()]);
+    }
+
+    #[test]
+    fn a_split_srcset_target_is_returned_as_its_tiles() {
+        // Same defect one branch over: a tall srcset target sliced into page
+        // tiles no longer exists under its own path either.
+        let doc = crate::html::testutil::doc_from_body(r#"<p><img srcset="tall.png 2x"/></p>"#);
+        let mut splits = HashMap::new();
+        splits.insert(
+            "text/tall.png".to_string(),
+            vec!["text/tall-1.png".to_string(), "text/tall-2.png".to_string()],
+        );
+        let targets = rewrite_refs(&doc, "text", &HashMap::new(), &splits);
+        assert_eq!(
+            targets,
+            vec!["text/tall-1.png".to_string(), "text/tall-2.png".to_string()]
         );
     }
 
