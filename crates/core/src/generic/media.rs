@@ -352,4 +352,80 @@ mod tests {
         // declared manifest type, is what has to catch this one.
         assert_strips_mis_declared_jpeg("application/octet-stream");
     }
+
+    /// A complete, parseable PNG (signature through `IEND`) carrying a
+    /// droppable `tEXt` chunk with `payload` - the PNG counterpart of
+    /// `jpeg_with_exif_payload`, exercising the `image_kind` magic-byte
+    /// branch [`strip_png`] itself never runs on nothing else covers.
+    fn png_with_text_payload(payload: &[u8]) -> Vec<u8> {
+        let mut out = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+        out.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+        out.extend_from_slice(b"tEXt");
+        out.extend_from_slice(payload);
+        out.extend_from_slice(&[0, 0, 0, 0]); // CRC, unchecked by the stripper
+        out.extend_from_slice(&[0, 0, 0, 0]); // IEND: zero-length, no data
+        out.extend_from_slice(b"IEND");
+        out.extend_from_slice(&[0, 0, 0, 0]); // CRC, unchecked by the stripper
+        out
+    }
+
+    /// `strip()` a single PNG resource declared as `media_type` and assert
+    /// its `tEXt` payload is gone and a `generic-media` transformation is
+    /// reported - the PNG counterpart of `assert_strips_mis_declared_jpeg`.
+    fn assert_strips_mis_declared_png(media_type: &str) {
+        let payload = b"Comment\0BUYER-635962014-SECRET";
+        let png = png_with_text_payload(payload);
+        let mut resources = IndexMap::new();
+        resources.insert(
+            "pic.png".to_string(),
+            Resource {
+                data: png,
+                media_type: media_type.to_string(),
+            },
+        );
+        let mut book = Book {
+            metadata: Metadata::default(),
+            resources,
+            spine: Vec::new(),
+            toc: Vec::new(),
+            cover: None,
+            opf_path: "content.opf".to_string(),
+            nav_path: None,
+            ncx_path: None,
+        };
+        let mut transformations = Vec::new();
+        strip(&mut book, &mut transformations);
+        let out = &book.resources["pic.png"].data;
+        assert!(
+            !out.windows(9).any(|w| w == b"BUYER-635"),
+            "{media_type:?}: the tEXt payload must be stripped, not shipped intact"
+        );
+        assert_eq!(
+            transformations.len(),
+            1,
+            "{media_type:?}: a transformation must be reported, not a silent no-op"
+        );
+    }
+
+    #[test]
+    fn strips_a_png_mis_declared_as_the_jpeg_extension_spelling() {
+        assert_strips_mis_declared_png("image/jpg");
+    }
+
+    #[test]
+    fn strips_a_png_with_an_upper_case_media_type() {
+        assert_strips_mis_declared_png("IMAGE/PNG");
+    }
+
+    #[test]
+    fn strips_a_png_media_type_carrying_a_parameter() {
+        assert_strips_mis_declared_png("image/png; charset=binary");
+    }
+
+    #[test]
+    fn strips_a_png_mis_declared_as_a_generic_octet_stream() {
+        // No `image/*` spelling at all: magic-byte sniffing, not the
+        // declared manifest type, is what has to catch this one.
+        assert_strips_mis_declared_png("application/octet-stream");
+    }
 }
