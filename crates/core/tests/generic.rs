@@ -369,3 +369,44 @@ fn generic_scrubs_invisible_chars_from_the_title_and_toc() {
     );
     assert!(!nav.contains('\u{200B}'), "no ZWSP in the nav doc:\n{nav}");
 }
+
+#[test]
+fn generic_drops_a_file_nothing_references() {
+    let mut epub = common::book_with_extra_file("OEBPS/vendor-id.txt", b"SHTX001.635962014");
+    let out = convert(
+        Input::Epub(std::mem::take(&mut epub)),
+        &opts_for(&["generic"]),
+    )
+    .expect("converts");
+    assert!(
+        common::entry(&out.epub, "OEBPS/vendor-id.txt").is_none(),
+        "an unreferenced stray file must not survive"
+    );
+}
+
+#[test]
+fn generic_keeps_a_file_referenced_only_from_css() {
+    // Not in the manifest, reachable only through `url()`. Dropping it on
+    // manifest membership would break the book; reachability keeps it.
+    let mut epub = common::book_with_css_referenced_asset();
+    let out = convert(
+        Input::Epub(std::mem::take(&mut epub)),
+        &opts_for(&["generic"]),
+    )
+    .expect("converts");
+    assert!(
+        common::entry(&out.epub, "OEBPS/bg.png").is_some(),
+        "a CSS-referenced asset must survive even when unmanifested"
+    );
+}
+
+#[test]
+fn the_epub_profile_keeps_unreferenced_files() {
+    let mut epub = common::book_with_extra_file("OEBPS/vendor-id.txt", b"x");
+    let out =
+        convert(Input::Epub(std::mem::take(&mut epub)), &opts_for(&["epub"])).expect("converts");
+    assert!(
+        common::entry(&out.epub, "OEBPS/vendor-id.txt").is_some(),
+        "repair-only must not change what survives"
+    );
+}

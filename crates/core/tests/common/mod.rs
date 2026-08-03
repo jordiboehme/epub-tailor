@@ -105,6 +105,74 @@ pub fn book_with_image(path: &str, data: &[u8]) -> Vec<u8> {
     ])
 }
 
+/// A minimal EPUB3 book with one extra file at `path` (zip-relative, e.g.
+/// `"OEBPS/vendor-id.txt"`) carrying `data`: not in the manifest, not linked
+/// from the chapter, the nav doc or anywhere else. Used to prove that a
+/// wholly unreferenced stray file gets dropped under `drop_unreferenced`.
+pub fn book_with_extra_file(path: &str, data: &[u8]) -> Vec<u8> {
+    const CONTENT_OPF: &[u8] = br##"<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="pub-id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="pub-id">urn:uuid:aaaa1111-2222-4333-8444-555555555555</dc:identifier>
+    <dc:title>Book</dc:title>
+    <dc:language>en</dc:language>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="ch" href="chapter.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine><itemref idref="ch"/></spine>
+</package>"##;
+    const CHAPTER: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>C</title></head>
+<body><p>Text.</p></body></html>"#;
+    build_epub(&[
+        ("mimetype", b"application/epub+zip"),
+        ("META-INF/container.xml", CONTAINER_XML),
+        ("OEBPS/content.opf", CONTENT_OPF),
+        ("OEBPS/nav.xhtml", NAV_XHTML),
+        ("OEBPS/chapter.xhtml", CHAPTER),
+        (path, data),
+    ])
+}
+
+/// A minimal EPUB3 book whose chapter links an external stylesheet that
+/// references `bg.png` through a `url(...)` `background` declaration.
+/// `bg.png` itself has NO manifest item - it is a stray zip entry, reachable
+/// only by walking the CSS. Proves reachability (not manifest membership)
+/// decides what survives `drop_unreferenced`.
+pub fn book_with_css_referenced_asset() -> Vec<u8> {
+    const CONTENT_OPF: &[u8] = br##"<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="pub-id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="pub-id">urn:uuid:bbbb1111-2222-4333-8444-555555555555</dc:identifier>
+    <dc:title>Book</dc:title>
+    <dc:language>en</dc:language>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="ch" href="chapter.xhtml" media-type="application/xhtml+xml"/>
+    <item id="css" href="style.css" media-type="text/css"/>
+  </manifest>
+  <spine><itemref idref="ch"/></spine>
+</package>"##;
+    const CHAPTER: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>C</title>
+<link rel="stylesheet" type="text/css" href="style.css"/></head>
+<body><p>Text.</p></body></html>"#;
+    const STYLE_CSS: &[u8] = b"body { background: url(bg.png) no-repeat; }\n";
+    const BG_PNG: &[u8] = &[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+    build_epub(&[
+        ("mimetype", b"application/epub+zip"),
+        ("META-INF/container.xml", CONTAINER_XML),
+        ("OEBPS/content.opf", CONTENT_OPF),
+        ("OEBPS/nav.xhtml", NAV_XHTML),
+        ("OEBPS/chapter.xhtml", CHAPTER),
+        ("OEBPS/style.css", STYLE_CSS),
+        ("OEBPS/bg.png", BG_PNG),
+    ])
+}
+
 /// Read one zip entry's raw bytes by name, if present.
 pub fn entry(epub: &[u8], name: &str) -> Option<Vec<u8>> {
     use std::io::Read;

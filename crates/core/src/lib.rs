@@ -589,6 +589,13 @@ pub fn convert(input: Input, opts: &ConvertOptions) -> Result<Converted, Convert
         resource.media_type = "application/xhtml+xml".to_string();
     }
 
+    // Reachability pruning runs after every transform that can rewrite a
+    // reference (image renames, SVG rasterization) and before identity
+    // normalization, so the graph it walks reflects the final book.
+    if opts.features.drop_unreferenced {
+        generic::reachable::prune(&mut book, &mut transformations);
+    }
+
     // Identity normalization runs late, after every content transform, so the
     // metadata it inspects is final.
     if opts.features.normalize_identity {
