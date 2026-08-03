@@ -177,7 +177,7 @@ declaration survives with its value intact rather than being dropped.
 | `remap_colors` | Remap text (CSS) and diagram (SVG) colors to perceptually spaced gray tones: each color keeps its apparent brightness while staying distinguishable on the panel's gray levels. Document colors get one solve per book, each SVG its own. Never applies on a color panel. |
 | `strip_media_metadata` | Remove EXIF, XMP and IPTC from JPEG and PNG, without re-encoding. |
 | `strip_invisible_chars` | Remove zero-width and other invisible fingerprinting characters from text nodes, book metadata and TOC titles, script-aware. |
-| `normalize_identity` | Pin `dcterms:modified` to a fixed epoch, drop per-copy `dc:identifier` values and replace a per-copy unique identifier with one derived from title and authors. A checksum-valid ISBN or ISSN is kept, as is a DOI under a registrant a registration agency could actually have assigned. |
+| `normalize_identity` | Pin `dcterms:modified` to a fixed epoch, drop per-copy `dc:identifier` values and replace a per-copy unique identifier with one derived from title and authors. A checksum-valid ISBN or ISSN is kept, as is a DOI under an all-digit registrant a registration agency could actually have assigned. Only an all-digit registrant is recognised as a DOI at all, so the ISBN-A, ISMN-A and sub-registrant forms fall outside the screen. |
 | `drop_unreferenced` | Delete archive files nothing in the book reaches, by walking the real reference graph rather than manifest membership. |
 
 ## `options` - tunables
@@ -261,8 +261,17 @@ should tailor to byte-identical output. What each switch removes:
   or ISSN that passes its own checksum is kept, since that identifier is
   shared across copies rather than per-copy.
 
-  A DOI has no checksum to validate, so it is screened on shape instead. A
-  `10.<registrant>/<suffix>` value is kept unless its registrant is one no
+  A DOI has no checksum to validate, so it is screened on shape instead. Only
+  an all-digit registrant is recognised as a DOI in the first place, so the
+  forms that carry a dot inside the registrant fall outside this screen
+  entirely: ISBN-A (`10.978.8898392/311`, the actionable-ISBN form mEDRA
+  issues), ISMN-A (`10.979.12345/6789`) and the sub-registrant form the DOI
+  Handbook documents (`10.1000.10/123`). Those are real and assignable, and a
+  declared `identifier-type` refinement does not reach them either, since the
+  refinement gate recognises a DOI the same way; they are judged by the
+  ordinary per-copy screening instead, which drops them.
+
+  A `10.<registrant>/<suffix>` value is kept unless its registrant is one no
   registration agency assigns - shorter than four digits, or the reserved
   `10.0000`, `10.5555` (the official DOI test prefix) or `10.9999` - or its
   suffix carries an email address, an embedded UUID or nothing at all but a
@@ -330,6 +339,21 @@ should tailor to byte-identical output. What each switch removes:
   checksum-valid thirteen-digit ISBN under `978`/`979`, or as a checksum-valid
   eight-digit ISSN, survives exactly as a forged DOI does, because a checksum
   proves a value well-formed and never proves it shared.
+- **A malformed CSS rule can hide the reference in the rule after it**, and
+  the file that reference pointed at is then deleted as unreferenced. The
+  `url()` scanner is deliberately naive, a scan for `url(` and its closing
+  parenthesis rather than a full CSS parser, so an unclosed rule swallows the
+  rule that follows and the `url()` inside it is never seen:
+  `a{background:url(broken.png}` ahead of `p.b{background:url(good.png)}`
+  costs `good.png`, which the same book keeps without the broken rule. This is
+  not silent. The independent safety net searches every surviving document for
+  each dropped file's basename and warns, naming both the dropped file and the
+  document still mentioning it, so check the report before keeping the output.
+  The net is a plain basename search, not a second parser, so it catches this
+  case rather than every case. `drop_unreferenced` is also opt-in. Widening
+  the scanner into a real parser is the fix, and is deliberately not attempted
+  here: the reference surface is exactly where widening has caused regressions
+  on this feature before.
 - **Convergence holds only across the same tool version and the same profile
   stack.** A different `epub-tailor` release or a different composed stack is
   not guaranteed to produce a matching result.
