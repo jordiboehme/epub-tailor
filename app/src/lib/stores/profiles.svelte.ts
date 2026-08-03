@@ -58,17 +58,6 @@ class ProfilesStore {
   }
 
   /**
-   * The appendix one built-in profile stamps onto a self-overwriting output.
-   * For a run that deliberately does *not* use the active profile - "Write
-   * metadata only" converts under `epub`, whatever device is selected - the
-   * appendix has to come from the profile the run actually uses, or the file is
-   * named for a conversion it never had.
-   */
-  builtinAppendix(name: string): string {
-    return this.builtins.find((p) => p.name === name)?.appendix ?? FALLBACK_APPENDIX;
-  }
-
-  /**
    * The appendix the active composition stamps onto a self-overwriting output.
    * Always resolved through the CLI's own composition: even a stack of only
    * built-ins (e.g. `x4` + `generic`) is not simply the first layer's
