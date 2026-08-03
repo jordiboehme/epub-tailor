@@ -301,18 +301,23 @@ fn refs_of(resource: &Resource, dir: &str) -> Vec<String> {
 
 /// Drop every resource unreachable from the book's roots.
 ///
-/// `extra_roots` seeds the walk with paths a caller resolved *before* this
-/// runs, from a reference type that no longer exists in the book by the time
+/// `srcset_by_document` supplies edges a caller resolved *before* this runs,
+/// from a reference type that no longer exists in the book by the time
 /// `prune` sees it - today, exactly the `<img srcset>` targets
 /// `image::rewrite_refs` strips on every conversion (not just `generic`)
-/// well before this walk starts. Without them, the walk simply cannot see
-/// the edge: it is not a gap in [`refs_of`]'s extraction, it is the
-/// reference no longer being there to extract.
+/// well before this walk starts. Keyed by the zip-absolute path of the
+/// document each target was found in, and consulted only when the walk
+/// actually visits that document: these targets stand in for attributes that
+/// are no longer in the DOM, so they must behave exactly as those attributes
+/// would have - reachable if and only if the document naming them is itself
+/// reachable, never as roots in their own right. A target named only from a
+/// document nothing else points at (an unreferenced non-spine chapter, say)
+/// must be dropped along with that document, not kept regardless of it.
 pub(crate) fn prune(
     book: &mut Book,
     transformations: &mut Vec<Transformation>,
     warnings: &mut Vec<Warning>,
-    extra_roots: &[String],
+    srcset_by_document: &HashMap<String, Vec<String>>,
 ) {
     let mut reachable: HashSet<String> = HashSet::new();
     let mut queue: Vec<String> = Vec::new();
@@ -324,17 +329,18 @@ pub(crate) fn prune(
     queue.extend(book.ncx_path.clone());
     queue.extend(book.cover.clone());
     queue.extend(book.spine.iter().cloned());
-    queue.extend(extra_roots.iter().cloned());
 
     while let Some(path) = queue.pop() {
         if !reachable.insert(path.clone()) {
             continue;
         }
-        let Some(resource) = book.resources.get(&path) else {
-            continue;
-        };
-        let dir = parent_dir(&path);
-        queue.extend(refs_of(resource, &dir));
+        if let Some(resource) = book.resources.get(&path) {
+            let dir = parent_dir(&path);
+            queue.extend(refs_of(resource, &dir));
+        }
+        if let Some(targets) = srcset_by_document.get(&path) {
+            queue.extend(targets.iter().cloned());
+        }
     }
 
     // Resource order (an `IndexMap` preserves it), not `HashSet` iteration
@@ -423,16 +429,21 @@ mod tests {
     }
 
     fn prune_book(book: &mut Book) -> (Vec<Transformation>, Vec<Warning>) {
-        prune_book_with_roots(book, &[])
+        prune_book_with_srcset(book, &HashMap::new())
     }
 
-    fn prune_book_with_roots(
+    fn prune_book_with_srcset(
         book: &mut Book,
-        extra_roots: &[String],
+        srcset_by_document: &HashMap<String, Vec<String>>,
     ) -> (Vec<Transformation>, Vec<Warning>) {
         let mut transformations = Vec::new();
         let mut warnings = Vec::new();
-        prune(book, &mut transformations, &mut warnings, extra_roots);
+        prune(
+            book,
+            &mut transformations,
+            &mut warnings,
+            srcset_by_document,
+        );
         (transformations, warnings)
     }
 
@@ -572,11 +583,12 @@ mod tests {
     }
 
     #[test]
-    fn an_extra_root_survives_pruning_even_though_nothing_in_the_dom_names_it() {
+    fn a_srcset_target_owned_by_a_reachable_document_survives_pruning() {
         // Pins the mechanism `image::rewrite_refs`'s `<img srcset>` targets
-        // rely on: a path handed in as an extra root must survive even
-        // though, by construction here, nothing in any surviving document
-        // references it at all.
+        // rely on: a target keyed under a document that IS reachable (here,
+        // a spine chapter) survives via that document, even though nothing
+        // in the DOM itself names it any more (the attribute was already
+        // stripped by the time `prune` runs).
         let mut book = book_with(
             vec![
                 ("OEBPS/content.opf", "application/oebps-package+xml", b""),
@@ -589,8 +601,55 @@ mod tests {
             ],
             vec!["OEBPS/chapter.xhtml"],
         );
-        prune_book_with_roots(&mut book, &["OEBPS/only.png".to_string()]);
+        let mut srcset = HashMap::new();
+        srcset.insert(
+            "OEBPS/chapter.xhtml".to_string(),
+            vec!["OEBPS/only.png".to_string()],
+        );
+        prune_book_with_srcset(&mut book, &srcset);
         assert!(book.resources.contains_key("OEBPS/only.png"));
+    }
+
+    #[test]
+    fn a_srcset_target_owned_by_an_orphan_document_is_dropped_with_it() {
+        // The regression this pins: a srcset target must NOT be a global
+        // root. `orphan.xhtml` is manifested (present in `book.resources`)
+        // but neither in the spine nor referenced from anywhere reachable,
+        // so it is itself unreferenced and must be dropped - and `wm.png`,
+        // named only through `orphan.xhtml`'s (already-stripped) `<img
+        // srcset>`, must be dropped right along with it rather than
+        // surviving as if it were a root in its own right.
+        let mut book = book_with(
+            vec![
+                ("OEBPS/content.opf", "application/oebps-package+xml", b""),
+                (
+                    "OEBPS/chapter.xhtml",
+                    "application/xhtml+xml",
+                    b"<html><body><p>Hi</p></body></html>",
+                ),
+                (
+                    "OEBPS/orphan.xhtml",
+                    "application/xhtml+xml",
+                    b"<html><body><p>Orphan</p></body></html>",
+                ),
+                ("OEBPS/wm.png", "image/png", b"\x89PNG"),
+            ],
+            vec!["OEBPS/chapter.xhtml"],
+        );
+        let mut srcset = HashMap::new();
+        srcset.insert(
+            "OEBPS/orphan.xhtml".to_string(),
+            vec!["OEBPS/wm.png".to_string()],
+        );
+        prune_book_with_srcset(&mut book, &srcset);
+        assert!(
+            !book.resources.contains_key("OEBPS/orphan.xhtml"),
+            "the orphan chapter itself must still be dropped"
+        );
+        assert!(
+            !book.resources.contains_key("OEBPS/wm.png"),
+            "a srcset target owned by a dropped, unreachable document must be dropped with it"
+        );
     }
 
     #[test]

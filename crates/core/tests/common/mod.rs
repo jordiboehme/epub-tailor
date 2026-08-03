@@ -247,6 +247,46 @@ pub fn book_with_srcset_only_image() -> Vec<u8> {
     ])
 }
 
+/// A minimal EPUB3 book with an orphan chapter: manifested (a real `<item>`,
+/// a real zip entry) but in neither the spine nor the nav, so nothing
+/// reaches it. The orphan's only content is `<img srcset="wm.png 2x">` (no
+/// `src`), and `wm.png` itself has no manifest item - reachable, if at all,
+/// only through the orphan's `srcset`. Used to pin that a srcset target is
+/// dropped along with the unreachable document that named it, rather than
+/// surviving as a global root regardless of that document's own fate.
+pub fn book_with_orphan_chapter_srcset_image() -> Vec<u8> {
+    const CONTENT_OPF: &[u8] = br##"<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="pub-id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="pub-id">urn:uuid:ffff1111-2222-4333-8444-555555555555</dc:identifier>
+    <dc:title>Book</dc:title>
+    <dc:language>en</dc:language>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="ch" href="chapter.xhtml" media-type="application/xhtml+xml"/>
+    <item id="orphan" href="orphan.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine><itemref idref="ch"/></spine>
+</package>"##;
+    const CHAPTER: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>C</title></head>
+<body><p>Text.</p></body></html>"#;
+    const ORPHAN: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>Orphan</title></head>
+<body><p>Orphan.</p><img srcset="wm.png 2x"/></body></html>"#;
+    const WM_PNG: &[u8] = &[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+    build_epub(&[
+        ("mimetype", b"application/epub+zip"),
+        ("META-INF/container.xml", CONTAINER_XML),
+        ("OEBPS/content.opf", CONTENT_OPF),
+        ("OEBPS/nav.xhtml", NAV_XHTML),
+        ("OEBPS/chapter.xhtml", CHAPTER),
+        ("OEBPS/orphan.xhtml", ORPHAN),
+        ("OEBPS/wm.png", WM_PNG),
+    ])
+}
+
 /// A minimal EPUB3 book with one extra `META-INF/`-rooted file at `path`
 /// (e.g. `"META-INF/cdp.info"`) carrying `data`: neither `container.xml` nor
 /// `encryption.xml`, so `read_epub` drops it and reports its payload rather

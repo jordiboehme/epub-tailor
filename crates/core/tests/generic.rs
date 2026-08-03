@@ -451,6 +451,30 @@ fn generic_keeps_an_img_srcset_target_with_no_src() {
     );
 }
 
+/// Mandatory regression coverage for a follow-up review round on Important 4:
+/// a `<img srcset>` target must NOT be seeded as a global reachability root.
+/// An orphan chapter (manifested, in neither spine nor nav) carrying `<img
+/// srcset="wm.png 2x">` must itself be dropped as unreferenced, and `wm.png`,
+/// named only through that orphan, must be dropped along with it rather than
+/// surviving regardless of the orphan's own fate.
+#[test]
+fn generic_drops_an_img_srcset_target_owned_by_an_orphan_chapter() {
+    let mut epub = common::book_with_orphan_chapter_srcset_image();
+    let out = convert(
+        Input::Epub(std::mem::take(&mut epub)),
+        &opts_for(&["generic"]),
+    )
+    .expect("converts");
+    assert!(
+        common::entry(&out.epub, "OEBPS/orphan.xhtml").is_none(),
+        "the orphan chapter itself must still be dropped as unreferenced"
+    );
+    assert!(
+        common::entry(&out.epub, "OEBPS/wm.png").is_none(),
+        "a srcset target owned by a dropped orphan document must be dropped with it"
+    );
+}
+
 #[test]
 fn a_dropped_marker_file_reports_its_payload() {
     let mut epub = common::book_with_meta_inf("META-INF/cdp.info", b"SHTX001.635962014");

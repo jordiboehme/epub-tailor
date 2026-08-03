@@ -334,11 +334,15 @@ pub fn convert(input: Input, opts: &ConvertOptions) -> Result<Converted, Convert
     let mut tables_rasterized = 0u32;
     let mut chapters: Vec<(String, NodeRef)> = Vec::new();
     let mut aliases: AliasMap = HashMap::new();
-    // Extra reachability roots for `generic::reachable::prune`: `<img
-    // srcset>` targets, collected here because `image::rewrite_refs` strips
-    // the attribute before the reachability walk ever runs (see that
-    // function's docs).
-    let mut srcset_roots: Vec<String> = Vec::new();
+    // Extra reachability edges for `generic::reachable::prune`: `<img
+    // srcset>` targets, keyed by the zip-absolute path of the document each
+    // was found in, collected here because `image::rewrite_refs` strips the
+    // attribute before the reachability walk ever runs (see that function's
+    // and `prune`'s docs). Keyed rather than flattened so a target is only
+    // reachable through the document that actually named it, not as a root
+    // in its own right - a document nothing reaches must take its srcset
+    // targets down with it, exactly as it would its ordinary references.
+    let mut srcset_by_document: HashMap<String, Vec<String>> = HashMap::new();
     let mut relocated_styles: Vec<(String, String)> = Vec::new();
     // 1-based index over chapters that actually yielded non-empty head/body
     // `<style>` CSS, used to scope each contributor's relocated rules to its own
@@ -408,12 +412,10 @@ pub fn convert(input: Input, opts: &ConvertOptions) -> Result<Converted, Convert
                 &mut warnings,
             );
         }
-        srcset_roots.extend(crate::image::rewrite_refs(
-            &doc,
-            &parent_dir(path),
-            &renames,
-            &splits,
-        ));
+        let srcset_targets = crate::image::rewrite_refs(&doc, &parent_dir(path), &renames, &splits);
+        if !srcset_targets.is_empty() {
+            srcset_by_document.insert(path.clone(), srcset_targets);
+        }
         chapters.push((path.clone(), doc));
     }
 
@@ -603,12 +605,11 @@ pub fn convert(input: Input, opts: &ConvertOptions) -> Result<Converted, Convert
         if opts.features.strip_invisible_chars && book.nav_path.as_deref() != Some(path.as_str()) {
             generic::invisible::scrub_chapter(&doc, &mut transformations, &path);
         }
-        srcset_roots.extend(crate::image::rewrite_refs(
-            &doc,
-            &parent_dir(&path),
-            &renames,
-            &splits,
-        ));
+        let srcset_targets =
+            crate::image::rewrite_refs(&doc, &parent_dir(&path), &renames, &splits);
+        if !srcset_targets.is_empty() {
+            srcset_by_document.insert(path.clone(), srcset_targets);
+        }
         let bytes = serialize_xhtml(&doc);
         let resource = &mut book.resources[&path];
         resource.data = bytes;
@@ -623,7 +624,7 @@ pub fn convert(input: Input, opts: &ConvertOptions) -> Result<Converted, Convert
             &mut book,
             &mut transformations,
             &mut warnings,
-            &srcset_roots,
+            &srcset_by_document,
         );
     }
 
