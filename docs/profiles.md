@@ -339,22 +339,31 @@ should tailor to byte-identical output. What each switch removes:
   checksum-valid thirteen-digit ISBN under `978`/`979`, or as a checksum-valid
   eight-digit ISSN, survives exactly as a forged DOI does, because a checksum
   proves a value well-formed and never proves it shared.
-- **A `url()` or `@import` target more than 2 KB past the malformed rule that
-  hides it can still be lost.** CSS reference extraction runs a real parser
-  plus two raw-text safety nets (one for `url(...)`, one for the plain
-  `@import "…"` string form) rather than the old naive scanner, so a
-  malformed rule like `a{background:url(broken.png}` no longer costs a later,
-  well-formed `url()` or `@import` the way it used to in nearly every shape
-  that could trigger it. Both safety nets cap how far past the malformed
-  trigger they search for a closing `)` or quote, deliberately: an unbounded
-  search over an adversarial stylesheet built as many thousands of nested
-  unclosed `url(url(url(...` tokens turns a linear scan into one that costs
-  gigabytes of memory and tens of seconds, and this crate's input is an
-  arbitrary downloaded EPUB, so that cost is attacker-controlled. That cap is
-  2048 bytes: a reference more than that many bytes past the malformed span
-  hiding it is not recovered. No legitimate `url()` or `@import` target sits
-  anywhere near that far from its own trigger, so this narrows the surface to
-  a deliberately adversarial stylesheet, not anything a real book would ship.
+- **A very long `url()` or `@import` value, or one containing a brace or a
+  newline, is not recovered when a malformed rule elsewhere hides it from the
+  real parser.** CSS reference extraction runs a real parser plus two
+  raw-text safety nets (one for `url(...)`, one for the plain `@import "…"`
+  string form) rather than the old naive scanner, so a malformed rule like
+  `a{background:url(broken.png}` no longer costs a later, well-formed
+  `url()` or `@import` the way it used to in nearly every shape that could
+  trigger it. When the real parser does miss a target this way, only the raw
+  safety nets are left to recover it, and each one caps how far it searches
+  for its own closing `)` or quote at 2048 bytes - that bounds the length of
+  the value it can capture, not any distance from the malformed rule that
+  hid it: a `url()` value survives up to 2047 bytes and is lost at 2107, and
+  an `@import` value behaves the same past 2047 bytes. The same safety nets
+  also discard any captured value containing a `{`, a `}`, a carriage return
+  or a newline, on purpose - no legitimate path contains one, and dropping
+  such a capture outright, rather than merely bounding its length, is what
+  removes a quadratic blowup an adversarial stylesheet built as many
+  thousands of nested unclosed `url(url(url(...` tokens could otherwise
+  trigger. This crate's input is an arbitrary downloaded EPUB, so that cost
+  is attacker-controlled, which is why both limits exist. No legitimate
+  `url()` or `@import` value is anywhere near 2 KB long or contains a brace,
+  so the residual gap only ever touches a deliberately adversarial
+  stylesheet, not anything a real book would ship - and it is not silent
+  either way: `prune`'s independent basename scan still runs over what
+  survives afterward and warns, naming the dropped file, whenever this bites.
 - **Convergence holds only across the same tool version and the same profile
   stack.** A different `epub-tailor` release or a different composed stack is
   not guaranteed to produce a matching result.

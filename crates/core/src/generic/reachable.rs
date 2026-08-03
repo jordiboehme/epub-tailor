@@ -1215,4 +1215,48 @@ p { background: url('img/bg.png'); }"#;
             "the independent substring scan must catch what the walk missed: {warnings:?}"
         );
     }
+
+    #[test]
+    fn raw_import_refs_is_case_insensitive() {
+        // Mirrors `raw_url_refs_is_case_insensitive`: CSS at-rule keywords
+        // are ASCII case-insensitive exactly like function names, so
+        // `@IMPORT` and `@Import` must be found just like `@import`. Placed
+        // after another rule so only this raw safety net - not the AST walk,
+        // which lightningcss correctly discards a misplaced `@import` from
+        // under `error_recovery` - can ever find them.
+        let refs = raw_import_refs(
+            "p{color:red}\n@IMPORT \"shout.css\";\n@Import 'whisper.css';",
+            "OEBPS",
+        );
+        assert_eq!(
+            refs,
+            vec![
+                "OEBPS/shout.css".to_string(),
+                "OEBPS/whisper.css".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn raw_url_refs_does_not_search_past_max_raw_span() {
+        // Pins MAX_RAW_SPAN's effect, not its value: a well-formed url()
+        // value long enough that its closing `)` sits past the bound is not
+        // captured - the safety net's search window ends before it ever
+        // reaches that `)`. A short value comfortably inside the bound is
+        // captured normally in the same call. If the bound were removed
+        // (e.g. MAX_RAW_SPAN = usize::MAX), the window would span the whole
+        // remaining string, the long value's `)` would be found, and this
+        // assertion would fail - which is exactly the quadratic-blowup
+        // regression the bound exists to prevent.
+        let long_value = "a".repeat(3000);
+        let css = format!("a{{background:url({long_value})}}");
+        let refs = raw_url_refs(&css, "OEBPS");
+        assert!(
+            refs.is_empty(),
+            "a url() value whose closing paren sits past MAX_RAW_SPAN must not be captured: got {refs:?}"
+        );
+
+        let short_refs = raw_url_refs("a{background:url(short.png)}", "OEBPS");
+        assert_eq!(short_refs, vec!["OEBPS/short.png".to_string()]);
+    }
 }
