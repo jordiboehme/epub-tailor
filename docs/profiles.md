@@ -175,9 +175,9 @@ declaration survives with its value intact rather than being dropped.
 | `unicode_hygiene` | NFC-normalize text, strip XML-invalid characters. |
 | `chapter_split` | Split chapters over `options.max_chapter_kb` at heading boundaries. |
 | `remap_colors` | Remap text (CSS) and diagram (SVG) colors to perceptually spaced gray tones: each color keeps its apparent brightness while staying distinguishable on the panel's gray levels. Document colors get one solve per book, each SVG its own. Never applies on a color panel. |
-| `strip_media_metadata` | Remove EXIF, XMP and IPTC from JPEG and PNG, and metadata/comment blocks from SVG, without re-encoding. |
+| `strip_media_metadata` | Remove EXIF, XMP and IPTC from JPEG and PNG, without re-encoding. |
 | `strip_invisible_chars` | Remove zero-width and other invisible fingerprinting characters from text nodes, book metadata and TOC titles, script-aware. |
-| `normalize_identity` | Pin `dcterms:modified` to a fixed epoch and drop per-copy `dc:identifier` values that are not a valid ISBN or ISSN. |
+| `normalize_identity` | Pin `dcterms:modified` to a fixed epoch, drop per-copy `dc:identifier` values and replace a per-copy unique identifier with one derived from title and authors; a real ISBN, ISSN or DOI is always kept. |
 | `drop_unreferenced` | Delete archive files nothing in the book reaches, by walking the real reference graph rather than manifest membership. |
 
 ## `options` - tunables
@@ -251,9 +251,11 @@ should tailor to byte-identical output. What each switch removes:
   wherever the surrounding text needs them rather than stripped everywhere.
 - **Identity.** `dcterms:modified` is pinned to a fixed
   `1970-01-01T00:00:00Z`, regardless of what the source file carried.
-  Additional per-copy `dc:identifier` values are dropped and replaced with a
-  deterministic one; a real ISBN-10, ISBN-13 or ISSN (checksum-validated, not
-  just digit-counted) is always kept, since that identifier is shared across
+  Additional per-copy `dc:identifier` values are dropped outright. If the
+  book's own unique identifier is itself per-copy shaped, it is replaced with
+  one derived deterministically from title and authors; a real ISBN-10,
+  ISBN-13, ISSN or DOI (checksum-validated where applicable, not just
+  digit-counted) is always kept, since that identifier is shared across
   copies rather than per-copy.
 - **Unreferenced files.** Anything the book does not actually reach - by
   walking spine, navigation, NCX and CSS/HTML/SVG references, not by manifest
