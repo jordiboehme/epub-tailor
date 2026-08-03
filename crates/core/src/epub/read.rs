@@ -6,6 +6,7 @@ use indexmap::IndexMap;
 use roxmltree::{Document, Node};
 use zip::ZipArchive;
 
+use crate::epub::fonts::{Obfuscation, deobfuscate};
 use crate::epub::model::{
     Book, Creator, Identifier, Metadata, Resource, Series, TocEntry, normalize_entry_name,
     normalize_href,
@@ -23,14 +24,16 @@ pub struct ReadEpub {
     /// transcoded encodings, dropped files, dangling references, ...).
     pub warnings: Vec<Warning>,
     /// Transformations made while reading (currently: dropped META-INF
-    /// payloads). Separate from `warnings` because these are reportable
-    /// changes to the content, not just issues noticed in passing.
+    /// payloads and de-obfuscated fonts). Separate from `warnings` because
+    /// these are reportable changes to the content, not just issues noticed
+    /// in passing.
     pub transformations: Vec<Transformation>,
 }
 
 /// Font-obfuscation algorithms that `META-INF/encryption.xml` may declare
-/// without the book being treated as DRM-protected (the fonts are stripped
-/// anyway, so de-obfuscating them would be pointless work).
+/// without the book being treated as DRM-protected. Each resource an entry
+/// using one of these covers is de-obfuscated in place (see
+/// [`font_obfuscated_resources`]) rather than left scrambled.
 const FONT_OBFUSCATION_ALGORITHMS: [&str; 2] = [
     "http://www.idpf.org/2008/embedding",
     "http://ns.adobe.com/pdf/enc#RC",
@@ -87,15 +90,20 @@ pub fn read_epub(bytes: &[u8]) -> Result<ReadEpub, ConvertError> {
     let opf_path = parse_container(&container_text)?;
 
     // Partition entries into resources (in zip order) vs. dropped META-INF
-    // extras, excluding `mimetype` and `META-INF/` itself.
+    // extras, excluding `mimetype` and `META-INF/` itself. `encryption.xml`'s
+    // bytes are kept aside (not emitted as a resource): once the fonts it
+    // covers are de-obfuscated below, the declaration is no longer needed.
     let mut dropped_meta_inf: Vec<(String, Vec<u8>)> = Vec::new();
     let mut resources_raw: IndexMap<String, Vec<u8>> = IndexMap::new();
+    let mut encryption_xml: Option<Vec<u8>> = None;
     for (name, data) in all_entries {
         if name == "mimetype" {
             continue;
         }
         if let Some(rest) = name.strip_prefix("META-INF/") {
-            if rest != "container.xml" && rest != "encryption.xml" {
+            if rest == "encryption.xml" {
+                encryption_xml = Some(data);
+            } else if rest != "container.xml" {
                 dropped_meta_inf.push((name, data));
             }
             continue;
@@ -172,6 +180,27 @@ pub fn read_epub(bytes: &[u8]) -> Result<ReadEpub, ConvertError> {
         );
     }
 
+    // `check_drm` above already rejected any `encryption.xml` that declares a
+    // non-font-obfuscation algorithm, so every `EncryptedData` entry reaching
+    // this point is font obfuscation: de-obfuscate each covered resource in
+    // place, keyed off the unique identifier, so the output declares nothing
+    // and needs to declare nothing.
+    if let Some(enc_bytes) = encryption_xml {
+        let enc_text = String::from_utf8_lossy(&enc_bytes);
+        let unique_id = parsed_opf.metadata.identifier.as_deref().unwrap_or("");
+        for (uri, algorithm) in font_obfuscated_resources(&enc_text)? {
+            let path = normalize_href("", &uri);
+            if let Some(resource) = resources.get_mut(&path) {
+                deobfuscate(&mut resource.data, algorithm, unique_id);
+                transformations.push(Transformation {
+                    kind: "font-deobfuscated".to_string(),
+                    detail: "undid EPUB font obfuscation so the font is usable".to_string(),
+                    file: Some(path),
+                });
+            }
+        }
+    }
+
     let book = Book {
         metadata: parsed_opf.metadata,
         resources,
@@ -217,12 +246,54 @@ fn meta_inf_preview(data: &[u8]) -> String {
 /// presence first).
 pub(crate) enum EncryptionClass {
     /// Every `EncryptedData` entry uses a font-obfuscation algorithm: not
-    /// DRM (the fonts are stripped anyway, so de-obfuscating them would be
-    /// pointless work), but worth a nod since the book does carry the file.
+    /// DRM. `read_epub` de-obfuscates each covered font in place and drops
+    /// the declaration; `crate::validate`'s `drm` lint still surfaces this as
+    /// an informational finding, since it is a real (if benign) fact about
+    /// the source file.
     FontObfuscationOnly,
     /// At least one entry uses a real encryption algorithm: the book is
     /// DRM-protected.
     Drm,
+}
+
+/// One `<EncryptedData>` entry from `META-INF/encryption.xml`: its declared
+/// algorithm and the resource its `<CipherReference URI="...">` names, when
+/// present. Either may be absent in a malformed document; callers that need
+/// one treat a missing value as "does not qualify" rather than erroring.
+struct EncryptedDataEntry {
+    algorithm: Option<String>,
+    cipher_uri: Option<String>,
+}
+
+/// Parse every `<EncryptedData>` entry out of a decoded
+/// `META-INF/encryption.xml` document. Shared by [`classify_encryption_xml`]
+/// (which only needs each entry's algorithm) and
+/// [`font_obfuscated_resources`] (which also needs the covered resource).
+fn parse_encrypted_data_entries(text: &str) -> Result<Vec<EncryptedDataEntry>, ConvertError> {
+    let doc = Document::parse(text).map_err(|e| {
+        ConvertError::InvalidEpub(format!("malformed META-INF/encryption.xml: {e}"))
+    })?;
+
+    Ok(doc
+        .descendants()
+        .filter(|n| n.is_element() && n.tag_name().name() == "EncryptedData")
+        .map(|enc_data| {
+            let algorithm = enc_data
+                .descendants()
+                .find(|n| n.is_element() && n.tag_name().name() == "EncryptionMethod")
+                .and_then(|n| n.attribute("Algorithm"))
+                .map(str::to_string);
+            let cipher_uri = enc_data
+                .descendants()
+                .find(|n| n.is_element() && n.tag_name().name() == "CipherReference")
+                .and_then(|n| n.attribute("URI"))
+                .map(str::to_string);
+            EncryptedDataEntry {
+                algorithm,
+                cipher_uri,
+            }
+        })
+        .collect())
 }
 
 /// Classify a decoded `META-INF/encryption.xml` document's `EncryptedData`
@@ -230,30 +301,50 @@ pub(crate) enum EncryptionClass {
 /// a hard [`ConvertError::DrmProtected`]) and `crate::validate`'s `drm` lint
 /// (which turns it into an `Error`-severity finding instead).
 pub(crate) fn classify_encryption_xml(text: &str) -> Result<EncryptionClass, ConvertError> {
-    let doc = Document::parse(text).map_err(|e| {
-        ConvertError::InvalidEpub(format!("malformed META-INF/encryption.xml: {e}"))
-    })?;
+    let entries = parse_encrypted_data_entries(text)?;
 
-    let mut non_font_algorithm = false;
-    for enc_data in doc
-        .descendants()
-        .filter(|n| n.is_element() && n.tag_name().name() == "EncryptedData")
-    {
-        let algorithm = enc_data
-            .descendants()
-            .find(|n| n.is_element() && n.tag_name().name() == "EncryptionMethod")
-            .and_then(|n| n.attribute("Algorithm"));
-        match algorithm {
-            Some(algo) if FONT_OBFUSCATION_ALGORITHMS.contains(&algo) => {}
-            _ => non_font_algorithm = true,
-        }
-    }
+    let non_font_algorithm = entries.iter().any(|entry| {
+        !matches!(
+            entry.algorithm.as_deref(),
+            Some(algo) if FONT_OBFUSCATION_ALGORITHMS.contains(&algo)
+        )
+    });
 
     if non_font_algorithm {
         Ok(EncryptionClass::Drm)
     } else {
         Ok(EncryptionClass::FontObfuscationOnly)
     }
+}
+
+/// The algorithm URI's [`Obfuscation`] variant, or `None` for a non-font (DRM)
+/// algorithm.
+fn font_obfuscation_algorithm(algorithm: &str) -> Option<Obfuscation> {
+    match algorithm {
+        "http://www.idpf.org/2008/embedding" => Some(Obfuscation::Idpf),
+        "http://ns.adobe.com/pdf/enc#RC" => Some(Obfuscation::Adobe),
+        _ => None,
+    }
+}
+
+/// Every resource `META-INF/encryption.xml` declares as font-obfuscated, as
+/// `(container-relative URI, algorithm)` pairs. Only meaningful once
+/// [`classify_encryption_xml`] has confirmed the document is
+/// [`EncryptionClass::FontObfuscationOnly`] - by the time [`read_epub`] calls
+/// this, [`check_drm`] has already turned any non-font entry into a hard
+/// error, so every entry reaching here uses a font-obfuscation algorithm.
+/// An entry missing its algorithm or `CipherReference` URI is skipped: there
+/// is nothing to de-obfuscate without knowing which resource, with which key.
+fn font_obfuscated_resources(text: &str) -> Result<Vec<(String, Obfuscation)>, ConvertError> {
+    let entries = parse_encrypted_data_entries(text)?;
+    Ok(entries
+        .into_iter()
+        .filter_map(|entry| {
+            let algorithm = font_obfuscation_algorithm(entry.algorithm.as_deref()?)?;
+            let uri = entry.cipher_uri?;
+            Some((uri, algorithm))
+        })
+        .collect())
 }
 
 fn check_drm<R: Read + Seek>(
@@ -281,7 +372,7 @@ fn check_drm<R: Read + Seek>(
         EncryptionClass::FontObfuscationOnly => {
             warnings.push(Warning {
                 message: "obfuscated fonts detected (META-INF/encryption.xml uses font \
-                          obfuscation only); fonts are stripped anyway"
+                          obfuscation only); de-obfuscating and dropping the declaration"
                     .to_string(),
                 file: None,
             });

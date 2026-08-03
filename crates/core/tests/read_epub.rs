@@ -196,6 +196,107 @@ fn font_obfuscation_only_is_a_warning_not_an_error() {
     );
 }
 
+/// The IDPF font-obfuscation key for `unique_id`: SHA-1 of the identifier
+/// with whitespace stripped (there is none here), matching
+/// `epub_tailor_core`'s own `fonts::idpf_key` - kept independent (computed by
+/// hand from the `sha1` crate directly) so the test does not just assert the
+/// implementation agrees with itself.
+fn idpf_obfuscate(data: &[u8], unique_id: &str) -> Vec<u8> {
+    use sha1::{Digest, Sha1};
+    let key = Sha1::digest(unique_id.as_bytes());
+    data.iter()
+        .enumerate()
+        .map(|(i, b)| b ^ key[i % key.len()])
+        .collect()
+}
+
+#[test]
+fn font_obfuscation_is_undone_and_encryption_xml_is_dropped() {
+    const UNIQUE_ID: &str = "urn:uuid:00000000-0000-0000-0000-000000000000";
+    let original_font: Vec<u8> = (0..300u32).map(|i| (i % 250) as u8).collect();
+    let obfuscated_font = idpf_obfuscate(&original_font, UNIQUE_ID);
+    // The obfuscation must actually have changed the bytes, or this fixture
+    // would not exercise de-obfuscation at all.
+    assert_ne!(obfuscated_font, original_font);
+
+    const ENCRYPTION_XML: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
+<encryption xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <EncryptedData xmlns="http://www.w3.org/2001/04/xmlenc#">
+    <EncryptionMethod Algorithm="http://www.idpf.org/2008/embedding"/>
+    <CipherData><CipherReference URI="OEBPS/fonts/embedded.ttf"/></CipherData>
+  </EncryptedData>
+</encryption>"#;
+
+    let opf = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="pub-id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:title>Fonted</dc:title>
+    <dc:language>en</dc:language>
+    <dc:identifier id="pub-id">{UNIQUE_ID}</dc:identifier>
+  </metadata>
+  <manifest>
+    <item id="ch1" href="text/chapter1.xhtml" media-type="application/xhtml+xml"/>
+    <item id="font" href="fonts/embedded.ttf" media-type="application/vnd.ms-opentype"/>
+  </manifest>
+  <spine>
+    <itemref idref="ch1"/>
+  </spine>
+</package>"#
+    );
+
+    let bytes = build_epub(&[
+        ("mimetype", b"application/epub+zip"),
+        ("META-INF/container.xml", CONTAINER_XML),
+        ("META-INF/encryption.xml", ENCRYPTION_XML),
+        ("OEBPS/content.opf", opf.as_bytes()),
+        ("OEBPS/text/chapter1.xhtml", CHAPTER1),
+        ("OEBPS/fonts/embedded.ttf", &obfuscated_font),
+    ]);
+
+    // Reading alone must de-obfuscate the font in the `Book` model and record
+    // the transformation.
+    let result = epub_tailor_core::read_epub(&bytes).expect("font-obfuscated epub should read");
+    let font_resource = &result.book.resources["OEBPS/fonts/embedded.ttf"];
+    assert_eq!(
+        font_resource.data, original_font,
+        "the font bytes must be de-obfuscated back to the original"
+    );
+    assert!(
+        result
+            .transformations
+            .iter()
+            .any(|t| t.kind == "font-deobfuscated"
+                && t.file.as_deref() == Some("OEBPS/fonts/embedded.ttf")),
+        "expected a font-deobfuscated transformation naming the font, got {:?}",
+        result.transformations
+    );
+
+    // End to end through `convert()` (the `epub` profile: repair-only, so the
+    // font is not stripped and would otherwise reach the output still
+    // scrambled): the output carries the original font bytes and no longer
+    // declares `META-INF/encryption.xml`.
+    let converted = convert(
+        Input::Epub(bytes),
+        &ConvertOptions {
+            features: Features::repair_only(),
+            ..ConvertOptions::default()
+        },
+    )
+    .expect("font-obfuscated epub should convert");
+
+    assert!(
+        common::entry(&converted.epub, "META-INF/encryption.xml").is_none(),
+        "the converted output must not declare META-INF/encryption.xml"
+    );
+    let out_font = common::entry(&converted.epub, "OEBPS/fonts/embedded.ttf")
+        .expect("the font resource must survive conversion");
+    assert_eq!(
+        out_font, original_font,
+        "the converted output's font bytes must be the de-obfuscated original"
+    );
+}
+
 /// A one-chapter EPUB3 whose sole spine itemref is `linear="no"`: `parse_spine`
 /// rescues it (rather than skipping every itemref and leaving `book.spine`
 /// empty) so the book still has readable content, warning once with the OPF

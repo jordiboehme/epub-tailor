@@ -39,6 +39,7 @@ lightningcss = { version = "=1.0.0-alpha.72", default-features = false, features
     "visitor",
 ] }
 unicode-normalization = "0.1"
+sha1 = "0.10"
 # Default features pull in the standalone `comrak` CLI binary (clap, bon,
 # shell-words, xdg) and syntax highlighting (syntect-onig) - none of which we
 # use (M3 already owns code-block handling); dropping them also drops
