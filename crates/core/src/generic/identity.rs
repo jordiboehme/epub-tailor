@@ -48,19 +48,91 @@ fn strip_scheme_prefix(value: &str) -> &str {
     value
 }
 
-/// Whether `value` has the DOI shape `10.<registrant>/<suffix>`: a numeric
-/// registrant code, a slash, then a non-empty suffix (the DOI spec allows
-/// almost any character there, so this is a shape check, not a registry
-/// lookup - good enough to keep a legitimate DOI out of the per-copy bucket).
-/// `value` is expected to already have any `doi:`/`urn:doi:` prefix stripped.
-fn looks_like_doi(value: &str) -> bool {
-    let Some(rest) = value.strip_prefix("10.") else {
+/// A DOI's registrant code must be at least four numerals (ISO 26324's own
+/// minimum; every real-world registrant, `10.1016` for Elsevier, `10.1000`
+/// reserved by the DOI Foundation itself for documentation, and so on, meets
+/// it). A shorter registrant like `10.1` or `10.9` was never issued to
+/// anyone, so it is not a real DOI shape at all - just digits that happen to
+/// contain a `10.` and a `/`.
+const MIN_DOI_REGISTRANT_DIGITS: usize = 4;
+
+/// A contiguous run of digits this long inside a DOI suffix reads as a raw
+/// numeric token (a timestamp, a transaction id) rather than the scattered
+/// short digit groups an ordinary bibliographic DOI suffix carries (a real
+/// example, `j.jbi.2020.103545`, has runs of at most 6). Matches the digit
+/// threshold used elsewhere in this module for the same "this many digits in
+/// a row stops looking like prose and starts looking like an id" judgment.
+const MIN_SUSPICIOUS_DIGIT_RUN: usize = 8;
+
+/// Split `value` into a DOI's registrant and suffix if it has the DOI shape
+/// `10.<registrant>/<suffix>`: registrant all-digit and non-empty, suffix
+/// non-empty. Purely a shape check (the DOI spec allows almost any character
+/// in the suffix), so a shape match alone is not proof the DOI is real - see
+/// [`is_per_copy`], which additionally screens the parts this returns before
+/// trusting them. `value` is expected to already have any `doi:`/`urn:doi:`
+/// prefix stripped.
+fn doi_parts(value: &str) -> Option<(&str, &str)> {
+    let rest = value.strip_prefix("10.")?;
+    let (registrant, suffix) = rest.split_once('/')?;
+    if !registrant.is_empty()
+        && registrant.chars().all(|c| c.is_ascii_digit())
+        && !suffix.is_empty()
+    {
+        Some((registrant, suffix))
+    } else {
+        None
+    }
+}
+
+/// The longest run of consecutive ASCII digits anywhere in `s`.
+fn longest_digit_run(s: &str) -> usize {
+    let mut longest = 0;
+    let mut current = 0;
+    for c in s.chars() {
+        if c.is_ascii_digit() {
+            current += 1;
+            longest = longest.max(current);
+        } else {
+            current = 0;
+        }
+    }
+    longest
+}
+
+/// Whether `s` contains a UUID anywhere inside it, not just as its entire
+/// contents: [`looks_like_uuid`]'s exact-shape test misses a value like
+/// `copy-<uuid>`, which still embeds a real UUID behind extra text.
+/// Scans every 36-byte window (`.get` skips any that land off a char
+/// boundary rather than panicking) for the hyphens-at-8/13/18/23 shape
+/// [`looks_like_uuid`] already knows how to recognize.
+fn contains_uuid(s: &str) -> bool {
+    let bytes = s.len();
+    if bytes < 36 {
         return false;
-    };
-    let Some((registrant, suffix)) = rest.split_once('/') else {
-        return false;
-    };
-    !registrant.is_empty() && registrant.chars().all(|c| c.is_ascii_digit()) && !suffix.is_empty()
+    }
+    (0..=bytes - 36).any(|i| s.get(i..i + 36).is_some_and(looks_like_uuid))
+}
+
+/// Whether a DOI's registrant/suffix pair looks like a per-copy marker wearing
+/// a DOI costume rather than a real, shared bibliographic identifier. A DOI
+/// shape is trusted only when it clears every one of these; anything else -
+/// an implausible registrant, an embedded UUID, an email address, or a raw
+/// long digit run in the suffix - is treated as per-copy outright rather than
+/// falling through to heuristics built for entirely different value shapes
+/// (which, for a DOI's inherently non-numeric-checksummable suffix, would
+/// misjudge it either way - see the module's callers for why this cannot
+/// just defer to the generic digit-count path).
+fn doi_looks_per_copy(registrant: &str, suffix: &str) -> bool {
+    if registrant.len() < MIN_DOI_REGISTRANT_DIGITS {
+        return true;
+    }
+    if suffix.contains('@') {
+        return true;
+    }
+    if suffix.to_ascii_lowercase().contains("urn:uuid:") || contains_uuid(suffix) {
+        return true;
+    }
+    longest_digit_run(suffix) >= MIN_SUSPICIOUS_DIGIT_RUN
 }
 
 /// Whether `value` looks like it was minted per copy rather than per edition.
@@ -82,8 +154,15 @@ fn is_per_copy(value: &str) -> bool {
     // stripped before every check below, so a correctly-prefixed identifier
     // checksums (or shape-matches, for a DOI) exactly like its bare form.
     let core = strip_scheme_prefix(v);
-    if looks_like_doi(core) {
-        return false;
+    // A DOI-shaped value is decided here outright, never falling through to
+    // the digit-count path below: that path's short-value leniency (`digit_
+    // count < 8` reads as shared) exists for plain identifiers, not for a
+    // value that specifically dressed itself up as `10.<registrant>/<suffix>`
+    // - once something goes to the trouble of wearing that shape, it is
+    // either a real DOI or a per-copy marker in costume, and `doi_looks_per_
+    // copy` is what tells the two apart.
+    if let Some((registrant, suffix)) = doi_parts(core) {
+        return doi_looks_per_copy(registrant, suffix);
     }
     // A long digit run only reads as per-copy if it is not a real, checksum-
     // valid ISBN/ISSN: a 13-digit millisecond timestamp has the same *length*
@@ -391,10 +470,68 @@ mod tests {
     #[test]
     fn a_value_shaped_like_the_start_of_a_doi_but_missing_the_slash_is_not_mistaken_for_one() {
         // Starts like a DOI (`10.`) but never has the `/` that separates
-        // registrant from suffix, so `looks_like_doi` must not match it; it
+        // registrant from suffix, so `doi_parts` must not match it; it
         // falls through to the checksum path instead and (correctly, since
         // it is not a real ISBN/ISSN either) reads as per-copy.
         assert!(is_per_copy("10.123456789"));
+    }
+
+    // -- a DOI shape is not automatically trusted: a per-copy marker wearing
+    // -- a DOI costume must still be dropped ------------------------------
+
+    #[test]
+    fn a_doi_whose_suffix_is_a_long_digit_run_is_dropped() {
+        // Measured regression: a shop can mint doi:10.<real-looking-
+        // registrant>/<transaction id> just as easily as a bare vendor id.
+        assert!(is_per_copy("doi:10.0000/SHTX001.635962014"));
+    }
+
+    #[test]
+    fn a_doi_whose_suffix_is_a_bare_uuid_is_dropped() {
+        assert!(is_per_copy("10.0000/6f2a1e40-8c31-4b7e-9a55-1d0c2f9b7e31"));
+    }
+
+    #[test]
+    fn a_doi_whose_suffix_embeds_a_uuid_behind_other_text_is_dropped() {
+        // The UUID is not the whole suffix here (`copy-` precedes it), which
+        // is exactly the shape `looks_like_uuid`'s exact-match alone would
+        // miss - `contains_uuid`'s substring scan is what has to catch it.
+        assert!(is_per_copy(
+            "doi:10.5555/copy-6f2a1e40-8c31-4b7e-9a55-1d0c2f9b7e31"
+        ));
+    }
+
+    #[test]
+    fn a_doi_whose_suffix_is_a_millisecond_timestamp_is_dropped() {
+        assert!(is_per_copy("urn:doi:10.9/1735689600000"));
+    }
+
+    #[test]
+    fn a_doi_with_an_implausibly_short_registrant_is_dropped() {
+        // No real DOI registrant is a single digit (ISO 26324 requires at
+        // least four numerals); this is just digits that happen to contain
+        // "10." and "/", not a real DOI shape worth trusting.
+        assert!(is_per_copy("10.1/x"));
+    }
+
+    #[test]
+    fn a_doi_whose_suffix_embeds_an_email_address_is_dropped() {
+        // Caught by is_per_copy's pre-existing top-level `@` guard before the
+        // DOI-shape logic ever runs (the value contains '@', full stop) -
+        // doi_looks_per_copy's own `@` check is unreachable through this
+        // call site for exactly that reason, and is kept only as defense in
+        // depth per the finding. This test pins the observable outcome
+        // (dropped), not which internal guard produces it.
+        assert!(is_per_copy("doi:10.1016/buyer@example.com"));
+    }
+
+    #[test]
+    fn a_real_doi_with_short_scattered_digit_groups_in_its_suffix_stays_kept() {
+        // The legitimate DOI already pinned elsewhere as KEPT, re-asserted
+        // here to make the contrast with the long-digit-run cases above
+        // explicit: "2020" and "103545" are short digit groups scattered
+        // through ordinary bibliographic text, never a single run of 8+.
+        assert!(!is_per_copy("10.1016/j.jbi.2020.103545"));
     }
 
     // -- the still-dropped per-copy cases, re-pinned after the prefix/DOI

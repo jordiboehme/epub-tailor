@@ -290,6 +290,13 @@ should tailor to byte-identical output. What each switch removes:
   `dc:publisher` would destroy legitimate, shared publisher metadata, and a
   single copy gives no way to tell a shared value from a per-copy one the way
   a checksummed ISBN or a `urn:uuid:` shape does.
+- **A DOI-shaped identifier is screened, not proven real.** A registrant code
+  under four digits, an embedded UUID or email address, or a long digit run
+  in the suffix all mark a `10.<registrant>/<suffix>` value as per-copy and
+  drop it, but a per-copy value deliberately built to clear all of those -
+  a real-looking registrant paired with an innocuous-looking suffix - can
+  still survive. We screen the obvious shapes a shop is likely to reach for,
+  not every shape a per-copy value could possibly take.
 - **Convergence holds only across the same tool version and the same profile
   stack.** A different `epub-tailor` release or a different composed stack is
   not guaranteed to produce a matching result.
