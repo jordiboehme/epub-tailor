@@ -86,7 +86,7 @@ The app keeps itself current. When a new version ships it mentions it, quietly, 
 - Removes invisible fingerprinting characters from the text, script-aware - Persian, Arabic, Hebrew and Indic text and emoji sequences keep the zero-width joiners they actually need.
 - Pins `dcterms:modified` to a fixed date, drops per-copy identifiers and replaces a per-copy unique identifier with one derived from the title and authors. A checksum-valid ISBN or ISSN is kept, as is a DOI under a registrant a registration agency could actually have assigned; see `docs/profiles.md` for exactly what the DOI screen does and does not catch.
 - Deletes files nothing in the book references.
-- Composes with any device profile in either order (`--profile x4 --profile generic` or the reverse) and, used alone, produces `book.tailored.epub` like the repair core. It will not catch a watermark baked into the visible text or the picture itself - content filter rules and a device profile's own image re-encoding are still the tools for that.
+- Composes with any device profile in either order (`--profile x4 --profile generic` or the reverse) and, used alone, produces `book.tailored.epub` like the repair core. It will not catch a watermark baked into the visible text or the picture itself. Content filter rules are the answer for the visible text, but nothing here is: a device profile's image re-encoding destroys a fine-grained pixel watermark and still leaves a coarse one intact, so neither profile should be relied on against pixel-domain watermarking.
 
 ## The command line
 

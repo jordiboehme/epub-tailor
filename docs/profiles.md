@@ -293,10 +293,12 @@ should tailor to byte-identical output. What each switch removes:
   single copy. BooXtream, the dominant vendor in this market, advertises
   exactly this technique. The existing content filter rules (see above) remain
   the answer for those.
-- **Pixel-domain steganography** survives `generic`, which never re-encodes
-  images. A device profile destroys it as a side effect of its own
-  transcoding, so `--profile x4 --profile generic` covers more than `generic`
-  alone.
+- **Pixel-domain steganography** survives `generic` entirely, which never
+  re-encodes images. A device profile's transcoding destroys the fine-grained
+  kind, such as a low-order-bit encoding its quantization collapses, but a
+  coarse watermark carried in the pixel values themselves can survive that
+  transcode intact. Neither `generic` alone nor `--profile x4 --profile
+  generic` should be relied on against pixel-domain watermarking.
 - **Font `name` tables** are not scrubbed.
 - **Attribute values** (`alt`, `title`, `aria-label` and similar) are not
   scrubbed for invisible characters, only text nodes.
