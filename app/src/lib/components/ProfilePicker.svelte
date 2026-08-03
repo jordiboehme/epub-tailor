@@ -13,6 +13,7 @@
     removeLayerAt,
     moveLayer,
     hasDeviceClash,
+    hasScreen,
   } from "../stores/profiles.svelte";
   import type { ProfileLayer } from "../stores/settings.svelte";
   import { settings } from "../stores/settings.svelte";
@@ -38,7 +39,7 @@
   }
 
   function screenLabel(w: number, h: number): string {
-    return w > 0 && h > 0 ? `${w} x ${h}` : "device-neutral";
+    return hasScreen({ screen_w: w, screen_h: h }) ? `${w} x ${h}` : "device-neutral";
   }
 
   function addBuiltin(name: string) {

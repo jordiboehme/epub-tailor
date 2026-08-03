@@ -64,18 +64,39 @@ export function moveLayer(stack: ProfileLayer[], index: number, delta: number): 
 }
 
 /**
+ * The sentinel `DeviceCaps::permissive()` (Rust) fills `screen_w`/`screen_h`
+ * with for a profile that carries no device screen at all: `u32::MAX`, not
+ * `0` - `generic` and `epub` both report `screen_w: 4294967295` from the real
+ * CLI. `0` is also treated as "no screen", as a defensive fallback for a
+ * malformed profile, but it is not the value either built-in actually uses.
+ */
+const NO_SCREEN_SENTINEL = 4294967295;
+
+/** Whether `caps` describes a real device screen, as opposed to the
+ * device-neutral sentinel `generic` and `epub` both report. */
+export function hasScreen(caps: { screen_w: number; screen_h: number }): boolean {
+  return (
+    caps.screen_w > 0 &&
+    caps.screen_w < NO_SCREEN_SENTINEL &&
+    caps.screen_h > 0 &&
+    caps.screen_h < NO_SCREEN_SENTINEL
+  );
+}
+
+/**
  * True when more than one layer carries a device screen, which means the
  * CLI's last-layer-wins composition silently discards all but the last
- * screen. `generic` and `epub` have no screen (`screen_w` is 0) and never
- * count, so pairing either with one device profile does not warn.
+ * screen. `generic` and `epub` report the device-neutral sentinel (see
+ * `hasScreen`) and never count, so pairing either with one device profile -
+ * including the flagship `[epub, generic, x4]` stack - does not warn.
  */
 export function hasDeviceClash(stack: ProfileLayer[], builtins: Profile[]): boolean {
   return (
-    stack.filter(
-      (layer) =>
-        layer.kind === "builtin" &&
-        (builtins.find((p) => p.name === layer.name)?.caps.screen_w ?? 0) > 0,
-    ).length > 1
+    stack.filter((layer) => {
+      if (layer.kind !== "builtin") return false;
+      const caps = builtins.find((p) => p.name === layer.name)?.caps;
+      return caps !== undefined && hasScreen(caps);
+    }).length > 1
   );
 }
 

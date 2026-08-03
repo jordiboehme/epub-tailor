@@ -18,6 +18,7 @@ import {
   removeLayerAt,
   moveLayer,
   hasDeviceClash,
+  hasScreen,
 } from "../lib/stores/profiles.svelte";
 import { settings } from "../lib/stores/settings.svelte";
 import type { ProfileLayer } from "../lib/stores/settings.svelte";
@@ -27,8 +28,17 @@ function setStack(stack: ProfileLayer[]): void {
   settings.profileStack = stack;
 }
 
-/** A minimal built-in `Profile`, enough to exercise `hasDeviceClash`. */
-function builtin(name: string, screen: { w: number; h: number } = { w: 0, h: 0 }): Profile {
+// The real CLI's `DeviceCaps::permissive()` sentinel for "no screen at all":
+// u32::MAX, not 0. `generic` and `epub` both report this from the real
+// `profiles --report json` (see contract.test.ts's PROFILES_JSON fixture).
+// Defaulting the test helper to this instead of {w:0,h:0} is deliberate: a
+// {w:0,h:0} default let earlier tests pass while encoding a premise (that
+// screen-less profiles report 0) the real CLI does not share.
+const NO_SCREEN = 4294967295;
+
+/** A minimal built-in `Profile`, enough to exercise `hasDeviceClash`. Defaults
+ * to the real device-neutral sentinel, not a device profile's shape. */
+function builtin(name: string, screen: { w: number; h: number } = { w: NO_SCREEN, h: NO_SCREEN }): Profile {
   return {
     name,
     description: "",
@@ -252,5 +262,36 @@ describe("hasDeviceClash", () => {
         builtins,
       ),
     ).toBe(false);
+  });
+
+  it("is false for the flagship [epub, generic, x4] stack, using the real u32::MAX sentinel", () => {
+    // The exact composition the review measured as a false positive: every
+    // stack a user builds by adding generic to the app's default [epub]
+    // stack showed the clash warning before this fix.
+    expect(
+      hasDeviceClash(
+        [
+          { kind: "builtin", name: "epub" },
+          { kind: "builtin", name: "generic" },
+          { kind: "builtin", name: "x4" },
+        ],
+        builtins,
+      ),
+    ).toBe(false);
+  });
+
+});
+
+describe("hasScreen", () => {
+  it("is false for the u32::MAX device-neutral sentinel", () => {
+    expect(hasScreen({ screen_w: 4294967295, screen_h: 4294967295 })).toBe(false);
+  });
+
+  it("is false for a zero screen, defensively", () => {
+    expect(hasScreen({ screen_w: 0, screen_h: 0 })).toBe(false);
+  });
+
+  it("is true for a real device screen", () => {
+    expect(hasScreen({ screen_w: 758, screen_h: 1024 })).toBe(true);
   });
 });
