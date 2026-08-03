@@ -177,7 +177,7 @@ declaration survives with its value intact rather than being dropped.
 | `remap_colors` | Remap text (CSS) and diagram (SVG) colors to perceptually spaced gray tones: each color keeps its apparent brightness while staying distinguishable on the panel's gray levels. Document colors get one solve per book, each SVG its own. Never applies on a color panel. |
 | `strip_media_metadata` | Remove EXIF, XMP and IPTC from JPEG and PNG, without re-encoding. |
 | `strip_invisible_chars` | Remove zero-width and other invisible fingerprinting characters from text nodes, book metadata and TOC titles, script-aware. |
-| `normalize_identity` | Pin `dcterms:modified` to a fixed epoch, drop per-copy `dc:identifier` values and replace a per-copy unique identifier with one derived from title and authors; a real ISBN, ISSN or DOI is always kept. |
+| `normalize_identity` | Pin `dcterms:modified` to a fixed epoch, drop per-copy `dc:identifier` values and replace a per-copy unique identifier with one derived from title and authors. A checksum-valid ISBN or ISSN is kept, as is a DOI under a registrant a registration agency could actually have assigned. |
 | `drop_unreferenced` | Delete archive files nothing in the book reaches, by walking the real reference graph rather than manifest membership. |
 
 ## `options` - tunables
@@ -257,10 +257,27 @@ should tailor to byte-identical output. What each switch removes:
   `1970-01-01T00:00:00Z`, regardless of what the source file carried.
   Additional per-copy `dc:identifier` values are dropped outright. If the
   book's own unique identifier is itself per-copy shaped, it is replaced with
-  one derived deterministically from title and authors; a real ISBN-10,
-  ISBN-13, ISSN or DOI (checksum-validated where applicable, not just
-  digit-counted) is always kept, since that identifier is shared across
-  copies rather than per-copy.
+  one derived deterministically from title and authors. An ISBN-10, ISBN-13
+  or ISSN that passes its own checksum is kept, since that identifier is
+  shared across copies rather than per-copy.
+
+  A DOI has no checksum to validate, so it is screened on shape instead. A
+  `10.<registrant>/<suffix>` value is kept unless its registrant is one no
+  registration agency assigns - shorter than four digits, or the reserved
+  `10.0000`, `10.5555` (the official DOI test prefix) or `10.9999` - or its
+  suffix carries an email address, an embedded UUID or nothing at all but a
+  run of twelve or more digits. Real DOI suffixes routinely contain long
+  digit runs (`10.5281/zenodo.10001234`, `10.1073/pnas.2019897118`,
+  `10.1787/9789264189515-en`), so run length on its own is deliberately not
+  screened: an earlier release did screen it and dropped whole publisher
+  families of genuine DOIs.
+
+  A declared `<meta property="identifier-type">` refinement does not override
+  any of this. It protects a value the *heuristics* would otherwise
+  misjudge - an unusually spelled ISBN, say - but it cannot rescue a value
+  that positively looks per-copy, because the shop writes the OPF and a
+  scheme it declares is a hint about format rather than a warrant of
+  provenance.
 - **Unreferenced files.** Anything the book does not actually reach is
   deleted and reported with its size. Reachability is a real graph walk, not
   manifest membership: it roots at the package document, the navigation
@@ -290,13 +307,14 @@ should tailor to byte-identical output. What each switch removes:
   `dc:publisher` would destroy legitimate, shared publisher metadata, and a
   single copy gives no way to tell a shared value from a per-copy one the way
   a checksummed ISBN or a `urn:uuid:` shape does.
-- **A DOI-shaped identifier is screened, not proven real.** A registrant code
-  under four digits, an embedded UUID or email address, or a long digit run
-  in the suffix all mark a `10.<registrant>/<suffix>` value as per-copy and
-  drop it, but a per-copy value deliberately built to clear all of those -
-  a real-looking registrant paired with an innocuous-looking suffix - can
-  still survive. We screen the obvious shapes a shop is likely to reach for,
-  not every shape a per-copy value could possibly take.
+- **A DOI-shaped identifier is screened, not proven real.** The screens above
+  catch a placeholder or implausibly short registrant, an embedded UUID or
+  email address and a suffix that is nothing but a long digit run. What still
+  survives is a per-copy value that forges a plausible registrant and gives
+  it a structured suffix: `10.1016/TXN-8837261` is indistinguishable from a
+  real DOI without querying a resolver, which this tool deliberately never
+  does (it opens no sockets). Nothing here proves a DOI real - the only
+  claim is that the shapes a shop is likely to reach for are screened out.
 - **Convergence holds only across the same tool version and the same profile
   stack.** A different `epub-tailor` release or a different composed stack is
   not guaranteed to produce a matching result.

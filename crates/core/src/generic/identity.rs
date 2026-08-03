@@ -56,13 +56,33 @@ fn strip_scheme_prefix(value: &str) -> &str {
 /// contain a `10.` and a `/`.
 const MIN_DOI_REGISTRANT_DIGITS: usize = 4;
 
-/// A contiguous run of digits this long inside a DOI suffix reads as a raw
-/// numeric token (a timestamp, a transaction id) rather than the scattered
-/// short digit groups an ordinary bibliographic DOI suffix carries (a real
-/// example, `j.jbi.2020.103545`, has runs of at most 6). Matches the digit
-/// threshold used elsewhere in this module for the same "this many digits in
-/// a row stops looking like prose and starts looking like an id" judgment.
-const MIN_SUSPICIOUS_DIGIT_RUN: usize = 8;
+/// Registrant codes no registration agency ever assigns to a real publisher:
+/// `10.5555` is the DOI Foundation's own official *test* prefix, and
+/// `10.0000`/`10.9999` are the all-zero/all-nine placeholders a value
+/// invented on the spot reaches for. A real DOI never carries one, so these
+/// mark the value as minted rather than registered.
+///
+/// This screens the *registrant*, not the suffix, deliberately: an earlier
+/// round screened long digit runs in the suffix instead and dropped whole
+/// families of real DOIs (every Zenodo, medRxiv, PNAS, Wiley, MDPI,
+/// figshare, OECD and Taylor & Francis DOI tested), because real DOI
+/// suffixes legitimately contain long digit runs - `10.5281/zenodo.10001234`,
+/// `10.1073/pnas.2019897118`, `10.1787/9789264189515-en`. A digit-run
+/// threshold provably cannot separate those from a watermark; the registrant
+/// can, because a watermarker has to either use a placeholder prefix or
+/// forge one belonging to somebody else.
+const PLACEHOLDER_DOI_REGISTRANTS: &[&str] = &["0000", "5555", "9999"];
+
+/// A DOI suffix that is *entirely* one digit run at least this long is a bare
+/// numeric token - a millisecond timestamp (`1735689600000`) or a raw
+/// transaction id - wearing a DOI's clothes. The "entirely" is what makes
+/// this safe where a plain digit-run threshold was not: a structured suffix
+/// like `zenodo.10001234`, `pnas.2019897118` or `9789264189515-en` carries
+/// non-digit characters and is never caught, while a suffix with nothing but
+/// digits and no bibliographic structure at all is. Twelve keeps the real
+/// all-numeric suffixes that do exist (`10.2172/1234567890`, ten digits;
+/// `10.1000/182`, three).
+const MIN_BARE_NUMERIC_DOI_SUFFIX: usize = 12;
 
 /// Split `value` into a DOI's registrant and suffix if it has the DOI shape
 /// `10.<registrant>/<suffix>`: registrant all-digit and non-empty, suffix
@@ -84,21 +104,6 @@ fn doi_parts(value: &str) -> Option<(&str, &str)> {
     }
 }
 
-/// The longest run of consecutive ASCII digits anywhere in `s`.
-fn longest_digit_run(s: &str) -> usize {
-    let mut longest = 0;
-    let mut current = 0;
-    for c in s.chars() {
-        if c.is_ascii_digit() {
-            current += 1;
-            longest = longest.max(current);
-        } else {
-            current = 0;
-        }
-    }
-    longest
-}
-
 /// Whether `s` contains a UUID anywhere inside it, not just as its entire
 /// contents: [`looks_like_uuid`]'s exact-shape test misses a value like
 /// `copy-<uuid>`, which still embeds a real UUID behind extra text.
@@ -114,16 +119,20 @@ fn contains_uuid(s: &str) -> bool {
 }
 
 /// Whether a DOI's registrant/suffix pair looks like a per-copy marker wearing
-/// a DOI costume rather than a real, shared bibliographic identifier. A DOI
-/// shape is trusted only when it clears every one of these; anything else -
-/// an implausible registrant, an embedded UUID, an email address, or a raw
-/// long digit run in the suffix - is treated as per-copy outright rather than
-/// falling through to heuristics built for entirely different value shapes
-/// (which, for a DOI's inherently non-numeric-checksummable suffix, would
-/// misjudge it either way - see the module's callers for why this cannot
-/// just defer to the generic digit-count path).
+/// a DOI costume rather than a real, shared bibliographic identifier.
+///
+/// Every screen here is a *discriminator*: something that differs between a
+/// real DOI and a minted one. A registrant too short to have been assigned,
+/// or one of the reserved placeholder/test prefixes; a suffix carrying an
+/// email address or an embedded UUID; a suffix that is nothing but a long
+/// digit run. What is deliberately absent is any threshold on how many
+/// digits a suffix contains - see [`PLACEHOLDER_DOI_REGISTRANTS`] for the
+/// measured reason that direction does not work.
 fn doi_looks_per_copy(registrant: &str, suffix: &str) -> bool {
     if registrant.len() < MIN_DOI_REGISTRANT_DIGITS {
+        return true;
+    }
+    if PLACEHOLDER_DOI_REGISTRANTS.contains(&registrant) {
         return true;
     }
     if suffix.contains('@') {
@@ -132,17 +141,27 @@ fn doi_looks_per_copy(registrant: &str, suffix: &str) -> bool {
     if suffix.to_ascii_lowercase().contains("urn:uuid:") || contains_uuid(suffix) {
         return true;
     }
-    longest_digit_run(suffix) >= MIN_SUSPICIOUS_DIGIT_RUN
+    suffix.len() >= MIN_BARE_NUMERIC_DOI_SUFFIX && suffix.chars().all(|c| c.is_ascii_digit())
 }
 
-/// Whether `value` looks like it was minted per copy rather than per edition.
+/// The per-copy screens a declared identifier scheme must never be able to
+/// override: a value that positively *looks* minted per copy stays dropped
+/// however the OPF labels it.
+///
+/// This exists because the watermarker controls the OPF. An `<meta
+/// refines="#x" property="identifier-type">DOI</meta>` costs a shop one line,
+/// and if a declared scheme were taken as a warrant of trustworthiness it
+/// would make the whole screen trivially defeatable. A scheme declaration is
+/// a hint about a value's *format*, not a promise about its provenance, so
+/// the shapes below - a UUID, an email address, a DOI whose own parts betray
+/// it - are decided on the value alone.
 ///
 /// The `urn:uuid:` substring check is deliberately tried before
 /// [`looks_like_uuid`]: a bare UUID with extra surrounding text (which
 /// `looks_like_uuid`'s exact-shape test would miss) still contains
 /// `urn:uuid:` when that is how it was minted, and short-circuiting there
 /// avoids running the (slightly more expensive) shape scan at all.
-fn is_per_copy(value: &str) -> bool {
+fn looks_per_copy_regardless_of_scheme(value: &str) -> bool {
     let v = value.trim();
     if v.contains('@') {
         return true; // an email address
@@ -154,15 +173,24 @@ fn is_per_copy(value: &str) -> bool {
     // stripped before every check below, so a correctly-prefixed identifier
     // checksums (or shape-matches, for a DOI) exactly like its bare form.
     let core = strip_scheme_prefix(v);
-    // A DOI-shaped value is decided here outright, never falling through to
-    // the digit-count path below: that path's short-value leniency (`digit_
-    // count < 8` reads as shared) exists for plain identifiers, not for a
-    // value that specifically dressed itself up as `10.<registrant>/<suffix>`
-    // - once something goes to the trouble of wearing that shape, it is
-    // either a real DOI or a per-copy marker in costume, and `doi_looks_per_
-    // copy` is what tells the two apart.
-    if let Some((registrant, suffix)) = doi_parts(core) {
-        return doi_looks_per_copy(registrant, suffix);
+    matches!(doi_parts(core), Some((registrant, suffix)) if doi_looks_per_copy(registrant, suffix))
+}
+
+/// Whether `value` looks like it was minted per copy rather than per edition.
+fn is_per_copy(value: &str) -> bool {
+    if looks_per_copy_regardless_of_scheme(value) {
+        return true;
+    }
+    let core = strip_scheme_prefix(value.trim());
+    // A DOI-shaped value was already decided above, and never falls through
+    // to the digit-count path below: that path's short-value leniency
+    // (`digit_count < 8` reads as shared) exists for plain identifiers, not
+    // for a value that specifically dressed itself up as
+    // `10.<registrant>/<suffix>`. Having cleared `doi_looks_per_copy`, it is
+    // kept - a real DOI's suffix is not checksummable and its digit count
+    // says nothing.
+    if doi_parts(core).is_some() {
+        return false;
     }
     // A long digit run only reads as per-copy if it is not a real, checksum-
     // valid ISBN/ISSN: a 13-digit millisecond timestamp has the same *length*
@@ -262,9 +290,19 @@ fn is_valid_issn(s: &str) -> bool {
     check == (11 - sum % 11) % 11
 }
 
-/// Whether an identifier is kept: an explicitly shared scheme always wins over
-/// the shape heuristic, so an ISBN is never mistaken for a transaction number.
+/// Whether an identifier is kept.
+///
+/// An explicitly declared shared scheme wins over the *heuristic* part of the
+/// judgment, so an ISBN whose value happens not to checksum (a typo, an
+/// unusual spelling) is never mistaken for a transaction number. It does not
+/// win over [`looks_per_copy_regardless_of_scheme`]: a shop writes the OPF,
+/// so a scheme declaration it controls cannot be allowed to launder a value
+/// that positively looks minted per copy. Screening first and shortcutting
+/// second is the strict direction - it can only drop more, never keep more.
 fn is_shared(value: &str, scheme: Option<&str>) -> bool {
+    if looks_per_copy_regardless_of_scheme(value) {
+        return false;
+    }
     if let Some(s) = scheme
         && SHARED_SCHEMES.contains(&s.to_ascii_lowercase().as_str())
     {
@@ -480,9 +518,10 @@ mod tests {
     // -- a DOI costume must still be dropped ------------------------------
 
     #[test]
-    fn a_doi_whose_suffix_is_a_long_digit_run_is_dropped() {
-        // Measured regression: a shop can mint doi:10.<real-looking-
-        // registrant>/<transaction id> just as easily as a bare vendor id.
+    fn a_doi_under_the_all_zero_placeholder_registrant_is_dropped() {
+        // Measured regression: a shop can mint doi:10.<registrant>/<transaction
+        // id> just as easily as a bare vendor id. `10.0000` was never
+        // assigned to anyone, which is what gives this one away.
         assert!(is_per_copy("doi:10.0000/SHTX001.635962014"));
     }
 
@@ -499,6 +538,19 @@ mod tests {
         assert!(is_per_copy(
             "doi:10.5555/copy-6f2a1e40-8c31-4b7e-9a55-1d0c2f9b7e31"
         ));
+    }
+
+    #[test]
+    fn the_official_doi_test_prefix_is_dropped_even_with_an_innocuous_suffix() {
+        // `10.5555` is the DOI Foundation's own registered *test* prefix, so
+        // the registrant alone decides this one - no UUID, no email, no long
+        // digit run in the suffix to fall back on.
+        assert!(is_per_copy("doi:10.5555/ordinary.suffix.2019"));
+    }
+
+    #[test]
+    fn the_all_nine_placeholder_registrant_is_dropped() {
+        assert!(is_per_copy("10.9999/anything"));
     }
 
     #[test]
@@ -526,12 +578,121 @@ mod tests {
     }
 
     #[test]
-    fn a_real_doi_with_short_scattered_digit_groups_in_its_suffix_stays_kept() {
-        // The legitimate DOI already pinned elsewhere as KEPT, re-asserted
-        // here to make the contrast with the long-digit-run cases above
-        // explicit: "2020" and "103545" are short digit groups scattered
-        // through ordinary bibliographic text, never a single run of 8+.
-        assert!(!is_per_copy("10.1016/j.jbi.2020.103545"));
+    fn a_bare_numeric_suffix_the_length_of_a_millisecond_timestamp_is_dropped() {
+        // Real registrant, but the suffix is nothing but a 13-digit run: no
+        // volume, no article stem, no year - a raw token, not a citation.
+        assert!(is_per_copy("10.1016/1735689600000"));
+    }
+
+    // -- real DOIs: the fidelity regression a raw digit-run threshold caused.
+    // -- Every value below is a real, published DOI that the digit-run screen
+    // -- dropped; a real DOI suffix legitimately contains long digit runs, so
+    // -- no threshold on run length can separate these from a watermark. ----
+
+    /// Every real DOI here was measured as wrongly dropped under the old
+    /// `MIN_SUSPICIOUS_DIGIT_RUN = 8` screen, one whole publisher family per
+    /// entry: Zenodo, figshare, medRxiv, PNAS, Wiley, MDPI, Taylor & Francis,
+    /// OECD, a legacy SICI-style Wiley DOI, an LWW dotted-date DOI, an OSTI
+    /// all-numeric DOI - plus the two shapes already pinned as kept and the
+    /// DOI Foundation's own documentation DOI.
+    const REAL_DOIS: &[&str] = &[
+        "10.5281/zenodo.10001234",
+        "10.6084/m9.figshare.12345678",
+        "10.1101/2020.03.15.20036145",
+        "10.1073/pnas.2019897118",
+        "10.1002/anie.201915678",
+        "10.3390/s20051234",
+        "10.1080/00220388.2019.1626832",
+        "10.1787/9789264189515-en",
+        "10.1002/(SICI)1097-0258(19980815)17:15<1661::AID-SIM968>3.0.CO;2-2",
+        "10.1097/01.mlr.0000114908.90348.f9",
+        "10.2172/1234567890",
+        "10.1016/j.jbi.2020.103545",
+        "doi:10.1016/j.jbi.2020.103545",
+        "10.1371/journal.pone.0173664",
+        "10.1000/182",
+    ];
+
+    #[test]
+    fn every_real_doi_is_kept() {
+        for doi in REAL_DOIS {
+            assert!(!is_per_copy(doi), "a real DOI must be kept: {doi}");
+        }
+    }
+
+    #[test]
+    fn every_real_doi_is_kept_through_is_shared_with_no_scheme_declared() {
+        // The screening path R3 added runs ahead of the scheme shortcut, so
+        // it has to be checked against the real DOIs too: a value with no
+        // scheme at all must reach `is_per_copy`'s verdict unchanged.
+        for doi in REAL_DOIS {
+            assert!(is_shared(doi, None), "a real DOI must be kept: {doi}");
+        }
+    }
+
+    /// The values a shop can mint, each of which must stay dropped whatever
+    /// the loosening above does.
+    const PER_COPY_DOIS: &[&str] = &[
+        "doi:10.0000/SHTX001.635962014",
+        "10.0000/6f2a1e40-8c31-4b7e-9a55-1d0c2f9b7e31",
+        "doi:10.5555/copy-6f2a1e40-8c31-4b7e-9a55-1d0c2f9b7e31",
+        "urn:doi:10.9/1735689600000",
+    ];
+
+    #[test]
+    fn every_doi_costumed_watermark_is_still_dropped() {
+        for value in PER_COPY_DOIS {
+            assert!(
+                is_per_copy(value),
+                "a per-copy value must be dropped: {value}"
+            );
+        }
+    }
+
+    // -- R3: a declared identifier-type must not launder a per-copy value ---
+
+    #[test]
+    fn a_declared_doi_scheme_does_not_rescue_a_doi_costumed_watermark() {
+        // The whole point: the watermarker writes the OPF, so adding
+        // `<meta refines="#x" property="identifier-type">DOI</meta>` costs it
+        // one line. The same value must be dropped with and without it.
+        for value in PER_COPY_DOIS {
+            assert!(
+                !is_shared(value, None),
+                "must be dropped without a scheme: {value}"
+            );
+            assert!(
+                !is_shared(value, Some("DOI")),
+                "a declared scheme must not rescue it: {value}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_declared_scheme_does_not_rescue_a_bare_uuid_or_an_email() {
+        for value in [
+            "6f2a1e40-8c31-4b7e-9a55-1d0c2f9b7e31",
+            "urn:uuid:6f2a1e40-8c31-4b7e-9a55-1d0c2f9b7e31",
+            "buyer42@example.com",
+        ] {
+            for scheme in ["ISBN", "ISSN", "DOI"] {
+                assert!(
+                    !is_shared(value, Some(scheme)),
+                    "a declared {scheme} must not rescue {value}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_declared_isbn_scheme_still_protects_a_real_isbn() {
+        // The strictness R3 adds must not cost the scheme shortcut its whole
+        // reason for existing: a genuine ISBN behind a genuine refinement
+        // stays kept.
+        assert!(is_shared("9783407868213", Some("ISBN")));
+        assert!(is_shared("urn:isbn:9783407868213", Some("ISBN")));
+        assert!(is_shared("2049-3630", Some("ISSN")));
+        assert!(is_shared("10.1016/j.jbi.2020.103545", Some("DOI")));
     }
 
     // -- the still-dropped per-copy cases, re-pinned after the prefix/DOI
@@ -603,5 +764,55 @@ mod tests {
         normalize(&mut book, &mut transformations);
         assert_eq!(book.metadata.identifier, None);
         assert_eq!(transformations.len(), 1);
+    }
+
+    // -- R3, end to end through `normalize()`: the refinement a shop can add
+    // -- to the OPF in one line must not rescue the watermark ---------------
+
+    fn book_with_secondary(value: &str, scheme: Option<&str>) -> Book {
+        let mut book = book_with_identifier("9783407868213", Some("ISBN"));
+        book.metadata.identifiers = vec![crate::epub::model::Identifier {
+            value: value.to_string(),
+            scheme: scheme.map(str::to_string),
+        }];
+        book
+    }
+
+    #[test]
+    fn a_doi_type_refinement_does_not_save_the_watermark_on_either_identifier_path() {
+        // The proven end-to-end defeat: the shop appends
+        // `<meta refines="#vendor" property="identifier-type">DOI</meta>` and
+        // the value that `is_per_copy` drops sails through. Both spellings -
+        // no refinement and a DOI refinement - must end with nothing left.
+        for scheme in [None, Some("DOI")] {
+            let mut book = book_with_secondary("doi:10.0000/SHTX001.635962014", scheme);
+            let mut transformations = Vec::new();
+            normalize(&mut book, &mut transformations);
+            assert!(
+                book.metadata.identifiers.is_empty(),
+                "a DOI-costumed watermark must be dropped with scheme {scheme:?}"
+            );
+
+            let mut book = book_with_identifier("doi:10.0000/SHTX001.635962014", scheme);
+            let mut transformations = Vec::new();
+            normalize(&mut book, &mut transformations);
+            assert_eq!(
+                book.metadata.identifier, None,
+                "the same value as the *unique* identifier must also be dropped \
+                 with scheme {scheme:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_isbn_type_refinement_still_keeps_a_real_isbn_through_normalize() {
+        let mut book = book_with_secondary("978-3-407-86821-3", Some("ISBN"));
+        let mut transformations = Vec::new();
+        normalize(&mut book, &mut transformations);
+        assert_eq!(
+            book.metadata.identifiers.len(),
+            1,
+            "a genuine ISBN behind a genuine refinement must be kept: {transformations:?}"
+        );
     }
 }
