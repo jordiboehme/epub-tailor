@@ -79,3 +79,71 @@ describe("settings.load", () => {
     expect(settings.mode).toBe("fit");
   });
 });
+
+// migrateProfileStack itself is covered in settings-migration.test.ts as a
+// pure function, and profiles.test.ts covers hasDeviceClash/stackLabel given
+// a stack - but nothing drove `load()`'s actual call site, which passes the
+// legacy `profile` and `userProfilePaths` keys through to it. A mutation
+// there (swapping the argument order, or passing undefined/undefined) left
+// all 255 tests green before these: an upgrading user's profile
+// configuration would have silently vanished on first launch after the
+// update and nothing in the suite would have noticed.
+describe("settings.load migrates the legacy profile keys", () => {
+  beforeEach(() => stored.clear());
+
+  it("rebuilds profileStack from a single legacy profile and path", async () => {
+    stored.set("profile", "x4");
+    stored.set("userProfilePaths", ["/home/reader/manga.json"]);
+    await settings.load();
+    expect(settings.profileStack).toEqual([
+      { kind: "builtin", name: "x4" },
+      { kind: "file", path: "/home/reader/manga.json" },
+    ]);
+  });
+
+  it("rebuilds profileStack from multiple legacy paths, in order", async () => {
+    stored.set("profile", "generic");
+    stored.set("userProfilePaths", ["/home/reader/a.json", "/home/reader/b.json"]);
+    await settings.load();
+    expect(settings.profileStack).toEqual([
+      { kind: "builtin", name: "generic" },
+      { kind: "file", path: "/home/reader/a.json" },
+      { kind: "file", path: "/home/reader/b.json" },
+    ]);
+  });
+
+  it("dedupes a legacy path list that repeats the same file", async () => {
+    // A duplicate path produces two layers with the same key, and the
+    // keyed #each in ProfilePicker throws on a duplicate key at render.
+    stored.set("profile", "x4");
+    stored.set("userProfilePaths", ["/home/reader/manga.json", "/home/reader/manga.json"]);
+    await settings.load();
+    expect(settings.profileStack).toEqual([
+      { kind: "builtin", name: "x4" },
+      { kind: "file", path: "/home/reader/manga.json" },
+    ]);
+  });
+
+  it("falls back to the epub profile when no legacy keys are stored either", async () => {
+    await settings.load();
+    expect(settings.profileStack).toEqual([{ kind: "builtin", name: "epub" }]);
+  });
+
+  it("ignores a corrupted string profileStack and falls back to the legacy keys", async () => {
+    // A string has .length too, so a naive `stored.length > 0` guard would
+    // treat this as a real (one-character-per-layer, once iterated) stack.
+    stored.set("profileStack", "generic");
+    stored.set("profile", "x4");
+    stored.set("userProfilePaths", []);
+    await settings.load();
+    expect(settings.profileStack).toEqual([{ kind: "builtin", name: "x4" }]);
+  });
+
+  it("leaves an already-migrated profileStack untouched", async () => {
+    stored.set("profileStack", [{ kind: "builtin", name: "generic" }]);
+    stored.set("profile", "x4");
+    stored.set("userProfilePaths", ["/home/reader/manga.json"]);
+    await settings.load();
+    expect(settings.profileStack).toEqual([{ kind: "builtin", name: "generic" }]);
+  });
+});

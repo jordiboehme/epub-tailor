@@ -58,6 +58,30 @@ function toMode(value: unknown): AppMode {
  */
 export type ProfileLayer = { kind: "builtin"; name: string } | { kind: "file"; path: string };
 
+/** Whether `value` is a well-formed single layer: exactly the two shapes
+ * `ProfileLayer` allows, nothing else. */
+function isProfileLayer(value: unknown): value is ProfileLayer {
+  if (typeof value !== "object" || value === null) return false;
+  const layer = value as Record<string, unknown>;
+  return (
+    (layer.kind === "builtin" && typeof layer.name === "string") ||
+    (layer.kind === "file" && typeof layer.path === "string")
+  );
+}
+
+/**
+ * A persisted `profileStack`, or `undefined` when the file does not hold a
+ * well-formed array of layers - the same defensive stance `clampInt` and
+ * `toMode` already take on every other persisted field. Without this, a
+ * corrupted `settings.json` carrying a bare string for `profileStack` passes
+ * `migrateProfileStack`'s `stored.length > 0` guard (a string has `.length`
+ * too) and round-trips as if it were a real stack instead of falling back to
+ * the legacy keys or the `epub` default.
+ */
+function toProfileStack(value: unknown): ProfileLayer[] | undefined {
+  return Array.isArray(value) && value.every(isProfileLayer) ? value : undefined;
+}
+
 /**
  * Build the layer stack from persisted state. The app shipped with a single
  * built-in plus N user JSON files under two separate keys (`profile` and
@@ -69,6 +93,11 @@ export type ProfileLayer = { kind: "builtin"; name: string } | { kind: "file"; p
  * the same as an absent one and rebuilt from the legacy keys (falling back to
  * `epub` with none of those either): a stack with zero layers is never a
  * valid composition for this app, so there is nothing worth preserving in it.
+ *
+ * A repeated path in `legacyPaths` is skipped, the same way
+ * `profiles.svelte.ts`'s `addFileLayer` refuses a duplicate: two layers
+ * carrying the same path produce the same `layerKey` in `ProfilePicker`'s
+ * keyed `{#each}`, which throws Svelte's `each_key_duplicate` at render.
  */
 export function migrateProfileStack(
   stored: ProfileLayer[] | undefined,
@@ -77,7 +106,10 @@ export function migrateProfileStack(
 ): ProfileLayer[] {
   if (stored && stored.length > 0) return stored;
   const stack: ProfileLayer[] = [{ kind: "builtin", name: legacyProfile ?? "epub" }];
-  for (const path of legacyPaths ?? []) stack.push({ kind: "file", path });
+  for (const path of legacyPaths ?? []) {
+    if (stack.some((layer) => layer.kind === "file" && layer.path === path)) continue;
+    stack.push({ kind: "file", path });
+  }
   return stack;
 }
 
@@ -123,7 +155,7 @@ class SettingsStore {
   async load(): Promise<void> {
     const store = await Store.load(STORE_FILE, { defaults: {}, autoSave: AUTOSAVE_DEBOUNCE_MS });
     this.profileStack = migrateProfileStack(
-      await store.get<ProfileLayer[]>("profileStack"),
+      toProfileStack(await store.get("profileStack")),
       await store.get<string>("profile"),
       await store.get<string[]>("userProfilePaths"),
     );

@@ -30,4 +30,30 @@ describe("profile stack migration", () => {
       { kind: "file", path: "/tmp/manga.json" },
     ]);
   });
+
+  it("dedupes a legacy path list that repeats the same file", () => {
+    // A duplicate survives into two layers with the same layerKey, which
+    // throws Svelte's each_key_duplicate at render in ProfilePicker.
+    const stack = migrateProfileStack(undefined, "x4", [
+      "/tmp/manga.json",
+      "/tmp/manga.json",
+    ]);
+    expect(stack).toEqual<ProfileLayer[]>([
+      { kind: "builtin", name: "x4" },
+      { kind: "file", path: "/tmp/manga.json" },
+    ]);
+  });
+
+  it("keeps distinct paths even when one repeats and another does not", () => {
+    const stack = migrateProfileStack(undefined, "x4", [
+      "/tmp/a.json",
+      "/tmp/b.json",
+      "/tmp/a.json",
+    ]);
+    expect(stack).toEqual<ProfileLayer[]>([
+      { kind: "builtin", name: "x4" },
+      { kind: "file", path: "/tmp/a.json" },
+      { kind: "file", path: "/tmp/b.json" },
+    ]);
+  });
 });
