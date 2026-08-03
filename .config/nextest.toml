@@ -1,0 +1,16 @@
+[profile.default]
+# This machine is 4 performance + 6 efficiency cores; nextest's default is
+# `test-threads = num-cpus` (10 here). The hypothesis was that this puts a
+# third of the running tests on slow E-cores, which become stragglers the
+# P-cores then sit idle waiting on, so capping at `test-threads = 6` (the
+# P-core count) should win. Measured (5 paired runs, alternating to control
+# for drift; see .superpowers/build-speed-report.md): 6 threads averaged
+# ~16.0s wall, 10 threads averaged ~15.4s - 10 was slightly FASTER, not
+# slower. This suite's tests are short and I/O-light enough that scheduler
+# overhead from extra threads does not show up the way the hypothesis
+# predicted, so `test-threads` is left unset here (nextest's own default:
+# `num-cpus`, i.e. 10 on this machine).
+
+[profile.ci]
+# CI runners are homogeneous (no P/E split), so the P/E-core reasoning above
+# would not have applied here anyway: keep nextest's own default thread count.
