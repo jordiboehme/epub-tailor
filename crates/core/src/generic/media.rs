@@ -1,6 +1,7 @@
 //! Lossless media metadata removal: container surgery only, never a re-encode,
 //! so the repair path keeps image quality exactly.
 
+use super::normalize_media_type;
 use crate::epub::Book;
 use crate::report::Transformation;
 
@@ -97,15 +98,43 @@ fn strip_png(data: &[u8]) -> Option<Vec<u8>> {
     if saw_iend { Some(out) } else { None }
 }
 
+/// Which stripper applies to a resource, decided primarily by its magic
+/// bytes rather than its declared manifest media type: a mis-declared image
+/// (`image/jpg`, `IMAGE/JPEG`, `image/jpeg; charset=binary`, or a JPEG
+/// sitting behind `application/octet-stream`) is exactly the shape a privacy
+/// pass needs to see through, since a manifest error is precisely the sort of
+/// small inconsistency a shop's per-copy build pipeline produces. The
+/// declared type is still consulted as a fallback for the (rare) case where
+/// the data does not start with a magic-byte match this scan recognizes but
+/// the manifest is nonetheless one of the two canonical spellings.
+fn image_kind(media_type: &str, data: &[u8]) -> Option<ImageKind> {
+    if data.starts_with(&[0xFF, 0xD8]) {
+        return Some(ImageKind::Jpeg);
+    }
+    if data.starts_with(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]) {
+        return Some(ImageKind::Png);
+    }
+    match normalize_media_type(media_type).as_str() {
+        "image/jpeg" => Some(ImageKind::Jpeg),
+        "image/png" => Some(ImageKind::Png),
+        _ => None,
+    }
+}
+
+enum ImageKind {
+    Jpeg,
+    Png,
+}
+
 /// Strip metadata from every raster image in the book.
 pub(crate) fn strip(book: &mut Book, transformations: &mut Vec<Transformation>) {
     let paths: Vec<String> = book.resources.keys().cloned().collect();
     for path in paths {
         let resource = &mut book.resources[&path];
-        let stripped = match resource.media_type.as_str() {
-            "image/jpeg" => strip_jpeg(&resource.data),
-            "image/png" => strip_png(&resource.data),
-            _ => None,
+        let stripped = match image_kind(&resource.media_type, &resource.data) {
+            Some(ImageKind::Jpeg) => strip_jpeg(&resource.data),
+            Some(ImageKind::Png) => strip_png(&resource.data),
+            None => None,
         };
         let Some(new_data) = stripped else { continue };
         if new_data.len() == resource.data.len() {
@@ -248,5 +277,79 @@ mod tests {
             stripped, jpeg,
             "kept APP0 plus verbatim scan data is unchanged"
         );
+    }
+
+    /// A complete, parseable JPEG (SOI through EOI) carrying a droppable
+    /// APP1 (EXIF) segment with `payload` - unlike
+    /// `truncated_jpeg_with_a_droppable_segment`, this one is a shape
+    /// `strip_jpeg` accepts, so `strip()` actually rewrites it.
+    fn jpeg_with_exif_payload(payload: &[u8]) -> Vec<u8> {
+        let mut out = vec![0xFF, 0xD8];
+        out.extend_from_slice(&[0xFF, 0xE1]);
+        out.extend_from_slice(&((payload.len() + 2) as u16).to_be_bytes());
+        out.extend_from_slice(payload);
+        out.extend_from_slice(&[0xFF, 0xDA, 0x00, 0x02, 0xFF, 0xD9]);
+        out
+    }
+
+    /// `strip()` a single JPEG resource declared as `media_type` and assert
+    /// its EXIF payload is gone - the shape every "silently ships the
+    /// watermark" case in the finding takes: a real JPEG behind a manifest
+    /// media type that is not the exact canonical `image/jpeg` string.
+    fn assert_strips_mis_declared_jpeg(media_type: &str) {
+        let payload = b"Exif\0\0BUYER-635962014-SECRET";
+        let jpeg = jpeg_with_exif_payload(payload);
+        let mut resources = IndexMap::new();
+        resources.insert(
+            "pic.jpg".to_string(),
+            Resource {
+                data: jpeg,
+                media_type: media_type.to_string(),
+            },
+        );
+        let mut book = Book {
+            metadata: Metadata::default(),
+            resources,
+            spine: Vec::new(),
+            toc: Vec::new(),
+            cover: None,
+            opf_path: "content.opf".to_string(),
+            nav_path: None,
+            ncx_path: None,
+        };
+        let mut transformations = Vec::new();
+        strip(&mut book, &mut transformations);
+        let out = &book.resources["pic.jpg"].data;
+        assert!(
+            !out.windows(9).any(|w| w == b"BUYER-635"),
+            "{media_type:?}: the EXIF payload must be stripped, not shipped intact"
+        );
+        assert_eq!(
+            transformations.len(),
+            1,
+            "{media_type:?}: a transformation must be reported, not a silent no-op"
+        );
+    }
+
+    #[test]
+    fn strips_the_common_non_canonical_image_jpg_spelling() {
+        assert_strips_mis_declared_jpeg("image/jpg");
+    }
+
+    #[test]
+    fn strips_an_upper_case_media_type() {
+        assert_strips_mis_declared_jpeg("IMAGE/JPEG");
+    }
+
+    #[test]
+    fn strips_a_media_type_carrying_a_parameter() {
+        assert_strips_mis_declared_jpeg("image/jpeg; charset=binary");
+    }
+
+    #[test]
+    fn strips_a_jpeg_mis_declared_as_a_generic_octet_stream() {
+        // No `image/*` spelling at all: magic-byte sniffing, not the
+        // declared manifest type, is what has to catch this one.
+        assert_strips_mis_declared_jpeg("application/octet-stream");
     }
 }

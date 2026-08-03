@@ -27,6 +27,7 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 
+use super::normalize_media_type;
 use crate::epub::Book;
 use crate::epub::model::{Resource, normalize_href};
 use crate::html::dom::{collect_by_name, get_attr_local, local_name};
@@ -59,20 +60,6 @@ fn parent_dir(path: &str) -> String {
         Some(idx) => path[..idx].to_string(),
         None => String::new(),
     }
-}
-
-/// Normalize a declared media type for matching: trimmed, lowercased, with
-/// any `;`-separated parameter (`; charset=utf-8`, stray casing like
-/// `TEXT/CSS`) stripped. A manifest is free to declare either, and matching
-/// the raw string verbatim would silently fall through to "no references
-/// extracted" - deleting everything that stylesheet/document points at.
-fn normalize_media_type(media_type: &str) -> String {
-    media_type
-        .split(';')
-        .next()
-        .unwrap_or("")
-        .trim()
-        .to_ascii_lowercase()
 }
 
 /// Whether `raw` opens with a URI scheme (`http:`, `data:`, `mailto:`,
@@ -313,10 +300,19 @@ fn refs_of(resource: &Resource, dir: &str) -> Vec<String> {
 }
 
 /// Drop every resource unreachable from the book's roots.
+///
+/// `extra_roots` seeds the walk with paths a caller resolved *before* this
+/// runs, from a reference type that no longer exists in the book by the time
+/// `prune` sees it - today, exactly the `<img srcset>` targets
+/// `image::rewrite_refs` strips on every conversion (not just `generic`)
+/// well before this walk starts. Without them, the walk simply cannot see
+/// the edge: it is not a gap in [`refs_of`]'s extraction, it is the
+/// reference no longer being there to extract.
 pub(crate) fn prune(
     book: &mut Book,
     transformations: &mut Vec<Transformation>,
     warnings: &mut Vec<Warning>,
+    extra_roots: &[String],
 ) {
     let mut reachable: HashSet<String> = HashSet::new();
     let mut queue: Vec<String> = Vec::new();
@@ -328,6 +324,7 @@ pub(crate) fn prune(
     queue.extend(book.ncx_path.clone());
     queue.extend(book.cover.clone());
     queue.extend(book.spine.iter().cloned());
+    queue.extend(extra_roots.iter().cloned());
 
     while let Some(path) = queue.pop() {
         if !reachable.insert(path.clone()) {
@@ -426,9 +423,16 @@ mod tests {
     }
 
     fn prune_book(book: &mut Book) -> (Vec<Transformation>, Vec<Warning>) {
+        prune_book_with_roots(book, &[])
+    }
+
+    fn prune_book_with_roots(
+        book: &mut Book,
+        extra_roots: &[String],
+    ) -> (Vec<Transformation>, Vec<Warning>) {
         let mut transformations = Vec::new();
         let mut warnings = Vec::new();
-        prune(book, &mut transformations, &mut warnings);
+        prune(book, &mut transformations, &mut warnings, extra_roots);
         (transformations, warnings)
     }
 
@@ -565,6 +569,28 @@ mod tests {
         );
         prune_book(&mut book);
         assert!(book.resources.contains_key("OEBPS/inline-bg.png"));
+    }
+
+    #[test]
+    fn an_extra_root_survives_pruning_even_though_nothing_in_the_dom_names_it() {
+        // Pins the mechanism `image::rewrite_refs`'s `<img srcset>` targets
+        // rely on: a path handed in as an extra root must survive even
+        // though, by construction here, nothing in any surviving document
+        // references it at all.
+        let mut book = book_with(
+            vec![
+                ("OEBPS/content.opf", "application/oebps-package+xml", b""),
+                (
+                    "OEBPS/chapter.xhtml",
+                    "application/xhtml+xml",
+                    b"<html><body><p>Hi</p></body></html>",
+                ),
+                ("OEBPS/only.png", "image/png", b"\x89PNG"),
+            ],
+            vec!["OEBPS/chapter.xhtml"],
+        );
+        prune_book_with_roots(&mut book, &["OEBPS/only.png".to_string()]);
+        assert!(book.resources.contains_key("OEBPS/only.png"));
     }
 
     #[test]
