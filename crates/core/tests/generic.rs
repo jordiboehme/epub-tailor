@@ -190,3 +190,182 @@ fn scrub_keeps_bidi_marks() {
     );
     assert_eq!(n, 0);
 }
+
+// --- Asymmetric neighbour protection ---
+//
+// The five tests above are not enough on their own: in
+// `scrub_keeps_zwnj_where_the_script_needs_it` and
+// `scrub_keeps_zwj_inside_emoji_sequences` *both* neighbours are protected,
+// so deleting either the `prev` or the `next` lookup out of `keep_mask`
+// leaves the whole suite green. These two pin each side down alone.
+
+#[test]
+fn scrub_keeps_zwnj_protected_by_the_previous_neighbour_only() {
+    // Persian letter before, plain Latin after: the left side alone must be
+    // enough. Dropping the `prev` lookup would delete this.
+    let s = "\u{0645}\u{200C}z";
+    let (out, n) = scrub(s);
+    assert_eq!(out, s, "left-side protection alone must be enough");
+    assert_eq!(n, 0);
+}
+
+#[test]
+fn scrub_keeps_zwnj_protected_by_the_next_neighbour_only() {
+    // Plain Latin before, Persian letter after: the right side alone must be
+    // enough. Dropping the `next` lookup would delete this.
+    let s = "z\u{200C}\u{0645}";
+    let (out, n) = scrub(s);
+    assert_eq!(out, s, "right-side protection alone must be enough");
+    assert_eq!(n, 0);
+}
+
+// --- Cross-node protection through the full `convert()` pipeline ---
+//
+// A per-text-node-only neighbour check sees `None` on both sides at every
+// element boundary, so it deletes exactly the joiners this pass exists to
+// protect once markup splits a word or an emoji sequence across elements -
+// which is common, not rare: `<span epub:type="pagebreak"/>` markers are
+// mandatory in print-derived EPUB 3 books, and Persian/Arabic line breaks
+// tend to land inside a joined word. These exercise the real DOM pass.
+
+/// A minimal one-chapter EPUB3 book with a caller-supplied title, TOC entry
+/// title and chapter body, for exercising the invisible-character scrub
+/// across markup and metadata.
+fn book_with_chapter(title: &str, toc_title: &str, body: &str) -> Vec<u8> {
+    let content_opf = format!(
+        r##"<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="pub-id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="pub-id">urn:uuid:11111111-2222-4333-8444-555555555555</dc:identifier>
+    <dc:title>{title}</dc:title>
+    <dc:language>en</dc:language>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="ch" href="chapter.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine><itemref idref="ch"/></spine>
+</package>"##
+    );
+    let nav = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+<head><title>Nav</title></head>
+<body>
+<nav epub:type="toc">
+<ol>
+<li><a href="chapter.xhtml">{toc_title}</a></li>
+</ol>
+</nav>
+</body>
+</html>"#
+    );
+    let chapter = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>C</title></head>
+<body>{body}</body></html>"#
+    );
+    common::build_epub(&[
+        ("mimetype", b"application/epub+zip"),
+        ("META-INF/container.xml", common::CONTAINER_XML),
+        ("OEBPS/content.opf", content_opf.as_bytes()),
+        ("OEBPS/nav.xhtml", nav.as_bytes()),
+        ("OEBPS/chapter.xhtml", chapter.as_bytes()),
+    ])
+}
+
+fn chapter_text_of(epub: &[u8]) -> String {
+    String::from_utf8(common::entry(epub, "OEBPS/chapter.xhtml").expect("chapter survives"))
+        .expect("chapter is utf8")
+}
+
+fn nav_text_of(epub: &[u8]) -> String {
+    String::from_utf8(common::entry(epub, "OEBPS/nav.xhtml").expect("nav survives"))
+        .expect("nav is utf8")
+}
+
+#[test]
+fn generic_keeps_a_zwnj_split_across_elements_by_markup() {
+    // The reviewer's exact reproduction: <span>می</span>‌<span>خوام</span> -
+    // the ZWNJ is its own text node, with markup as its only DOM siblings.
+    let persian_left = "\u{0645}\u{06CC}";
+    let persian_right = "\u{062E}\u{0648}\u{0627}\u{0645}";
+    let zwnj = '\u{200C}';
+    let body = format!("<p><span>{persian_left}</span>{zwnj}<span>{persian_right}</span></p>");
+    let out = convert(
+        Input::Epub(book_with_chapter("Book", "Chapter", &body)),
+        &opts_for(&["generic"]),
+    )
+    .expect("converts");
+    let chapter = chapter_text_of(&out.epub);
+    assert!(
+        chapter.contains('\u{200C}'),
+        "the mid-word ZWNJ split across <span> elements must survive:\n{chapter}"
+    );
+}
+
+#[test]
+fn generic_keeps_a_zwj_emoji_sequence_split_across_elements_by_markup() {
+    // <span>👨</span>‍<span>👩</span> - the ZWJ is its own text node between
+    // two elements, exactly like the pagebreak-marker case in real books.
+    let body = "<p><span>\u{1F468}</span>\u{200D}<span>\u{1F469}</span></p>";
+    let out = convert(
+        Input::Epub(book_with_chapter("Book", "Chapter", body)),
+        &opts_for(&["generic"]),
+    )
+    .expect("converts");
+    let chapter = chapter_text_of(&out.epub);
+    assert!(
+        chapter.contains('\u{200D}'),
+        "the emoji ZWJ split across <span> elements must survive:\n{chapter}"
+    );
+}
+
+#[test]
+fn generic_removes_an_entity_encoded_zwsp_from_chapter_text() {
+    // `&#8203;` decodes to U+200B during parsing; a raw-bytes pass would
+    // never see the character at all and this would survive undetected.
+    let body = "<p>foo&#8203;bar</p>";
+    let out = convert(
+        Input::Epub(book_with_chapter("Book", "Chapter", body)),
+        &opts_for(&["generic"]),
+    )
+    .expect("converts");
+    let chapter = chapter_text_of(&out.epub);
+    assert!(
+        chapter.contains("foobar"),
+        "the entity-encoded ZWSP must be scrubbed:\n{chapter}"
+    );
+    assert!(
+        !chapter.contains('\u{200B}'),
+        "no ZWSP should remain:\n{chapter}"
+    );
+}
+
+#[test]
+fn generic_scrubs_invisible_chars_from_the_title_and_toc() {
+    // The writer regenerates the OPF title and the nav document from
+    // `book.metadata`/`book.toc`, not from stored bytes, so a fingerprint
+    // here survives a chapter-only scrub untouched.
+    let title = "Book\u{200B}Title";
+    let toc_title = "Chapter\u{200B}One";
+    let out = convert(
+        Input::Epub(book_with_chapter(title, toc_title, "<p>Text.</p>")),
+        &opts_for(&["generic"]),
+    )
+    .expect("converts");
+
+    let opf = opf_of(&out.epub);
+    assert!(
+        opf.contains("BookTitle"),
+        "the title must be scrubbed:\n{opf}"
+    );
+    assert!(!opf.contains('\u{200B}'), "no ZWSP in the OPF:\n{opf}");
+
+    let nav = nav_text_of(&out.epub);
+    assert!(
+        nav.contains("ChapterOne"),
+        "the TOC entry title must be scrubbed:\n{nav}"
+    );
+    assert!(!nav.contains('\u{200B}'), "no ZWSP in the nav doc:\n{nav}");
+}

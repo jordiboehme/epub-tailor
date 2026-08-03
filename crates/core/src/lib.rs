@@ -310,13 +310,6 @@ pub fn convert(input: Input, opts: &ConvertOptions) -> Result<Converted, Convert
     let renames = compose_renames(&svg_renames, &image_renames);
     let mut images_processed = images_processed + svg_rasterized;
 
-    // Script-aware invisible-character removal runs before any chapter is
-    // parsed into a DOM, so the cleaned text - not the fingerprinted original -
-    // flows through every transform that follows.
-    if opts.features.strip_invisible_chars {
-        generic::invisible::scrub_book(&mut book, &mut transformations);
-    }
-
     // Phase 1: transform every spine chapter, collecting per-chapter anchor
     // aliases into one book-wide map and each chapter's lifted `<style>` CSS.
     //
@@ -343,6 +336,12 @@ pub fn convert(input: Input, opts: &ConvertOptions) -> Result<Converted, Convert
             continue;
         }
         let doc = parse_xhtml(&resource.data)?;
+        // Script-aware invisible-character removal runs first, on the parsed
+        // DOM (not raw bytes - see `generic::invisible`'s module docs for
+        // why), so the cleaned text flows through every transform below.
+        if opts.features.strip_invisible_chars {
+            generic::invisible::scrub_chapter(&doc, &mut transformations, path);
+        }
         if !opts.filters.is_empty() {
             filter::apply_chapter_filters(&doc, &opts.filters, &mut transformations, path);
         }
@@ -573,6 +572,16 @@ pub fn convert(input: Input, opts: &ConvertOptions) -> Result<Converted, Convert
         .collect();
     for path in non_spine {
         let doc = parse_xhtml(&book.resources[&path].data)?;
+        // The writer regenerates the nav document from `book.metadata` and
+        // `book.toc` (see `write_epub`'s `NavTemplate`), discarding whatever
+        // is stored here entirely - scrubbing this DOM would be dead work
+        // that still reports a transformation for a file whose bytes never
+        // ship. `scrub_model_strings` (below) covers the nav's real source
+        // instead. Every other non-spine XHTML document's bytes do ship as
+        // stored, so they still get scrubbed.
+        if opts.features.strip_invisible_chars && book.nav_path.as_deref() != Some(path.as_str()) {
+            generic::invisible::scrub_chapter(&doc, &mut transformations, &path);
+        }
         crate::image::rewrite_refs(&doc, &parent_dir(&path), &renames, &splits);
         let bytes = serialize_xhtml(&doc);
         let resource = &mut book.resources[&path];
@@ -588,6 +597,15 @@ pub fn convert(input: Input, opts: &ConvertOptions) -> Result<Converted, Convert
 
     if opts.features.strip_media_metadata {
         generic::media::strip(&mut book, &mut transformations);
+    }
+
+    // The writer regenerates the OPF and nav document from `book.metadata`
+    // and `book.toc`, which the chapter-level DOM scrub above never sees -
+    // without this, a fingerprint in the title, an author name or a TOC
+    // entry title would survive untouched. Same trap `normalize_model_strings`
+    // documents and compensates for below, one feature flag over.
+    if opts.features.strip_invisible_chars {
+        generic::invisible::scrub_model_strings(&mut book, &mut transformations);
     }
 
     // The writer regenerates the OPF, nav document and NCX from
