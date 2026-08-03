@@ -311,7 +311,12 @@ should tailor to byte-identical output. What each switch removes:
   a checksummed ISBN or a `urn:uuid:` shape does.
 - **A DOI-shaped identifier is screened, not proven real.** The screens above
   catch a placeholder or implausibly short registrant, an embedded UUID or
-  email address and a suffix that is nothing but a long digit run. What still
+  email address and a suffix that is nothing but a long digit run. That last
+  screen is narrower than it sounds: it fires only on a bare, undecorated run
+  of twelve or more digits, so `10.1016/1735689600000` is caught but a
+  timestamp of any other length (`10.1016/1735689600`, ten digits) or one
+  carrying any decoration at all (`10.1016/t1735689600000`,
+  `10.1016/1735689600.000`, `10.1016/1735689600000-en`) is not. What still
   survives is a per-copy value that forges a plausible registrant and gives
   it a structured suffix: `10.1016/TXN-8837261` is indistinguishable from a
   real DOI without querying a resolver, which this tool deliberately never
