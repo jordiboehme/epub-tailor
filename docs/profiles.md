@@ -350,8 +350,8 @@ should tailor to byte-identical output. What each switch removes:
   safety nets are left to recover it, and each one caps how far it searches
   for its own closing `)` or quote at 2048 bytes - that bounds the length of
   the value it can capture, not any distance from the malformed rule that
-  hid it: a `url()` value survives up to 2047 bytes and is lost at 2107, and
-  an `@import` value behaves the same past 2047 bytes. The same safety nets
+  hid it: a `url()` value survives up to 2047 bytes and is lost from 2048, and
+  an `@import` value behaves the same. The same safety nets
   also discard any captured value containing a `{`, a `}`, a carriage return
   or a newline, on purpose - no legitimate path contains one, and dropping
   such a capture outright, rather than merely bounding its length, is what
