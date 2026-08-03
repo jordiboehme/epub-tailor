@@ -654,3 +654,56 @@ fn two_marked_copies_converge_to_identical_bytes() {
         "the edition's real ISBN must survive next to the dropped DOI:\n{out_opf}"
     );
 }
+
+/// The same property for the channel a declared `identifier-type` opens.
+///
+/// Screening only the shapes that are per-copy *regardless* of scheme (a
+/// UUID, an email address, a DOI whose own parts betray it) left every other
+/// per-copy shape laundered by one OPF line: with
+/// `<meta refines="#vendor" property="identifier-type">ISBN</meta>` present,
+/// `SHTX001.635962014` was measured surviving a `generic` conversion intact
+/// and two copies of one edition failed to converge. This pins the fix end to
+/// end for each declarable scheme, not just at the classifier.
+#[test]
+fn two_copies_marked_only_by_a_scheme_refined_identifier_converge() {
+    for scheme in ["ISBN", "ISSN", "DOI"] {
+        let copy_a = common::book_with_refined_identifier("SHTX001.635962014", scheme);
+        let copy_b = common::book_with_refined_identifier("SHTX001.999999999", scheme);
+        assert_ne!(
+            copy_a, copy_b,
+            "the fixtures must actually differ: {scheme}"
+        );
+
+        let a = convert(Input::Epub(copy_a), &opts_for(&["generic"])).expect("converts");
+        let b = convert(Input::Epub(copy_b), &opts_for(&["generic"])).expect("converts");
+        assert_eq!(
+            a.epub, b.epub,
+            "two copies differing only in a {scheme}-refined watermark must converge"
+        );
+
+        let opf = opf_of(&a.epub);
+        assert!(
+            !opf.contains("SHTX001"),
+            "a declared {scheme} refinement must not launder a vendor id:\n{opf}"
+        );
+        assert!(
+            opf.contains("9783407868213"),
+            "the edition's real ISBN must survive the {scheme} case:\n{opf}"
+        );
+    }
+}
+
+/// The other direction of the same gate: the refinement must still rescue a
+/// value that is genuinely shaped like the type it declares but fails its
+/// checksum, which is the only reason the shortcut exists. `9783407868214` is
+/// the fixture edition's ISBN with a mistyped check digit.
+#[test]
+fn a_scheme_refined_mistyped_isbn_survives_a_generic_conversion() {
+    let book = common::book_with_refined_identifier("9783407868214", "ISBN");
+    let out = convert(Input::Epub(book), &opts_for(&["generic"])).expect("converts");
+    let opf = opf_of(&out.epub);
+    assert!(
+        opf.contains("9783407868214"),
+        "an ISBN-13-shaped value behind an ISBN refinement must be kept:\n{opf}"
+    );
+}

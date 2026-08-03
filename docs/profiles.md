@@ -277,7 +277,11 @@ should tailor to byte-identical output. What each switch removes:
   misjudge - an unusually spelled ISBN, say - but it cannot rescue a value
   that positively looks per-copy, because the shop writes the OPF and a
   scheme it declares is a hint about format rather than a warrant of
-  provenance.
+  provenance. It also only applies to a value actually shaped like the type
+  it claims: ten digit positions, or thirteen digits beginning `978` or `979`,
+  for an ISBN; eight for an ISSN; a `10.<registrant>/<suffix>` for a DOI. A
+  value that is not that shape is screened as if no scheme had been declared,
+  so labelling a transaction number `ISBN` gains it nothing.
 - **Unreferenced files.** Anything the book does not actually reach is
   deleted and reported with its size. Reachability is a real graph walk, not
   manifest membership: it roots at the package document, the navigation

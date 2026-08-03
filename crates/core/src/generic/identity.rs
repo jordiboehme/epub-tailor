@@ -290,23 +290,91 @@ fn is_valid_issn(s: &str) -> bool {
     check == (11 - sum % 11) % 11
 }
 
+/// How many check positions `v` holds once its separators are stripped, and
+/// whether the last of them is an `X`/`x` check character: `Some((13, false))`
+/// for `9783407868213`, `Some((10, true))` for `080442957X`, `Some((8, _))`
+/// for an ISSN. `None` as soon as any position is neither a digit nor a
+/// trailing `X`, which is what makes this a *shape* test rather than a
+/// checksum: it answers "could this be an ISBN/ISSN at all", not "is this
+/// one valid".
+fn check_digit_positions(v: &str) -> Option<(usize, bool)> {
+    let stripped = strip_separators(v);
+    let (last, rest) = stripped.as_bytes().split_last()?;
+    let trailing_x = matches!(last, b'X' | b'x');
+    if rest.iter().all(u8::is_ascii_digit) && (trailing_x || last.is_ascii_digit()) {
+        Some((stripped.len(), trailing_x))
+    } else {
+        None
+    }
+}
+
+/// Whether `value` is plausibly shaped like the type an `identifier-type`
+/// refinement declares it to be.
+///
+/// The scheme shortcut in [`is_shared`] exists to rescue a *real* identifier
+/// whose checksum fails - a typo, an odd spelling - so it must not be able to
+/// vouch for a value that is not even shaped like the type it claims. Without
+/// this gate, one OPF line the watermarking shop writes itself (`<meta
+/// refines="#pub-id" property="identifier-type">ISBN</meta>`) launders any
+/// per-copy value at all. That was measured end to end: `SHTX001.635962014`
+/// survived a `generic` conversion under an ISBN refinement, and two copies of
+/// one edition differing only in that value stopped converging.
+///
+/// ISBN-13 additionally requires the GS1 Bookland prefix, the same condition
+/// [`is_valid_isbn13`] imposes. Every real ISBN-13 lives in that range, so a
+/// 13-digit value outside it is not a mis-typed ISBN but something else
+/// wearing the label - a millisecond timestamp (`1735689600000`) above all.
+/// Requiring it here keeps the rescue path and the validation path agreeing on
+/// what "ISBN-13 shaped" means rather than letting them diverge.
+fn matches_declared_scheme_shape(value: &str, scheme: &str) -> bool {
+    let core = strip_scheme_prefix(value.trim());
+    match scheme {
+        "isbn" => match check_digit_positions(core) {
+            // Nine digits plus a check character, which is legitimately `X`.
+            Some((10, _)) => true,
+            // Thirteen digits under 978/979. The 13 form's check digit is
+            // mod 10, so it is always 0-9 and never `X`.
+            Some((13, false)) => {
+                let stripped = strip_separators(core);
+                stripped.starts_with("978") || stripped.starts_with("979")
+            }
+            _ => false,
+        },
+        "issn" => matches!(check_digit_positions(core), Some((8, _))),
+        "doi" => doi_parts(core).is_some(),
+        _ => false,
+    }
+}
+
 /// Whether an identifier is kept.
 ///
 /// An explicitly declared shared scheme wins over the *heuristic* part of the
 /// judgment, so an ISBN whose value happens not to checksum (a typo, an
-/// unusual spelling) is never mistaken for a transaction number. It does not
-/// win over [`looks_per_copy_regardless_of_scheme`]: a shop writes the OPF,
-/// so a scheme declaration it controls cannot be allowed to launder a value
-/// that positively looks minted per copy. Screening first and shortcutting
-/// second is the strict direction - it can only drop more, never keep more.
+/// unusual spelling) is never mistaken for a transaction number. That shortcut
+/// is gated twice, because the shop writes the OPF and so controls everything
+/// declared in it:
+///
+/// - it never overrides [`looks_per_copy_regardless_of_scheme`], so a value
+///   that positively looks minted per copy stays dropped however it is
+///   labelled;
+/// - it only applies where [`matches_declared_scheme_shape`] agrees the value
+///   is shaped like the declared type, so a declaration cannot vouch for a
+///   value that is not even the right shape.
+///
+/// Anything the shortcut declines falls through to the normal per-copy
+/// screening, exactly as if no scheme had been declared. Both gates are the
+/// strict direction - they can only drop more, never keep more.
 fn is_shared(value: &str, scheme: Option<&str>) -> bool {
     if looks_per_copy_regardless_of_scheme(value) {
         return false;
     }
-    if let Some(s) = scheme
-        && SHARED_SCHEMES.contains(&s.to_ascii_lowercase().as_str())
-    {
-        return true;
+    if let Some(s) = scheme {
+        let declared = s.to_ascii_lowercase();
+        if SHARED_SCHEMES.contains(&declared.as_str())
+            && matches_declared_scheme_shape(value, &declared)
+        {
+            return true;
+        }
     }
     !is_per_copy(value)
 }
@@ -441,10 +509,18 @@ mod tests {
     }
 
     #[test]
-    fn a_scheme_shortcut_keeps_an_identifier_that_would_otherwise_look_per_copy() {
-        // Fails every checksum (not 13/10/8 digits at all), but the scheme
-        // says ISBN, and the scheme shortcut is unconditional.
+    fn a_value_with_no_digits_at_all_is_kept_whatever_its_declared_scheme() {
+        // Named for what it actually exercises. This value does NOT reach the
+        // scheme shortcut any more: it is not ISBN-shaped, so
+        // `matches_declared_scheme_shape` declines it and it falls through to
+        // `is_per_copy`, which keeps it because it carries no digits at all
+        // (under the 8-digit threshold). The declared scheme is therefore not
+        // what saves it - the outcome is identical with no scheme, which is
+        // asserted here so the test cannot be misread as proving the shortcut
+        // fired. For the shortcut actually firing, see
+        // `a_declared_isbn_scheme_rescues_an_isbn13_shaped_value_that_fails_its_checksum`.
         assert!(is_shared("not-a-real-isbn-shape", Some("ISBN")));
+        assert!(is_shared("not-a-real-isbn-shape", None));
     }
 
     #[test]
@@ -695,6 +771,147 @@ mod tests {
         assert!(is_shared("10.1016/j.jbi.2020.103545", Some("DOI")));
     }
 
+    // -- R5: the scheme shortcut is gated on the value being SHAPED like the
+    // -- type it declares. Screening the three shapes of
+    // -- `looks_per_copy_regardless_of_scheme` was not enough: every OTHER
+    // -- per-copy shape was still laundered by one OPF line, measured end to
+    // -- end (a vendor id survived a `generic` conversion under an ISBN
+    // -- refinement and two copies of one edition stopped converging). ------
+
+    /// Every spelling of the refinement a shop can add for free. Both cases
+    /// are listed because the value is lower-cased before matching and the
+    /// EPUB spec does not fix a case for it.
+    const DECLARED_SCHEMES: &[Option<&str>] = &[
+        None,
+        Some("ISBN"),
+        Some("ISSN"),
+        Some("DOI"),
+        Some("isbn"),
+        Some("doi"),
+    ];
+
+    #[test]
+    fn no_declared_scheme_rescues_any_per_copy_shape() {
+        for value in [
+            "SHTX001.635962014",
+            "1735689600000",
+            "6f2a1e40-8c31-4b7e-9a55-1d0c2f9b7e31",
+            "urn:uuid:6f2a1e40-8c31-4b7e-9a55-1d0c2f9b7e31",
+            "buyer42@example.com",
+        ] {
+            for scheme in DECLARED_SCHEMES {
+                assert!(
+                    !is_shared(value, *scheme),
+                    "a declared {scheme:?} must not rescue {value}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_declared_isbn_scheme_rescues_an_isbn13_shaped_value_that_fails_its_checksum() {
+        // The reason the shortcut exists, and the one case that must keep
+        // working: `9783407868214` is a real edition's ISBN with its check
+        // digit mistyped (`...213` is the valid one). It is Bookland-prefixed
+        // and 13 digits, so it is genuinely ISBN-13 shaped - a plausible typo
+        // rather than a value in costume - and the refinement rescues it.
+        assert!(is_shared("9783407868214", Some("ISBN")));
+        assert!(is_shared("978-3-407-86821-4", Some("ISBN")));
+        // Without the refinement the checksum decides, and it fails.
+        assert!(!is_shared("9783407868214", None));
+    }
+
+    #[test]
+    fn a_thirteen_digit_value_outside_the_bookland_range_is_not_isbn_shaped() {
+        // The distinction the rescue case turns on. Both values are 13
+        // digits and both fail the ISBN-13 checksum; only the Bookland
+        // prefix separates a mis-typed ISBN from a timestamp or a
+        // transaction number, so the shape gate requires it.
+        assert!(matches_declared_scheme_shape("9783407868214", "isbn"));
+        assert!(!matches_declared_scheme_shape("1735689600000", "isbn"));
+        assert!(!matches_declared_scheme_shape("1234567890123", "isbn"));
+        // 12 digits behind letters and a dot: not a digit string at all.
+        assert!(!matches_declared_scheme_shape("SHTX001.635962014", "isbn"));
+    }
+
+    #[test]
+    fn scheme_shapes_are_checked_against_the_declared_type_only() {
+        // An ISSN-shaped value is not ISBN-shaped and vice versa, so a shop
+        // cannot pick whichever label happens to fit.
+        assert!(matches_declared_scheme_shape("2049-3630", "issn"));
+        assert!(!matches_declared_scheme_shape("2049-3630", "isbn"));
+        assert!(matches_declared_scheme_shape("080442957X", "isbn"));
+        assert!(!matches_declared_scheme_shape("080442957X", "issn"));
+        assert!(matches_declared_scheme_shape(
+            "10.1016/j.jbi.2020.103545",
+            "doi"
+        ));
+        assert!(!matches_declared_scheme_shape(
+            "10.1016/j.jbi.2020.103545",
+            "isbn"
+        ));
+        // A DOI-shaped value under a DOI refinement still has to clear
+        // `looks_per_copy_regardless_of_scheme` first, which is why shape
+        // agreement alone never decides the outcome.
+        assert!(matches_declared_scheme_shape("10.0000/TXN-A", "doi"));
+        assert!(!is_shared("10.0000/TXN-A", Some("DOI")));
+    }
+
+    #[test]
+    fn a_scheme_prefixed_value_is_shape_checked_on_its_bare_form() {
+        // The prefix is stripped before the shape test, so the canonical
+        // EPUB 3 spelling shapes exactly like the bare digits.
+        assert!(matches_declared_scheme_shape(
+            "urn:isbn:9783407868214",
+            "isbn"
+        ));
+        assert!(matches_declared_scheme_shape(
+            "isbn:978-3-407-86821-4",
+            "isbn"
+        ));
+        assert!(matches_declared_scheme_shape("urn:issn:2049-3630", "issn"));
+        assert!(matches_declared_scheme_shape(
+            "doi:10.1016/j.jbi.2020.103545",
+            "doi"
+        ));
+    }
+
+    #[test]
+    fn every_real_identifier_is_kept_with_and_without_its_refinement() {
+        // A refinement must never *cost* a real identifier its place either:
+        // the gate only decides whether the shortcut applies, and a value it
+        // declines still reaches the ordinary screening on its own merits.
+        for (value, scheme) in [
+            ("9783407868213", "ISBN"),
+            ("978-3-407-86821-3", "ISBN"),
+            ("080442957X", "ISBN"),
+            ("2049-3630", "ISSN"),
+            ("10.1016/j.jbi.2020.103545", "DOI"),
+            ("doi:10.1016/j.jbi.2020.103545", "DOI"),
+        ] {
+            assert!(
+                is_shared(value, None),
+                "must be kept with no scheme: {value}"
+            );
+            assert!(
+                is_shared(value, Some(scheme)),
+                "must be kept under a declared {scheme}: {value}"
+            );
+        }
+    }
+
+    #[test]
+    fn every_real_doi_is_kept_under_a_declared_doi_refinement() {
+        // The R2 loosening must survive R5's tightening: the shape gate
+        // accepts every real DOI, so none of them loses the shortcut.
+        for doi in REAL_DOIS {
+            assert!(
+                is_shared(doi, Some("DOI")),
+                "a real DOI must be kept under a DOI refinement: {doi}"
+            );
+        }
+    }
+
     // -- the still-dropped per-copy cases, re-pinned after the prefix/DOI
     // -- fix touched the same function ---------------------------------
 
@@ -739,18 +956,24 @@ mod tests {
 
     #[test]
     fn an_explicit_identifier_type_refinement_protects_the_unique_identifier_too() {
-        // 13 digits that fail the ISBN-13 checksum outright (same value the
-        // secondary-identifier path already pins in
-        // `an_invalid_checksum_13_digit_number_is_dropped`), exercised
-        // through `normalize()` on the *unique* identifier instead - the
-        // exact disagreement the two-paths bug produced: the shape heuristic
-        // alone reads this as per-copy, but an explicit `identifier-type`
-        // refinement must protect it here exactly as it protects a
-        // secondary identifier carrying the same value and scheme.
-        let mut book = book_with_identifier("1234567890123", Some("ISBN"));
+        // A Bookland-prefixed 13-digit value that fails the ISBN-13 checksum
+        // (the real ISBN ends `...213`), exercised through `normalize()` on
+        // the *unique* identifier - the exact disagreement the two-paths bug
+        // produced: the checksum alone reads this as per-copy, but an explicit
+        // `identifier-type` refinement must protect it here exactly as it
+        // protects a secondary identifier carrying the same value and scheme.
+        //
+        // Re-pinned from `1234567890123`, which this test used to carry. That
+        // value was never a plausible mis-typed ISBN - no real ISBN-13 exists
+        // outside the 978/979 Bookland range - so it pinned the wrong thing:
+        // it was indistinguishable from the millisecond timestamp
+        // `1735689600000` that the scheme shortcut must NOT rescue, and no
+        // shape test can separate the two. See
+        // `matches_declared_scheme_shape`.
+        let mut book = book_with_identifier("9783407868214", Some("ISBN"));
         let mut transformations = Vec::new();
         normalize(&mut book, &mut transformations);
-        assert_eq!(book.metadata.identifier.as_deref(), Some("1234567890123"));
+        assert_eq!(book.metadata.identifier.as_deref(), Some("9783407868214"));
         assert!(
             transformations.is_empty(),
             "a scheme-protected unique identifier must not be replaced, got: {transformations:?}"

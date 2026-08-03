@@ -573,6 +573,47 @@ pub fn marked_copy(marks: CopyMarks) -> Vec<u8> {
     build_epub_with_epoch(&entries, marks.zip_epoch)
 }
 
+/// A book whose only per-copy channel is a secondary `dc:identifier` carrying
+/// `value`, refined with `<meta refines="#vendor"
+/// property="identifier-type">{scheme}</meta>` - the single OPF line a shop
+/// adds to declare a type for a value it minted.
+///
+/// Everything else, including the edition's real ISBN on the unique
+/// identifier, is byte-identical between any two calls, so two books built
+/// with different `value`s differ in exactly one channel and any divergence
+/// in the converted output is attributable to it alone.
+pub fn book_with_refined_identifier(value: &str, scheme: &str) -> Vec<u8> {
+    let content_opf = format!(
+        r##"<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="pub-id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="pub-id">9783407868213</dc:identifier>
+    <meta refines="#pub-id" property="identifier-type">ISBN</meta>
+    <dc:identifier id="vendor">{value}</dc:identifier>
+    <meta refines="#vendor" property="identifier-type">{scheme}</meta>
+    <dc:title>Marked Book</dc:title>
+    <dc:language>en</dc:language>
+    <meta property="dcterms:modified">2026-08-02T13:18:00Z</meta>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="ch" href="chapter.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine><itemref idref="ch"/></spine>
+</package>"##
+    );
+    const CHAPTER: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>C</title></head>
+<body><p>Watermark.</p></body></html>"#;
+    build_epub(&[
+        ("mimetype", b"application/epub+zip"),
+        ("META-INF/container.xml", CONTAINER_XML),
+        ("OEBPS/content.opf", content_opf.as_bytes()),
+        ("OEBPS/nav.xhtml", NAV_XHTML),
+        ("OEBPS/chapter.xhtml", CHAPTER),
+    ])
+}
+
 /// Like [`build_epub`], but every entry's zip "last modified" timestamp is
 /// set to `year`-01-01 instead of the crate default - the vector for the
 /// zip-entry-timestamp per-copy mark that [`marked_copy`] exercises.
