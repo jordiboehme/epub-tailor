@@ -861,3 +861,131 @@ fn a_nav_path_the_writer_will_synthesize_is_not_reported_as_unreferenced() {
         "the writer ships a nav at that path either way"
     );
 }
+
+/// The narrated fixture is otherwise reached only through the epubcheck-gated
+/// round-trip, so a local run without `EPUBCHECK_FORCE` never checked that the
+/// media-overlay linkage and both `media:duration` values survive a rebuild.
+/// This pins them with plain assertions, no external tool.
+#[test]
+fn a_narrated_book_keeps_its_overlay_and_both_durations() {
+    let out = convert(
+        Input::Epub(common::epub3_narrated()),
+        &ConvertOptions::default(),
+    )
+    .expect("converts");
+    let opf = opf_of(&out.epub);
+
+    // The SMIL's regenerated manifest id, read back out of the OPF rather than
+    // hardcoded, so this does not also pin `IdAllocator`'s naming scheme. Both
+    // the chapter's linkage and the duration refinement must name it: asserting
+    // on `media-overlay=` alone passes even when the linkage points at the
+    // wrong item, which is the failure worth catching.
+    let smil_id = opf
+        .split("<item ")
+        .find(|item| item.contains(r#"href="chapter1.smil""#))
+        .and_then(|item| item.split_once(r#"id=""#))
+        .and_then(|(_, rest)| rest.split_once('"'))
+        .map(|(id, _)| id.to_string())
+        .expect("the SMIL item must still be in the manifest");
+    assert!(
+        opf.contains(&format!("media-overlay=\"{smil_id}\"")),
+        "the chapter must still declare its overlay by the SMIL's id:\n{opf}"
+    );
+    assert!(
+        opf.contains(r#"<meta property="media:duration">0:00:05.000</meta>"#),
+        "the book-wide duration must survive:\n{opf}"
+    );
+    // `r##` because the refinement's value starts with `"#`, which would close
+    // an `r#` raw string.
+    assert!(
+        opf.contains(&format!(
+            r##"property="media:duration" refines="#{smil_id}""##
+        )),
+        "the per-overlay duration must still refine the SMIL item:\n{opf}"
+    );
+    assert!(
+        common::entry(&out.epub, "OEBPS/chapter1.smil").is_some(),
+        "the SMIL itself must ship"
+    );
+}
+
+/// A narrated book carrying the book-wide `media:duration` but no per-item
+/// `refines` refinement - legal EPUB 3, and the shape a gate keyed on the
+/// refinements rather than on the surviving overlays silently strips the total
+/// from. EPUB 3 requires the total precisely because an item carries
+/// `media-overlay`, so that is what it must key on.
+#[test]
+fn a_narrated_book_without_per_item_refinements_keeps_its_total_duration() {
+    const OPF: &[u8] = br##"<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="pub-id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:title>Narrated, unrefined</dc:title>
+    <dc:language>en</dc:language>
+    <dc:identifier id="pub-id">urn:uuid:44444444-4444-4444-4444-444444444444</dc:identifier>
+    <meta property="dcterms:modified">2024-01-01T00:00:00Z</meta>
+    <meta property="media:duration">0:00:05.000</meta>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="ch1" href="chapter1.xhtml" media-type="application/xhtml+xml" media-overlay="mo1"/>
+    <item id="mo1" href="chapter1.smil" media-type="application/smil+xml"/>
+  </manifest>
+  <spine><itemref idref="ch1"/></spine>
+</package>"##;
+
+    const NAV: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+<head><title>Nav</title></head>
+<body><nav epub:type="toc"><ol><li><a href="chapter1.xhtml">Chapter 1</a></li></ol></nav></body></html>"#;
+
+    const CHAPTER1: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>Chapter 1</title></head>
+<body><p id="c1">Text.</p></body></html>"#;
+
+    const SMIL: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
+<smil xmlns="http://www.w3.org/ns/SMIL" version="3.0">
+<body><seq id="s1"><par id="p1"><text src="chapter1.xhtml#c1"/></par></seq></body>
+</smil>"#;
+
+    let epub = common::build_epub(&[
+        ("mimetype", b"application/epub+zip"),
+        ("META-INF/container.xml", common::CONTAINER_XML),
+        ("OEBPS/content.opf", OPF),
+        ("OEBPS/nav.xhtml", NAV),
+        ("OEBPS/chapter1.xhtml", CHAPTER1),
+        ("OEBPS/chapter1.smil", SMIL),
+    ]);
+
+    let out = convert(Input::Epub(epub), &ConvertOptions::default()).expect("converts");
+    let opf = opf_of(&out.epub);
+    assert!(
+        opf.contains("media-overlay="),
+        "the overlay must survive, or this test proves nothing:\n{opf}"
+    );
+    assert!(
+        opf.contains(r#"<meta property="media:duration">0:00:05.000</meta>"#),
+        "a narrated book must keep the total EPUB 3 requires of it:\n{opf}"
+    );
+}
+
+/// The synthesized nav path is protected from pruning, but its stored bytes
+/// are discarded and regenerated, so its links must not keep anything else
+/// alive. `stray-only.png` is referenced by nothing but that discarded
+/// document, so it has to go - rooting the path and WALKING it would retain
+/// the image, which is the difference this pins.
+#[test]
+fn the_synthesized_nav_path_is_protected_without_its_links_being_followed() {
+    let out = convert(
+        Input::Epub(common::epub2_with_a_stray_nav_xhtml()),
+        &opts_for(&["generic"]),
+    )
+    .expect("converts");
+    assert!(
+        common::entry(&out.epub, "OEBPS/stray-only.png").is_none(),
+        "an image only the discarded nav bytes referenced must not be retained"
+    );
+    assert!(
+        common::entry(&out.epub, "OEBPS/nav.xhtml").is_some(),
+        "the nav path itself still ships, regenerated by the writer"
+    );
+}

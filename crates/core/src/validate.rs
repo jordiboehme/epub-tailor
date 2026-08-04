@@ -1252,34 +1252,11 @@ fn kb(bytes: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write as _;
-    use zip::write::SimpleFileOptions;
-    use zip::{CompressionMethod, ZipWriter};
-
-    /// Build a ZIP archive from `entries` (path, raw bytes), in order.
-    /// `mimetype` (if present) is written STORED; everything else DEFLATE.
-    fn build_zip(entries: &[(&str, &[u8])]) -> Vec<u8> {
-        let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
-        let stored = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
-        let deflated = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
-        for (name, data) in entries {
-            let options = if *name == "mimetype" {
-                stored
-            } else {
-                deflated
-            };
-            writer.start_file(*name, options).expect("start_file");
-            writer.write_all(data).expect("write entry data");
-        }
-        writer.finish().expect("finish zip").into_inner()
-    }
-
-    const CONTAINER_XML: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
-<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
-  <rootfiles>
-    <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
-  </rootfiles>
-</container>"#;
+    // The dev-only fixture primitives the integration tests use. These unit
+    // tests carried their own byte-identical copies of the zip builder and
+    // the container document; one definition is what stops the two drifting
+    // into subtly different fixtures.
+    use epub_tailor_testfixtures::{CONTAINER_XML, build_epub as build_zip};
 
     /// A minimal, clean EPUB3: nav doc, one chapter with two ids, a small CSS
     /// file, no images. Every check should come back clean against this.
@@ -1319,7 +1296,9 @@ mod tests {
         .into_bytes()
     }
 
-    const NAV_XHTML: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
+    /// Local, not the shared `NAV_XHTML`: this one links `text/chapter1.xhtml`
+    /// and its `#s2` fragment, which is what these checks resolve against.
+    const NAV: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
 <html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
 <head><title>Nav</title></head>
 <body><nav epub:type="toc"><ol>
@@ -1339,7 +1318,7 @@ mod tests {
             ("mimetype", b"application/epub+zip"),
             ("META-INF/container.xml", CONTAINER_XML),
             ("OEBPS/content.opf", &opf),
-            ("OEBPS/nav.xhtml", NAV_XHTML),
+            ("OEBPS/nav.xhtml", NAV),
             ("OEBPS/text/chapter1.xhtml", CHAPTER1),
             ("OEBPS/styles/main.css", MAIN_CSS),
         ];
@@ -1399,7 +1378,7 @@ mod tests {
             ("mimetype", b"application/epub+zip"),
             ("META-INF/container.xml", CONTAINER_XML),
             ("OEBPS/content.opf", &opf),
-            ("OEBPS/nav.xhtml", NAV_XHTML),
+            ("OEBPS/nav.xhtml", NAV),
             ("OEBPS/text/chapter1.xhtml", CORRUPT),
             ("OEBPS/styles/main.css", MAIN_CSS),
         ];
@@ -1436,7 +1415,7 @@ mod tests {
             ("META-INF/container.xml", CONTAINER_XML),
             ("mimetype", b"application/epub+zip"),
             ("OEBPS/content.opf", &opf),
-            ("OEBPS/nav.xhtml", NAV_XHTML),
+            ("OEBPS/nav.xhtml", NAV),
             ("OEBPS/text/chapter1.xhtml", CHAPTER1),
             ("OEBPS/styles/main.css", MAIN_CSS),
         ]);
@@ -1500,7 +1479,7 @@ mod tests {
             ("mimetype", b"application/epub+zip"),
             ("META-INF/container.xml", CONTAINER_XML),
             ("OEBPS/content.opf", &opf),
-            ("OEBPS/nav.xhtml", NAV_XHTML),
+            ("OEBPS/nav.xhtml", NAV),
             ("OEBPS/text/chapter1.xhtml", CHAPTER1),
             ("OEBPS/styles/main.css", MAIN_CSS),
         ]);
@@ -1670,7 +1649,7 @@ mod tests {
             ("mimetype", b"application/epub+zip"),
             ("META-INF/container.xml", CONTAINER_XML),
             ("OEBPS/content.opf", &opf),
-            ("OEBPS/nav.xhtml", NAV_XHTML),
+            ("OEBPS/nav.xhtml", NAV),
             ("OEBPS/text/chapter1.xhtml", CHAPTER1),
             ("OEBPS/styles/main.css", MAIN_CSS),
             ("OEBPS/images/pic.svg", SVG),
@@ -1714,7 +1693,7 @@ mod tests {
             ("mimetype", b"application/epub+zip"),
             ("META-INF/container.xml", CONTAINER_XML),
             ("OEBPS/content.opf", &opf),
-            ("OEBPS/nav.xhtml", NAV_XHTML),
+            ("OEBPS/nav.xhtml", NAV),
             ("OEBPS/text/chapter1.xhtml", CHAPTER1),
             ("OEBPS/styles/main.css", MAIN_CSS),
             ("OEBPS/images/pic.gif", GIF),
@@ -1763,7 +1742,7 @@ mod tests {
             ("mimetype", b"application/epub+zip"),
             ("META-INF/container.xml", CONTAINER_XML),
             ("OEBPS/content.opf", &opf),
-            ("OEBPS/nav.xhtml", NAV_XHTML),
+            ("OEBPS/nav.xhtml", NAV),
             ("OEBPS/text/chapter1.xhtml", CHAPTER1),
             ("OEBPS/styles/main.css", MAIN_CSS),
             ("OEBPS/images/pic.jpg", &jpeg),
@@ -1785,7 +1764,7 @@ mod tests {
             ("mimetype", b"application/epub+zip"),
             ("META-INF/container.xml", CONTAINER_XML),
             ("OEBPS/content.opf", &opf),
-            ("OEBPS/nav.xhtml", NAV_XHTML),
+            ("OEBPS/nav.xhtml", NAV),
             ("OEBPS/text/chapter1.xhtml", CHAPTER1),
             ("OEBPS/styles/main.css", big_css.as_bytes()),
         ]);
@@ -1809,7 +1788,7 @@ mod tests {
             ("mimetype", b"application/epub+zip"),
             ("META-INF/container.xml", CONTAINER_XML),
             ("OEBPS/content.opf", &opf),
-            ("OEBPS/nav.xhtml", NAV_XHTML),
+            ("OEBPS/nav.xhtml", NAV),
             ("OEBPS/text/chapter1.xhtml", CHAPTER1),
             ("OEBPS/styles/main.css", css.as_bytes()),
         ]);
@@ -1832,7 +1811,7 @@ mod tests {
             ("mimetype", b"application/epub+zip"),
             ("META-INF/container.xml", CONTAINER_XML),
             ("OEBPS/content.opf", &opf),
-            ("OEBPS/nav.xhtml", NAV_XHTML),
+            ("OEBPS/nav.xhtml", NAV),
             ("OEBPS/text/chapter1.xhtml", CHAPTER1),
             ("OEBPS/styles/main.css", MAIN_CSS),
             ("OEBPS/fonts/a.ttf", b"not a real font"),
@@ -1855,7 +1834,7 @@ mod tests {
             ("mimetype", b"application/epub+zip"),
             ("META-INF/container.xml", CONTAINER_XML),
             ("OEBPS/content.opf", &opf),
-            ("OEBPS/nav.xhtml", NAV_XHTML),
+            ("OEBPS/nav.xhtml", NAV),
             ("OEBPS/text/chapter1.xhtml", &bad),
             ("OEBPS/styles/main.css", MAIN_CSS),
         ]);
@@ -1882,7 +1861,7 @@ mod tests {
             ("mimetype", b"application/epub+zip"),
             ("META-INF/container.xml", CONTAINER_XML),
             ("OEBPS/content.opf", &opf),
-            ("OEBPS/nav.xhtml", NAV_XHTML),
+            ("OEBPS/nav.xhtml", NAV),
             ("OEBPS/text/chapter1.xhtml", chapter.as_bytes()),
             ("OEBPS/styles/main.css", MAIN_CSS),
         ]);
@@ -1936,7 +1915,7 @@ mod tests {
             ("mimetype", b"application/epub+zip"),
             ("META-INF/container.xml", CONTAINER_XML),
             ("OEBPS/content.opf", &opf),
-            ("OEBPS/nav.xhtml", NAV_XHTML),
+            ("OEBPS/nav.xhtml", NAV),
             ("OEBPS/text/chapter1.xhtml", CHAPTER1),
             ("OEBPS/styles/main.css", MAIN_CSS),
             ("OEBPS/images/pic.jpg", &jpeg),
@@ -1981,7 +1960,7 @@ mod tests {
             ("mimetype", b"application/epub+zip"),
             ("META-INF/container.xml", CONTAINER_XML),
             ("OEBPS/content.opf", &opf),
-            ("OEBPS/nav.xhtml", NAV_XHTML),
+            ("OEBPS/nav.xhtml", NAV),
             ("OEBPS/text/chapter1.xhtml", CHAPTER1),
             ("OEBPS/styles/main.css", MAIN_CSS),
         ]);
@@ -2014,7 +1993,7 @@ mod tests {
             ("mimetype", b"application/epub+zip"),
             ("META-INF/container.xml", CONTAINER_XML),
             ("OEBPS/content.opf", &opf),
-            ("OEBPS/nav.xhtml", NAV_XHTML),
+            ("OEBPS/nav.xhtml", NAV),
             ("OEBPS/text/chapter1.xhtml", CHAPTER1),
             ("OEBPS/styles/main.css", MAIN_CSS),
         ]);

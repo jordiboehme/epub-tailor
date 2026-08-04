@@ -203,6 +203,21 @@ pub fn write_epub(
     };
     let series = meta.series.clone().unwrap_or_default();
 
+    // The book-wide total is the sum of the overlays' durations, so it means
+    // nothing once no item carries an overlay - a split can remove the last
+    // one (see `chapter_split`). Emitting it anyway would state a narration
+    // time for a book with no narration.
+    //
+    // Keyed on surviving `media-overlay` items, NOT on the per-item
+    // `media_durations` refinements: a narrated book can legitimately carry
+    // the total without refining each overlay, and gating on the refinements
+    // dropped it from exactly the books EPUB 3 requires it for.
+    let book_wide_duration = if items.iter().any(|i| !i.media_overlay.is_empty()) {
+        meta.media_duration.clone().unwrap_or_default()
+    } else {
+        String::new()
+    };
+
     let opf_bytes = OpfTemplate {
         identifier: identifier.clone(),
         identifiers: meta
@@ -235,7 +250,7 @@ pub fn write_epub(
         ncx_id,
         items,
         spine,
-        media_duration: meta.media_duration.clone().unwrap_or_default(),
+        media_duration: book_wide_duration,
         media_durations,
     }
     .render()

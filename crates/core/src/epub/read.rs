@@ -232,6 +232,12 @@ pub fn read_epub(bytes: &[u8]) -> Result<ReadEpub, ConvertError> {
         // safe precisely because a failure changes nothing.
         let mut deobfuscated_paths: std::collections::HashSet<String> =
             std::collections::HashSet::new();
+        // Paths already reported as keyless. The "more than once" warning
+        // below fires when an entry is SKIPPED, which a failed attempt is
+        // not - so without this, an `encryption.xml` naming one font twice
+        // with two unusable algorithms would emit the same "could not derive"
+        // sentence twice and say nothing about the repetition.
+        let mut keyless_paths: std::collections::HashSet<String> = std::collections::HashSet::new();
         for (uri, algorithm) in font_obfuscated_resources(&enc_text)? {
             let path = normalize_href("", &uri);
             let Some(resource) = resources.get_mut(&path) else {
@@ -254,7 +260,7 @@ pub fn read_epub(bytes: &[u8]) -> Result<ReadEpub, ConvertError> {
                     detail: "undid EPUB font obfuscation so the font is usable".to_string(),
                     file: Some(path),
                 });
-            } else {
+            } else if keyless_paths.insert(path.clone()) {
                 // Adobe's scheme with a non-`urn:uuid:` identifier: no key,
                 // so `deobfuscate` left the bytes untouched. Reporting
                 // success here would be a false claim - the font is still
