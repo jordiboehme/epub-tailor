@@ -115,6 +115,7 @@ pub fn write_epub(
     // the source idref by the reader) through the id map pass 1 just built.
     let mut items: Vec<OpfItem> = Vec::new();
     let mut cover_id = String::new();
+    let mut media_durations: Vec<OpfMediaDuration> = Vec::new();
     for (path, id) in manifest_paths.iter().zip(ids.iter()) {
         let media_type = if *path == nav_path {
             "application/xhtml+xml".to_string()
@@ -143,6 +144,16 @@ pub fn write_epub(
             .and_then(|r| r.fallback.as_deref())
             .map(|target| resolve_linkage(path, "fallback", target, &path_ids, warnings))
             .unwrap_or_default();
+        // This item's own duration refinement (it names itself via `id`, so
+        // - unlike media-overlay/fallback - there is no cross-reference to
+        // remap: the item either survived pass 1 and got `id`, or it isn't
+        // here to iterate over at all.
+        if let Some(value) = resource.and_then(|r| r.media_duration.clone()) {
+            media_durations.push(OpfMediaDuration {
+                id: id.clone(),
+                value,
+            });
+        }
         items.push(OpfItem {
             id: id.clone(),
             href: relative_href(&opf_dir, path),
@@ -167,7 +178,10 @@ pub fn write_epub(
     // Every real input path already defaults an absent/blank language to
     // "en" (with a warning); this is a last-resort guard so a hand-built
     // `Book` can never round-trip an empty `dc:language`, which epubcheck
-    // flags. `write_epub` has no warnings channel, so this stays silent.
+    // flags. Deliberately still silent even though `write_epub` now has a
+    // `warnings` channel: a hand-built `Book` bypassing the reader is the
+    // only way to hit this, and the reader's own warning already covers the
+    // real-input path.
     let opf_language = if book.metadata.language.trim().is_empty() {
         "en".to_string()
     } else {
@@ -224,6 +238,8 @@ pub fn write_epub(
         ncx_id,
         items,
         spine,
+        media_duration: meta.media_duration.clone().unwrap_or_default(),
+        media_durations,
     }
     .render()
     .map_err(render_err)?
@@ -332,6 +348,21 @@ struct OpfTemplate {
     ncx_id: String,
     items: Vec<OpfItem>,
     spine: Vec<String>,
+    /// The book-wide `<meta property="media:duration">`, empty when the
+    /// source had none. EPUB 3 requires it whenever any `items` entry
+    /// carries `media-overlay` (see [`OpfItem::media_overlay`]).
+    media_duration: String,
+    /// One `<meta refines="#id" property="media:duration">` per SMIL item
+    /// whose duration survived the rebuild - `id` already the item's
+    /// *regenerated* manifest id, not the source's.
+    media_durations: Vec<OpfMediaDuration>,
+}
+
+/// One SMIL item's read-aloud duration refinement: `id` is that item's own
+/// regenerated manifest id (the `refines` target), `value` the duration text.
+struct OpfMediaDuration {
+    id: String,
+    value: String,
 }
 
 /// A `dc:creator`/`dc:contributor` as the template needs it: an id to hang the

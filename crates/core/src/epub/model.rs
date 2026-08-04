@@ -78,6 +78,12 @@ pub struct Metadata {
     /// The series this book belongs to, from an EPUB3
     /// `belongs-to-collection` refinement or Calibre's `calibre:series` meta.
     pub series: Option<Series>,
+    /// The book-wide `<meta property="media:duration">` (no `refines`): the
+    /// total read-aloud duration. EPUB 3 requires this whenever any manifest
+    /// item carries `media-overlay`; carried through verbatim (never
+    /// recomputed from the per-item durations below) so a well-formed source
+    /// stays well-formed. `None` when the source had none.
+    pub media_duration: Option<String>,
 }
 
 /// A person: a `dc:creator` or `dc:contributor`, with the EPUB3 refinements
@@ -187,6 +193,25 @@ pub struct Series {
 
 /// A single retained file: its raw bytes plus a declared or guessed media
 /// type. Text resources have already been normalized to UTF-8.
+///
+/// `#[derive(Default)]` is deliberate, not an oversight: most construction
+/// sites build a genuinely new resource (a synthesized stylesheet, a set
+/// cover, an extracted/rasterized image) with nothing to carry into the
+/// linkage fields below, and `..Default::default()` keeps those sites from
+/// drowning in `None`s every time a field is added here. But it is a sharp
+/// edge for the *other* kind of site - one that rebuilds or renames an
+/// *existing* resource in place - because `..Default::default()` there
+/// silently drops whatever the fields it doesn't explicitly set already
+/// held. That exact mistake shipped once already (media-overlay/fallback
+/// silently wiped by the chapter-serialization and CSS-filtering in-place
+/// rewrites, and by the image/SVG re-encode renames, in `lib.rs`) before
+/// being caught in review. If you add a field here, audit every
+/// `..Default::default()` site that overwrites or renames an existing
+/// `book.resources` entry - as of this writing: the per-chapter XHTML
+/// serialization loop and `store_filtered_css` in `lib.rs` (in-place
+/// rewrites), and `process_images`/`process_svgs`' format-change and
+/// rasterization branches (renames) - and decide there, explicitly, whether
+/// the new field should carry forward too.
 #[derive(Debug, Clone, Default)]
 pub struct Resource {
     /// The file's raw bytes.
@@ -206,6 +231,14 @@ pub struct Resource {
     /// [`Self::fallback`]); a chain is carried one link per resource,
     /// unflattened.
     pub fallback: Option<String>,
+    /// This SMIL document's own read-aloud duration, from the source OPF's
+    /// `<meta refines="#<this item's id>" property="media:duration">`
+    /// (resolved to sit on the SMIL resource itself, the same way
+    /// [`Self::media_overlay`]/[`Self::fallback`] resolve their idref to a
+    /// path rather than keeping the source's now-discarded id). Only ever
+    /// meaningful on a resource some other item's `media_overlay` points at;
+    /// `None` when the source had no such refinement for this item.
+    pub media_duration: Option<String>,
 }
 
 /// One entry in the table of contents.

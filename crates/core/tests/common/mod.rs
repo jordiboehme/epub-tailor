@@ -822,6 +822,95 @@ const COVER_JPG: &[u8] = &[
     0x00, 0x08, 0x01, 0x01, 0x00, 0x00, 0x3F, 0x00, 0xF6, 0x0A, 0xFF, 0xD9,
 ];
 
+/// A minimal, epubcheck-realistic read-aloud EPUB3: one spine chapter narrated
+/// by a SMIL media overlay, with the `media:duration` metadata EPUB 3 requires
+/// whenever any manifest item carries `media-overlay` - the global
+/// `<meta property="media:duration">` plus one refining the SMIL item itself.
+/// Unlike `book_with_media_overlay` in `generic.rs` (which exists purely to
+/// pin the writer's id-remapping by literal string, and deliberately uses a
+/// non-core `application/x-weird+xml` fallback target that a real reading
+/// system would never see), every resource and media type here is exactly
+/// what a real narrated EPUB 3 ships, so a converted copy can be asserted
+/// epubcheck-CLEAN, not merely free of dangling references.
+pub fn epub3_narrated() -> Vec<u8> {
+    const CONTENT_OPF: &[u8] = br##"<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="pub-id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:title>Narrated Book</dc:title>
+    <dc:creator>Jane Author</dc:creator>
+    <dc:language>en</dc:language>
+    <dc:identifier id="pub-id">urn:uuid:8f6a2e10-9b3c-4d5e-8a1f-2c3d4e5f6a7b</dc:identifier>
+    <meta property="dcterms:modified">2024-01-01T00:00:00Z</meta>
+    <meta property="media:duration">0:00:05.000</meta>
+    <meta property="media:duration" refines="#mo1">0:00:05.000</meta>
+    <meta name="cover" content="cover-img"/>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="ch1" href="chapter1.xhtml" media-type="application/xhtml+xml" media-overlay="mo1"/>
+    <item id="mo1" href="chapter1.smil" media-type="application/smil+xml"/>
+    <item id="audio1" href="audio/track1.mp3" media-type="audio/mpeg"/>
+    <item id="cover-img" href="images/cover.jpg" media-type="image/jpeg" properties="cover-image"/>
+  </manifest>
+  <spine>
+    <itemref idref="ch1"/>
+  </spine>
+</package>"##;
+
+    const NAV_XHTML: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+<head><title>Nav</title></head>
+<body>
+<nav epub:type="toc">
+<ol>
+<li><a href="chapter1.xhtml">Chapter 1</a></li>
+</ol>
+</nav>
+</body>
+</html>"#;
+
+    const CHAPTER1: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>Chapter 1</title></head>
+<body><p id="c1">Text.</p></body></html>"#;
+
+    const CHAPTER1_SMIL: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
+<smil xmlns="http://www.w3.org/ns/SMIL" xmlns:epub="http://www.idpf.org/2007/ops" version="3.0">
+<body>
+<seq id="s1" epub:textref="chapter1.xhtml">
+<par id="p1">
+<text src="chapter1.xhtml#c1"/>
+<audio src="audio/track1.mp3" clipBegin="0:00:00.000" clipEnd="0:00:05.000"/>
+</par>
+</seq>
+</body>
+</smil>"#;
+
+    // A minimal, structurally valid MPEG-1 Layer III frame (a fixed-size
+    // header + silence payload) - epubcheck's media-overlay checks validate
+    // the SMIL/manifest/metadata wiring around this file, not its audio
+    // content, but a real-shaped frame keeps the fixture honest.
+    const TRACK1_MP3: &[u8] = &[
+        0xFF, 0xFB, 0x90, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    ];
+
+    build_epub(&[
+        ("mimetype", b"application/epub+zip"),
+        ("META-INF/container.xml", CONTAINER_XML),
+        ("OEBPS/content.opf", CONTENT_OPF),
+        ("OEBPS/nav.xhtml", NAV_XHTML),
+        ("OEBPS/chapter1.xhtml", CHAPTER1),
+        ("OEBPS/chapter1.smil", CHAPTER1_SMIL),
+        ("OEBPS/audio/track1.mp3", TRACK1_MP3),
+        ("OEBPS/images/cover.jpg", COVER_JPG),
+    ])
+}
+
 /// A one-chapter EPUB3 whose single chapter is a "kitchen sink" exercising every
 /// M3 transform: a table with a caption and header, ordered lists (typed,
 /// nested, with a bulleted sublist), a `<pre>` code block, an `<aside>`, a

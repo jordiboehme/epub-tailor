@@ -187,6 +187,9 @@ pub fn read_epub(bytes: &[u8]) -> Result<ReadEpub, ConvertError> {
         };
         let media_overlay = href_media_overlay.get(path.as_str()).map(|s| s.to_string());
         let fallback = href_fallback.get(path.as_str()).map(|s| s.to_string());
+        // Already href-keyed (it names the SMIL item its own duration
+        // refines, not a linking item's target), unlike the two maps above.
+        let media_duration = parsed_opf.media_durations.get(&path).cloned();
         resources.insert(
             path,
             Resource {
@@ -194,6 +197,7 @@ pub fn read_epub(bytes: &[u8]) -> Result<ReadEpub, ConvertError> {
                 media_type,
                 media_overlay,
                 fallback,
+                media_duration,
             },
         );
     }
@@ -596,6 +600,12 @@ struct ParsedOpf {
     cover: Option<String>,
     nav_path: Option<String>,
     ncx_path: Option<String>,
+    /// Per-SMIL-item read-aloud duration, href -> value - the resolved form
+    /// of every `<meta refines="#id" property="media:duration">` in the
+    /// source `<metadata>`. The book-wide duration (no `refines`) is folded
+    /// into `metadata.media_duration` instead, alongside every other
+    /// `<metadata>` field.
+    media_durations: std::collections::HashMap<String, String>,
 }
 
 fn parse_opf(
@@ -612,13 +622,19 @@ fn parse_opf(
         .find(|n| n.is_element() && n.tag_name().name() == "metadata")
         .ok_or_else(|| ConvertError::InvalidEpub("OPF missing <metadata>".to_string()))?;
 
-    let metadata = parse_metadata(metadata_node, unique_identifier, warnings);
+    let mut metadata = parse_metadata(metadata_node, unique_identifier, warnings);
 
     let manifest_node = package
         .children()
         .find(|n| n.is_element() && n.tag_name().name() == "manifest")
         .ok_or_else(|| ConvertError::InvalidEpub("OPF missing <manifest>".to_string()))?;
     let manifest = parse_manifest(manifest_node, opf_dir, warnings);
+
+    // Resolving a duration's `refines="#id"` to a resource needs the
+    // manifest, so this runs after it - unlike every other `<metadata>`
+    // field, which `parse_metadata` reads standalone.
+    let (media_duration, media_durations) = parse_media_durations(metadata_node, &manifest);
+    metadata.media_duration = media_duration;
 
     let spine_node = package
         .children()
@@ -649,6 +665,7 @@ fn parse_opf(
         cover,
         nav_path,
         ncx_path,
+        media_durations,
     })
 }
 
@@ -848,7 +865,50 @@ fn parse_metadata(
         date: first_dc(metadata_node, "date"),
         rights: first_dc(metadata_node, "rights"),
         series: parse_series(metadata_node),
+        // Set by `parse_opf` once the manifest (needed to resolve a
+        // per-item duration's `refines` idref to a resource) is parsed.
+        media_duration: None,
     }
+}
+
+/// Every `<meta property="media:duration">` in `<metadata>`: the book-wide
+/// one (no `refines`, first one wins if the source has more than one) and
+/// each SMIL item's own (`refines="#id"`, `id` resolved through `manifest`
+/// to that item's href - the same id -> href resolution
+/// [`crate::generic::reachable`]'s `opf_refs` and [`parse_manifest`]'s
+/// `media-overlay`/`fallback` handling both use). EPUB 3 requires both
+/// whenever any manifest item carries `media-overlay`; dropping them was the
+/// same closed-field-set bug this module's `media-overlay`/`fallback`
+/// handling fixes, one level up in `<metadata>` instead of `<manifest>`.
+fn parse_media_durations(
+    metadata_node: Node,
+    manifest: &IndexMap<String, ManifestItem>,
+) -> (Option<String>, std::collections::HashMap<String, String>) {
+    let mut global = None;
+    let mut per_item = std::collections::HashMap::new();
+    for meta in metadata_node
+        .descendants()
+        .filter(|n| n.is_element() && n.tag_name().name() == "meta")
+        .filter(|n| n.attribute("property") == Some("media:duration"))
+    {
+        let value = collapse_whitespace(&collect_text(meta));
+        if value.is_empty() {
+            continue;
+        }
+        match meta.attribute("refines").and_then(|r| r.strip_prefix('#')) {
+            Some(id) => {
+                if let Some(item) = manifest.get(id) {
+                    per_item.insert(item.href.clone(), value);
+                }
+            }
+            None => {
+                if global.is_none() {
+                    global = Some(value);
+                }
+            }
+        }
+    }
+    (global, per_item)
 }
 
 fn parse_manifest(

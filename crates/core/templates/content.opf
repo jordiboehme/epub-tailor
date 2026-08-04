@@ -64,6 +64,12 @@
 {%- if !cover_id.is_empty() %}
     <meta name="cover" content="{{ cover_id }}"/>
 {%- endif %}
+{%- if !media_duration.is_empty() %}
+    <meta property="media:duration">{{ media_duration }}</meta>
+{%- endif %}
+{%- for md in media_durations %}
+    <meta property="media:duration" refines="#{{ md.id }}">{{ md.value }}</meta>
+{%- endfor %}
   </metadata>
   <manifest>
 {%- for item in items %}

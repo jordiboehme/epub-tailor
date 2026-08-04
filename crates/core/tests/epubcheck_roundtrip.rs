@@ -9,7 +9,7 @@ mod common;
 
 use std::path::PathBuf;
 
-use common::{epub2_minimal, epub3_kitchen_sink, epub3_minimal, run_epubcheck};
+use common::{epub2_minimal, epub3_kitchen_sink, epub3_minimal, epub3_narrated, run_epubcheck};
 use epub_tailor_core::profile::{DeviceCaps, Features};
 use epub_tailor_core::{ConvertOptions, Input, convert};
 
@@ -86,6 +86,19 @@ fn stamped_output_roundtrips_clean_through_epubcheck() {
         ..ConvertOptions::default()
     };
     assert_clean_roundtrip_with("epub3-stamped", epub3_minimal(), &opts);
+}
+
+/// The task-4 assertion the plain dangling-reference tests in `generic.rs`
+/// cannot make: a real narrated EPUB 3 (SMIL media overlay, the
+/// `media:duration` metadata EPUB 3 requires alongside it, a real cover and
+/// audio file) must round-trip *epubcheck-clean* under the full fitting
+/// pipeline, not merely free of dangling `media-overlay`/`fallback`
+/// references. Catches exactly the gap a dangling-reference-only check
+/// missed: the OPF's `<manifest>` attributes surviving while the sibling
+/// `<metadata>` duration refinements they require did not.
+#[test]
+fn narrated_epub3_fixture_roundtrips_clean_through_epubcheck() {
+    assert_clean_roundtrip("epub3-narrated", epub3_narrated());
 }
 
 #[test]

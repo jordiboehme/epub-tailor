@@ -121,6 +121,7 @@ impl<'a> ImageRegistry<'a> {
                 media_type,
                 media_overlay: None,
                 fallback: None,
+                media_duration: None,
             },
         );
         self.resolved.insert(href.to_string(), path.clone());

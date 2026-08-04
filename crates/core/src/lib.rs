@@ -615,6 +615,9 @@ pub fn convert(input: Input, opts: &ConvertOptions) -> Result<Converted, Convert
                 media_type: "application/xhtml+xml".to_string(),
                 media_overlay,
                 fallback,
+                // A spine XHTML document is never itself a SMIL item, so it
+                // is never what a duration refinement targets.
+                media_duration: None,
             },
         );
     }
@@ -1010,6 +1013,14 @@ fn set_cover(book: &mut Book, cover: &CoverImage, transformations: &mut Vec<Tran
         n += 1;
     }
 
+    // When `path` collides with the *current* cover, the loop above exits
+    // without renaming and this overwrites that resource in place - the one
+    // in-place overwrite in this file that deliberately does NOT carry
+    // linkage forward. Unlike the chapter/CSS rewrites and the image/SVG
+    // renames elsewhere in this file, this is a genuine content replacement:
+    // the caller supplied a new cover image, so an old cover's `fallback`
+    // (say, declared because the old cover was some unsupported format) has
+    // no reason to still describe the new bytes replacing it.
     book.resources.insert(
         path.clone(),
         Resource {
@@ -1184,6 +1195,9 @@ fn process_images(
                             media_type: format.media_type().to_string(),
                             media_overlay: old.as_ref().and_then(|r| r.media_overlay.clone()),
                             fallback: old.as_ref().and_then(|r| r.fallback.clone()),
+                            // An image is never a SMIL item, so never what a
+                            // duration refinement targets.
+                            media_duration: None,
                         },
                     );
                     if book.cover.as_deref() == Some(path.as_str()) {
@@ -1229,6 +1243,9 @@ fn process_images(
                             } else {
                                 None
                             },
+                            // An image tile is never a SMIL item, so never
+                            // what a duration refinement targets.
+                            media_duration: None,
                         },
                     );
                     tile_paths.push(unique);
@@ -1367,6 +1384,9 @@ fn process_svgs(
                         media_type: media_type.to_string(),
                         media_overlay: old.as_ref().and_then(|r| r.media_overlay.clone()),
                         fallback: old.as_ref().and_then(|r| r.fallback.clone()),
+                        // An extracted raster is never a SMIL item, so never
+                        // what a duration refinement targets.
+                        media_duration: None,
                     },
                 );
                 if is_cover {
@@ -1434,6 +1454,9 @@ fn process_svgs(
                         media_type: enc.format.media_type().to_string(),
                         media_overlay: old.as_ref().and_then(|r| r.media_overlay.clone()),
                         fallback: old.as_ref().and_then(|r| r.fallback.clone()),
+                        // A rasterized SVG is never a SMIL item, so never
+                        // what a duration refinement targets.
+                        media_duration: None,
                     },
                 );
                 finalized.insert(new_path.clone());
@@ -1814,6 +1837,9 @@ fn store_filtered_css(
             media_type: "text/css".to_string(),
             media_overlay,
             fallback,
+            // A stylesheet is never a SMIL item, so never what a duration
+            // refinement targets.
+            media_duration: None,
         },
     );
     let mut next_part = 2usize;
