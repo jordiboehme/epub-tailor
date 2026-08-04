@@ -596,6 +596,7 @@ mod tests {
                 Resource {
                     data: data.to_vec(),
                     media_type: media_type.to_string(),
+                    ..Default::default()
                 },
             );
         }

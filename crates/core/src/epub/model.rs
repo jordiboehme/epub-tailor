@@ -187,12 +187,25 @@ pub struct Series {
 
 /// A single retained file: its raw bytes plus a declared or guessed media
 /// type. Text resources have already been normalized to UTF-8.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Resource {
     /// The file's raw bytes.
     pub data: Vec<u8>,
     /// The resource's media (MIME) type.
     pub media_type: String,
+    /// Resource path of the SMIL media-overlay document that narrates this
+    /// item, resolved from the source OPF's `<item media-overlay="idref">`
+    /// (an idref into the manifest, not a path - resolved to a path at read
+    /// time the same way [`crate::generic::reachable`] resolves it for its
+    /// own walk). `None` when the source item carried no `media-overlay`, or
+    /// its idref did not resolve to a manifest item.
+    pub media_overlay: Option<String>,
+    /// Resource path of this item's fallback target, from the source OPF's
+    /// `<item fallback="idref">`, resolved the same way. A fallback may
+    /// itself carry a further fallback (that resource's own
+    /// [`Self::fallback`]); a chain is carried one link per resource,
+    /// unflattened.
+    pub fallback: Option<String>,
 }
 
 /// One entry in the table of contents.

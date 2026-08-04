@@ -155,6 +155,20 @@ pub fn read_epub(bytes: &[u8]) -> Result<ReadEpub, ConvertError> {
         .values()
         .map(|item| (item.href.as_str(), item.media_type.as_str()))
         .collect();
+    // Keyed by the *narrating/fallback-carrying* item's own href, pointing at
+    // the (already id->href resolved) target's href - so the loop below can
+    // look each resource's linkage up by the same `path` it is keying
+    // `resources` on.
+    let href_media_overlay: std::collections::HashMap<&str, &str> = parsed_opf
+        .manifest
+        .values()
+        .filter_map(|item| Some((item.href.as_str(), item.media_overlay.as_deref()?)))
+        .collect();
+    let href_fallback: std::collections::HashMap<&str, &str> = parsed_opf
+        .manifest
+        .values()
+        .filter_map(|item| Some((item.href.as_str(), item.fallback.as_deref()?)))
+        .collect();
 
     let mut resources = IndexMap::new();
     for (path, data) in resources_raw {
@@ -171,11 +185,15 @@ pub fn read_epub(bytes: &[u8]) -> Result<ReadEpub, ConvertError> {
         } else {
             data
         };
+        let media_overlay = href_media_overlay.get(path.as_str()).map(|s| s.to_string());
+        let fallback = href_fallback.get(path.as_str()).map(|s| s.to_string());
         resources.insert(
             path,
             Resource {
                 data: final_data,
                 media_type,
+                media_overlay,
+                fallback,
             },
         );
     }
@@ -563,6 +581,12 @@ struct ManifestItem {
     href: String,
     media_type: String,
     properties: Vec<String>,
+    /// Resolved href of the SMIL document this item's `media-overlay` idref
+    /// names, or `None` if the item carries none or the idref is dangling.
+    media_overlay: Option<String>,
+    /// Resolved href of the item this item's `fallback` idref names, or
+    /// `None` if absent or dangling.
+    fallback: Option<String>,
 }
 
 struct ParsedOpf {
@@ -594,7 +618,7 @@ fn parse_opf(
         .children()
         .find(|n| n.is_element() && n.tag_name().name() == "manifest")
         .ok_or_else(|| ConvertError::InvalidEpub("OPF missing <manifest>".to_string()))?;
-    let manifest = parse_manifest(manifest_node, opf_dir);
+    let manifest = parse_manifest(manifest_node, opf_dir, warnings);
 
     let spine_node = package
         .children()
@@ -827,12 +851,50 @@ fn parse_metadata(
     }
 }
 
-fn parse_manifest(manifest_node: Node, opf_dir: &str) -> IndexMap<String, ManifestItem> {
-    let mut manifest = IndexMap::new();
-    for item in manifest_node
+fn parse_manifest(
+    manifest_node: Node,
+    opf_dir: &str,
+    warnings: &mut Vec<Warning>,
+) -> IndexMap<String, ManifestItem> {
+    let item_nodes: Vec<Node> = manifest_node
         .children()
         .filter(|n| n.is_element() && n.tag_name().name() == "item")
-    {
+        .collect();
+
+    // id -> resolved href, built up front so a `media-overlay`/`fallback`
+    // idref resolves regardless of document order. Mirrors
+    // `generic::reachable::opf_refs`, which resolves the same two attributes
+    // the same way for its own reachability walk.
+    let id_href: std::collections::HashMap<&str, String> = item_nodes
+        .iter()
+        .filter_map(|n| {
+            let id = n.attribute("id")?;
+            let href = n.attribute("href")?;
+            Some((id, normalize_href(opf_dir, href)))
+        })
+        .collect();
+
+    // Resolve `item`'s `attr` idref to the href `id_href` resolved it to, or
+    // `None` (with a warning) when the idref names no manifest item - a
+    // malformed source file, not something write_epub can repair later.
+    let resolve_idref = |item: Node, attr: &str, warnings: &mut Vec<Warning>| -> Option<String> {
+        let idref = item.attribute(attr)?;
+        if let Some(href) = id_href.get(idref) {
+            return Some(href.clone());
+        }
+        warnings.push(Warning {
+            message: format!(
+                "manifest item '{}' has {attr}=\"{idref}\", which does not match any \
+                 manifest item's id; dropping the linkage",
+                item.attribute("id").unwrap_or("")
+            ),
+            file: None,
+        });
+        None
+    };
+
+    let mut manifest = IndexMap::new();
+    for item in &item_nodes {
         let (Some(id), Some(href_raw)) = (item.attribute("id"), item.attribute("href")) else {
             continue;
         };
@@ -842,12 +904,16 @@ fn parse_manifest(manifest_node: Node, opf_dir: &str) -> IndexMap<String, Manife
             .attribute("properties")
             .map(|p| p.split_whitespace().map(String::from).collect())
             .unwrap_or_default();
+        let media_overlay = resolve_idref(*item, "media-overlay", warnings);
+        let fallback = resolve_idref(*item, "fallback", warnings);
         manifest.insert(
             id.to_string(),
             ManifestItem {
                 href,
                 media_type,
                 properties,
+                media_overlay,
+                fallback,
             },
         );
     }

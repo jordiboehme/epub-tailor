@@ -541,6 +541,7 @@ pub fn convert(input: Input, opts: &ConvertOptions) -> Result<Converted, Convert
             Resource {
                 data: ET_STYLES.as_bytes().to_vec(),
                 media_type: "text/css".to_string(),
+                ..Default::default()
             },
         );
         transformations.push(Transformation {
@@ -597,11 +598,23 @@ pub fn convert(input: Input, opts: &ConvertOptions) -> Result<Converted, Convert
 
     for (path, doc) in &chapters {
         let bytes = serialize_xhtml(doc);
+        // This overwrites an already-existing resource (a split chapter part
+        // is a fresh path with nothing to carry) in place, so any
+        // media-overlay/fallback linkage the source OPF attached to it must
+        // survive the DOM round-trip - dropping it here would silently lose
+        // a read-aloud book's narration wiring downstream in `write_epub`.
+        let (media_overlay, fallback) = book
+            .resources
+            .get(path)
+            .map(|r| (r.media_overlay.clone(), r.fallback.clone()))
+            .unwrap_or_default();
         book.resources.insert(
             path.clone(),
             Resource {
                 data: bytes,
                 media_type: "application/xhtml+xml".to_string(),
+                media_overlay,
+                fallback,
             },
         );
     }
@@ -695,6 +708,7 @@ pub fn convert(input: Input, opts: &ConvertOptions) -> Result<Converted, Convert
         opts.features
             .normalize_identity
             .then_some(crate::epub::write::GENERIC_MODIFIED),
+        &mut warnings,
     )?;
     let bytes_out = epub.len() as u64;
 
@@ -1001,6 +1015,7 @@ fn set_cover(book: &mut Book, cover: &CoverImage, transformations: &mut Vec<Tran
         Resource {
             data: cover.data.clone(),
             media_type: cover.media_type.clone(),
+            ..Default::default()
         },
     );
     let replaced = book.cover.is_some();
@@ -1158,12 +1173,17 @@ fn process_images(
                         stem_of(&path),
                         format.ext(),
                     );
-                    book.resources.shift_remove(&path);
+                    // Same resource, new path: carry over whatever linkage it
+                    // had (rare for an image, but `fallback` can legally
+                    // target one) rather than dropping it on a format change.
+                    let old = book.resources.shift_remove(&path);
                     book.resources.insert(
                         unique.clone(),
                         Resource {
                             data: out,
                             media_type: format.media_type().to_string(),
+                            media_overlay: old.as_ref().and_then(|r| r.media_overlay.clone()),
+                            fallback: old.as_ref().and_then(|r| r.fallback.clone()),
                         },
                     );
                     if book.cover.as_deref() == Some(path.as_str()) {
@@ -1182,7 +1202,14 @@ fn process_images(
                 let tile_count = tiles.len();
                 let dir = parent_dir(&path);
                 let stem = stem_of(&path).to_string();
-                book.resources.shift_remove(&path);
+                // Any linkage the source image had (rare, but `fallback` can
+                // legally target an image) goes to the first tile - the same
+                // "first part stands in for the whole" choice the cover
+                // reassignment below already makes.
+                let old = book.resources.shift_remove(&path);
+                let (first_media_overlay, first_fallback) = old
+                    .map(|r| (r.media_overlay, r.fallback))
+                    .unwrap_or_default();
                 let mut tile_paths = Vec::with_capacity(tile_count);
                 for (index, tile) in tiles.into_iter().enumerate() {
                     let tile_stem = format!("{stem}-p{}", index + 1);
@@ -1192,6 +1219,16 @@ fn process_images(
                         Resource {
                             data: tile.data,
                             media_type: "image/jpeg".to_string(),
+                            media_overlay: if index == 0 {
+                                first_media_overlay.clone()
+                            } else {
+                                None
+                            },
+                            fallback: if index == 0 {
+                                first_fallback.clone()
+                            } else {
+                                None
+                            },
                         },
                     );
                     tile_paths.push(unique);
@@ -1320,12 +1357,16 @@ fn process_svgs(
             }
             SvgAction::Extract(bytes, ext, media_type) => {
                 let new_path = reserve_unique(&mut reserved, &dir, stem_of(&path), ext);
-                book.resources.shift_remove(&path);
+                // Same resource, new path: carry over whatever linkage the
+                // SVG wrapper had rather than dropping it on extraction.
+                let old = book.resources.shift_remove(&path);
                 book.resources.insert(
                     new_path.clone(),
                     Resource {
                         data: bytes,
                         media_type: media_type.to_string(),
+                        media_overlay: old.as_ref().and_then(|r| r.media_overlay.clone()),
+                        fallback: old.as_ref().and_then(|r| r.fallback.clone()),
                     },
                 );
                 if is_cover {
@@ -1383,12 +1424,16 @@ fn process_svgs(
                 );
                 let new_path =
                     reserve_unique(&mut reserved, &dir, stem_of(&path), enc.format.ext());
-                book.resources.shift_remove(&path);
+                // Same resource, new path: carry over whatever linkage the
+                // SVG had rather than dropping it on rasterization.
+                let old = book.resources.shift_remove(&path);
                 book.resources.insert(
                     new_path.clone(),
                     Resource {
                         data: enc.data,
                         media_type: enc.format.media_type().to_string(),
+                        media_overlay: old.as_ref().and_then(|r| r.media_overlay.clone()),
+                        fallback: old.as_ref().and_then(|r| r.fallback.clone()),
                     },
                 );
                 finalized.insert(new_path.clone());
@@ -1497,6 +1542,7 @@ fn rasterize_inline_svgs(
             Resource {
                 data: enc.data,
                 media_type: enc.format.media_type().to_string(),
+                ..Default::default()
             },
         ));
         transformations.push(Transformation {
@@ -1613,6 +1659,7 @@ fn rasterize_tables(
             Resource {
                 data: enc.data,
                 media_type: enc.format.media_type().to_string(),
+                ..Default::default()
             },
         ));
         transformations.push(Transformation {
@@ -1751,11 +1798,22 @@ fn store_filtered_css(
     warnings: &mut Vec<Warning>,
 ) {
     let chunks = caps::split_css(&filtered.css, opts.device.css_max_bytes);
+    // `path` is an existing CSS resource (the caller collected it from
+    // `book.resources`), so this is an in-place update: carry over any
+    // fallback linkage it already had rather than silently dropping it (see
+    // the same carry-forward in the chapter-serialization loop above).
+    let (media_overlay, fallback) = book
+        .resources
+        .get(path)
+        .map(|r| (r.media_overlay.clone(), r.fallback.clone()))
+        .unwrap_or_default();
     book.resources.insert(
         path.to_string(),
         Resource {
             data: chunks[0].clone().into_bytes(),
             media_type: "text/css".to_string(),
+            media_overlay,
+            fallback,
         },
     );
     let mut next_part = 2usize;
@@ -1766,6 +1824,7 @@ fn store_filtered_css(
             Resource {
                 data: chunk.clone().into_bytes(),
                 media_type: "text/css".to_string(),
+                ..Default::default()
             },
         );
         next_part = used_part + 1;
@@ -2098,6 +2157,7 @@ mod tests {
             Resource {
                 data: data.to_vec(),
                 media_type: media_type.to_string(),
+                ..Default::default()
             },
         );
         Book {
@@ -2322,6 +2382,7 @@ mod tests {
             Resource {
                 data: Vec::new(),
                 media_type: "text/css".to_string(),
+                ..Default::default()
             },
         );
         resources.insert(
@@ -2329,6 +2390,7 @@ mod tests {
             Resource {
                 data: b"/* pre-existing, unrelated */".to_vec(),
                 media_type: "text/css".to_string(),
+                ..Default::default()
             },
         );
         let mut book = Book {

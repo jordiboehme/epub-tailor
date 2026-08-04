@@ -118,6 +118,95 @@ fn generic_replaces_a_uuid_unique_identifier_deterministically() {
     );
 }
 
+/// A chapter narrated by a SMIL media overlay, plus an unsupported-type item
+/// with a fallback - both link their target by manifest id, which the writer
+/// must remap through its own id reassignment (`IdAllocator`) rather than
+/// copy verbatim or silently drop.
+///
+/// The linking item's `media-overlay`/`fallback` idref (`narration-id`,
+/// `fallback-id`) is deliberately a *different* string from its target's
+/// `href` (`mo1`, `fb`), so a reader that just echoed the idref back as if it
+/// were already a path - instead of actually resolving id -> href through the
+/// manifest, the way `generic::reachable::opf_refs` does - could not pass
+/// this test by coincidence.
+///
+/// The package document sits at the zip root (not the usual `OEBPS/`), and
+/// the SMIL/fallback targets are given bare, extension-less hrefs (`mo1`,
+/// `fb`) that are also valid XML-id shapes: `IdAllocator::allocate` derives
+/// the *regenerated* id from a resource's path, and a path that already
+/// looks like an id round-trips through it unchanged. That lets this fixture
+/// pin the regenerated ids by literal string, without needing to know the
+/// allocator's internals from the test side.
+fn book_with_media_overlay() -> Vec<u8> {
+    common::build_epub(&[
+        ("mimetype", b"application/epub+zip"),
+        (
+            "META-INF/container.xml",
+            br#"<?xml version="1.0" encoding="UTF-8"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles>
+    <rootfile full-path="content.opf" media-type="application/oebps-package+xml"/>
+  </rootfiles>
+</container>"#,
+        ),
+        (
+            "content.opf",
+            br#"<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="pub-id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="pub-id">urn:uuid:2f6b7e2a-4c2d-4c2d-8a3e-9b6f9e6a1a10</dc:identifier>
+    <dc:title>Narrated Book</dc:title>
+    <dc:language>en</dc:language>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="ch1" href="chapter.xhtml" media-type="application/xhtml+xml" media-overlay="narration-id"/>
+    <item id="narration-id" href="mo1" media-type="application/smil+xml"/>
+    <item id="weird" href="weird.dat" media-type="application/x-weird+xml" fallback="fallback-id"/>
+    <item id="fallback-id" href="fb" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine><itemref idref="ch1"/></spine>
+</package>"#,
+        ),
+        ("nav.xhtml", common::NAV_XHTML),
+        (
+            "chapter.xhtml",
+            br#"<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>C</title></head>
+<body><p>Text.</p></body></html>"#,
+        ),
+        (
+            "mo1",
+            br#"<smil xmlns="http://www.w3.org/ns/SMIL" xmlns:epub="http://www.idpf.org/2007/ops" version="3.0">
+<body><seq id="s1" epub:textref="chapter.xhtml">
+<par id="p1"><text src="chapter.xhtml"/><audio src="track.mp3"/></par>
+</seq></body></smil>"#,
+        ),
+        ("weird.dat", b"weird payload"),
+        (
+            "fb",
+            br#"<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>Fallback</title></head>
+<body><p>Fallback.</p></body></html>"#,
+        ),
+    ])
+}
+
+#[test]
+fn a_media_overlay_and_fallback_survive_the_rebuild() {
+    let out =
+        convert(Input::Epub(book_with_media_overlay()), &opts_for(&["epub"])).expect("converts");
+    let opf = opf_of(&out.epub);
+    assert!(
+        opf.contains("media-overlay=\"mo1\""),
+        "narration linkage lost:\n{opf}"
+    );
+    assert!(
+        opf.contains("fallback=\"fb\""),
+        "fallback chain lost:\n{opf}"
+    );
+}
+
 /// A one-pixel JPEG carrying an APP1 (EXIF) segment.
 fn jpeg_with_exif() -> Vec<u8> {
     let mut out = vec![0xFF, 0xD8]; // SOI

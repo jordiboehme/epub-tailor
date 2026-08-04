@@ -594,6 +594,7 @@ mod tests {
             Resource {
                 data: Vec::new(),
                 media_type: "application/xhtml+xml".to_string(),
+                ..Default::default()
             },
         );
         resources.insert(
@@ -601,6 +602,7 @@ mod tests {
             Resource {
                 data: Vec::new(),
                 media_type: "application/xhtml+xml".to_string(),
+                ..Default::default()
             },
         );
         let book = Book {

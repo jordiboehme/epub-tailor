@@ -206,6 +206,7 @@ mod tests {
             Resource {
                 data: jpeg.clone(),
                 media_type: "image/jpeg".to_string(),
+                ..Default::default()
             },
         );
         resources.insert(
@@ -213,6 +214,7 @@ mod tests {
             Resource {
                 data: png.clone(),
                 media_type: "image/png".to_string(),
+                ..Default::default()
             },
         );
         let mut book = Book {
@@ -305,6 +307,7 @@ mod tests {
             Resource {
                 data: jpeg,
                 media_type: media_type.to_string(),
+                ..Default::default()
             },
         );
         let mut book = Book {
@@ -381,6 +384,7 @@ mod tests {
             Resource {
                 data: png,
                 media_type: media_type.to_string(),
+                ..Default::default()
             },
         );
         let mut book = Book {

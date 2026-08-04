@@ -67,7 +67,7 @@
   </metadata>
   <manifest>
 {%- for item in items %}
-    <item id="{{ item.id }}" href="{{ item.href }}" media-type="{{ item.media_type }}"{% if !item.properties.is_empty() %} properties="{{ item.properties }}"{% endif %}/>
+    <item id="{{ item.id }}" href="{{ item.href }}" media-type="{{ item.media_type }}"{% if !item.properties.is_empty() %} properties="{{ item.properties }}"{% endif %}{% if !item.media_overlay.is_empty() %} media-overlay="{{ item.media_overlay }}"{% endif %}{% if !item.fallback.is_empty() %} fallback="{{ item.fallback }}"{% endif %}/>
 {%- endfor %}
   </manifest>
   <spine{% if !ncx_id.is_empty() %} toc="{{ ncx_id }}"{% endif %}>
