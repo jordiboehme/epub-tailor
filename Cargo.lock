@@ -1332,6 +1332,7 @@ dependencies = [
 name = "epub-tailor-core"
 version = "0.7.0"
 dependencies = [
+ "aho-corasick",
  "askama",
  "comrak",
  "encoding_rs",

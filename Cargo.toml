@@ -39,6 +39,10 @@ lightningcss = { version = "=1.0.0-alpha.72", default-features = false, features
     "visitor",
 ] }
 unicode-normalization = "0.1"
+# Multi-pattern substring search, for the pruning safety net: it must look for
+# every dropped file's basename in every surviving document, which as a needle
+# loop is O(dropped x bytes). Already in the tree via `regex`.
+aho-corasick = "1"
 sha1 = "0.10"
 # Default features pull in the standalone `comrak` CLI binary (clap, bon,
 # shell-words, xdg) and syntax highlighting (syntect-onig) - none of which we

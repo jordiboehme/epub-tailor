@@ -20,12 +20,20 @@
 //! dead `xlink:href` lookup silently deleted real cover art, and a check
 //! built from the same broken extraction would have re-derived the same
 //! empty result and stayed silent too). So the net here shares no code with
-//! the walk at all: a plain byte-substring search for each dropped file's
-//! basename inside every surviving textual document. Cruder, but independent
-//! - which is the entire point of a safety net.
+//! the walk at all: [`scan_for_dangling_basenames`] searches each surviving
+//! textual document's raw bytes for each dropped file's basename as a plain
+//! substring - no parsing, no re-derivation of the walk's extraction. Cruder,
+//! but independent - which is the entire point of a safety net.
+//!
+//! That scan is also bounded to one pass per surviving document, regardless
+//! of how many files were dropped. See [`scan_for_dangling_basenames`]'s docs
+//! for the blowup a per-dropped-file rescan produced on adversarial input,
+//! and for why the fix had to preserve substring semantics exactly.
 
 use std::collections::HashMap;
 use std::collections::HashSet;
+
+use aho_corasick::AhoCorasick;
 
 use super::normalize_media_type;
 use crate::epub::Book;
@@ -333,6 +341,108 @@ fn css_refs(css: &str, base_dir: &str) -> Vec<String> {
     out
 }
 
+/// A dropped path's basename, or `None` when it has none (a path ending in
+/// `/`). Shared by [`scan_for_dangling_basenames`] and the warning it feeds
+/// so the two cannot disagree about what a basename is.
+fn basename_of(path: &str) -> Option<&str> {
+    path.rsplit('/').next().filter(|b| !b.is_empty())
+}
+
+/// [`prune`]'s independent safety net, factored out so it can be driven by a
+/// plain `&[(&str, &[u8])]` in tests. For each `dropped` path's basename,
+/// finds every document in `docs` whose raw bytes contain that basename as a
+/// substring. See the module docs for why this shares no code with the
+/// reachability walk, and must stay that way.
+///
+/// Bounded to one pass per document, not one substring search per dropped
+/// file. The loop this replaced re-ran a `windows(needle.len())` search over
+/// every surviving document for *each* dropped file, i.e. O(dropped × total
+/// textual bytes): on adversarial input (this crate's input is an arbitrary
+/// downloaded EPUB) - thousands of dropped stray files alongside tens of MB
+/// of surviving text - that is on the order of hundreds of GB of byte
+/// comparisons for one conversion. An Aho-Corasick automaton searches for
+/// every basename at once in a single pass, so the cost is O(total textual
+/// bytes + matches) no matter how long `dropped` is.
+///
+/// The semantics stay *exactly* those of the nested `windows()` loop -
+/// unanchored, byte-for-byte substring containment. That equality is the
+/// point, and `scan_agrees_with_a_naive_substring_search` pins it: an earlier
+/// attempt at this bound instead tokenized each document on bytes that cannot
+/// appear in a filename and compared whole tokens, which silently stopped
+/// matching any basename containing a space, a parenthesis or an ampersand -
+/// and `normalize_entry_name` percent-*decodes* zip entry names, so
+/// `OEBPS/my%20pic.png` becomes the key `OEBPS/my pic.png` and spaces in keys
+/// are routine. A safety net that exists to prevent silent deletion must not
+/// itself lose matches to buy speed.
+///
+/// Returns `(document_path, dropped_path)` pairs in a fixed, deterministic
+/// order: outer by `dropped`'s order, inner by `docs`'s order - the same
+/// order the original nested loop produced, and never derived from a
+/// `HashSet`'s iteration order, so a caller building a report from these
+/// stays byte-identical run to run.
+///
+/// Note: like the loop it replaces, this only ever matches a basename's
+/// literal bytes - a reference spelled with percent-encoding (`my%20pic.png`)
+/// will not match a dropped file named `my pic.png`. That is an existing,
+/// accepted limitation of a raw byte scan, not something this change alters.
+fn scan_for_dangling_basenames(
+    dropped: &[String],
+    docs: &[(&str, &[u8])],
+) -> Vec<(String, String)> {
+    // Deduped, because two dropped paths in different directories can share a
+    // basename and the automaton only needs one pattern per distinct needle.
+    // The map back from basename to pattern index keeps the pairing below a
+    // hash lookup per dropped path rather than a linear search, so nothing
+    // here is quadratic in `dropped.len()` either.
+    let mut needles: Vec<&str> = Vec::new();
+    let mut pattern_of: HashMap<&str, usize> = HashMap::new();
+    for path in dropped {
+        if let Some(basename) = basename_of(path) {
+            pattern_of.entry(basename).or_insert_with(|| {
+                needles.push(basename);
+                needles.len() - 1
+            });
+        }
+    }
+    if needles.is_empty() {
+        return Vec::new();
+    }
+    // `new` only fails on a pattern set too large for the automaton. A net
+    // that cannot be built reports nothing rather than aborting the
+    // conversion: it is advisory over a walk that is already correct.
+    let Ok(automaton) = AhoCorasick::new(&needles) else {
+        return Vec::new();
+    };
+
+    // One pass per document, whatever `dropped.len()` is. Overlapping search
+    // (not leftmost) because a non-overlapping walk steps past the remainder
+    // of each match, which would hide a needle nested inside another one -
+    // `a.png` inside `data.png` - and the loop this replaced, being a
+    // per-needle `windows()` scan, found both.
+    let found_per_doc: Vec<HashSet<usize>> = docs
+        .iter()
+        .map(|(_, data)| {
+            automaton
+                .find_overlapping_iter(data)
+                .map(|m| m.pattern().as_usize())
+                .collect()
+        })
+        .collect();
+
+    let mut hits = Vec::new();
+    for dropped_path in dropped {
+        let Some(pattern) = basename_of(dropped_path).and_then(|b| pattern_of.get(b)) else {
+            continue;
+        };
+        for ((path, _), found) in docs.iter().zip(&found_per_doc) {
+            if found.contains(pattern) {
+                hits.push(((*path).to_string(), dropped_path.clone()));
+            }
+        }
+    }
+    hits
+}
+
 /// Every path an NCX (`application/x-dtbncx+xml`) names through a
 /// `<content src="...">` element - the way `navPoint`, `navTarget` and
 /// `pageTarget` entries all point at spine documents (and occasionally at
@@ -551,34 +661,34 @@ pub(crate) fn prune(
         book.resources.shift_remove(path);
     }
 
-    // Independent safety net: for each dropped file's basename, a plain byte
-    // search over every surviving textual document's raw bytes. See the
-    // module docs for why this shares no code with the walk above - that
-    // independence is what lets it catch an edge type `refs_of` itself
+    // Independent safety net: see `scan_for_dangling_basenames`'s docs, and
+    // the module docs, for why this shares no code with the walk above -
+    // that independence is what lets it catch an edge type `refs_of` itself
     // fails to extract, which a check built from `refs_of` provably cannot.
     // Cheap false positives (a basename mentioned in prose) are the accepted
     // cost; a silent deletion is not.
-    for dropped_path in &dropped_ordered {
-        let Some(basename) = dropped_path.rsplit('/').next().filter(|b| !b.is_empty()) else {
+    let textual_docs: Vec<(&str, &[u8])> = book
+        .resources
+        .iter()
+        .filter(|(_, resource)| {
+            TEXTUAL_MEDIA_TYPES.contains(&normalize_media_type(&resource.media_type).as_str())
+        })
+        .map(|(path, resource)| (path.as_str(), resource.data.as_slice()))
+        .collect();
+    for (path, dropped_path) in scan_for_dangling_basenames(&dropped_ordered, &textual_docs) {
+        // Always `Some`: the scan only pairs a `dropped_path` whose basename
+        // it already resolved through this same helper, so a `None` here
+        // would mean the two had drifted - skip rather than invent a name.
+        let Some(basename) = basename_of(&dropped_path) else {
             continue;
         };
-        let needle = basename.as_bytes();
-        for (path, resource) in &book.resources {
-            if !TEXTUAL_MEDIA_TYPES.contains(&normalize_media_type(&resource.media_type).as_str()) {
-                continue;
-            }
-            if resource.data.len() >= needle.len()
-                && resource.data.windows(needle.len()).any(|w| w == needle)
-            {
-                warnings.push(Warning {
-                    message: format!(
-                        "{path} still mentions {basename} (from {dropped_path}, dropped as \
-                         unreferenced) - the reachability graph may be missing an edge"
-                    ),
-                    file: Some(path.clone()),
-                });
-            }
-        }
+        warnings.push(Warning {
+            message: format!(
+                "{path} still mentions {basename} (from {dropped_path}, dropped as \
+                 unreferenced) - the reachability graph may be missing an edge"
+            ),
+            file: Some(path.clone()),
+        });
     }
 }
 
@@ -1214,6 +1324,148 @@ p { background: url('img/bg.png'); }"#;
                 .iter()
                 .any(|w| w.message.contains("social.png") && w.message.contains("chapter.xhtml")),
             "the independent substring scan must catch what the walk missed: {warnings:?}"
+        );
+    }
+
+    /// The scan this replaced, written the obvious way: one `windows()` pass
+    /// per dropped file per document. Slow by construction - which is the
+    /// whole reason it was replaced - but its semantics are the contract, so
+    /// it stands here as the reference the fast version is checked against.
+    fn naive_scan(dropped: &[String], docs: &[(&str, &[u8])]) -> Vec<(String, String)> {
+        let mut hits = Vec::new();
+        for dropped_path in dropped {
+            let Some(basename) = basename_of(dropped_path) else {
+                continue;
+            };
+            let needle = basename.as_bytes();
+            for (path, data) in docs {
+                if data.len() >= needle.len() && data.windows(needle.len()).any(|w| w == needle) {
+                    hits.push(((*path).to_string(), dropped_path.clone()));
+                }
+            }
+        }
+        hits
+    }
+
+    #[test]
+    fn scan_agrees_with_a_naive_substring_search() {
+        // The bound must not cost coverage. An earlier attempt tokenized each
+        // document on bytes that cannot appear in a filename and compared
+        // whole tokens, which silently stopped matching every basename
+        // containing a space, a parenthesis, an ampersand or an apostrophe -
+        // and stopped matching plain names abutting non-ASCII punctuation.
+        // Every case below is one the tokenizing version got wrong and the
+        // scan it replaced got right, so this fails against that version and
+        // passes against both the old loop and the automaton.
+        let dropped: Vec<String> = [
+            "OEBPS/my pic.png",     // space: routine, %20 is decoded into the key
+            "OEBPS/image(1).png",   // parentheses
+            "OEBPS/Q&A.png",        // ampersand
+            "OEBPS/it's.png",       // apostrophe
+            "OEBPS/fig 1, rev.png", // space and comma
+            "OEBPS/图1.png",        // non-ASCII, abutting non-ASCII punctuation
+            "OEBPS/stray.png",      // plain, abutting typographic quotes
+            "OEBPS/a.png",          // nested inside another needle's match
+            "OEBPS/data.png",       // contains `a.png`
+            "OEBPS/never-mentioned.png",
+            "OEBPS/", // no basename at all
+        ]
+        .iter()
+        .map(|s| (*s).to_string())
+        .collect();
+        let docs: Vec<(&str, &[u8])> = vec![
+            (
+                "OEBPS/c1.xhtml",
+                r#"<meta content="my pic.png"/><img src="image(1).png">"#.as_bytes(),
+            ),
+            (
+                "OEBPS/c2.xhtml",
+                "Q&A.png and it's.png and fig 1, rev.png".as_bytes(),
+            ),
+            (
+                "OEBPS/c3.xhtml",
+                "见 图1.png。 und „stray.png“ hier".as_bytes(),
+            ),
+            ("OEBPS/c4.xhtml", r#"<img src="data.png">"#.as_bytes()),
+            ("OEBPS/c5.xhtml", "nothing at all".as_bytes()),
+        ];
+
+        let expected = naive_scan(&dropped, &docs);
+        assert_eq!(scan_for_dangling_basenames(&dropped, &docs), expected);
+        // Guard against the reference and the real thing agreeing on nothing:
+        // an all-empty comparison would pass no matter how broken either was.
+        assert!(
+            expected.len() >= 9,
+            "the fixture must actually produce hits, got {expected:?}"
+        );
+    }
+
+    #[test]
+    fn scan_finds_a_needle_nested_inside_another_needles_match() {
+        // `data.png` contains `a.png`. A leftmost non-overlapping search
+        // consumes `data.png` and never reports `a.png`; the per-needle
+        // `windows()` loop reported both, so the automaton must too.
+        let dropped = vec!["OEBPS/a.png".to_string(), "OEBPS/data.png".to_string()];
+        let doc = br#"<img src="data.png">"#;
+        let hits = scan_for_dangling_basenames(&dropped, &[("OEBPS/c.xhtml", doc)]);
+        assert_eq!(
+            hits,
+            vec![
+                ("OEBPS/c.xhtml".to_string(), "OEBPS/a.png".to_string()),
+                ("OEBPS/c.xhtml".to_string(), "OEBPS/data.png".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn the_safety_net_stays_linear_in_the_number_of_dropped_files() {
+        // 5000 dropped files over ~2 MB of surviving text: 10^10 byte
+        // comparisons for the old per-needle loop (tens of seconds), a single
+        // ~2 MB pass for the automaton (milliseconds). Wall-clock is a coarse
+        // instrument, but with three orders of magnitude between the two the
+        // bound discriminates even on a loaded machine - and unlike a counter
+        // of documents visited it cannot be satisfied by a per-needle loop
+        // hidden inside the per-document one.
+        let dropped: Vec<String> = (0..5000)
+            .map(|i| format!("OEBPS/s{i}-unused.png"))
+            .collect();
+        let doc = "<p>this paragraph names none of them</p>".repeat(50_000);
+        let start = std::time::Instant::now();
+        let hits = scan_for_dangling_basenames(&dropped, &[("OEBPS/c.xhtml", doc.as_bytes())]);
+        let elapsed = start.elapsed();
+        assert!(hits.is_empty());
+        assert!(
+            elapsed < std::time::Duration::from_secs(5),
+            "5000 needles over {} bytes took {elapsed:?}; the scan is not bounded",
+            doc.len()
+        );
+    }
+
+    #[test]
+    fn the_safety_net_reports_every_dropped_path_sharing_a_basename() {
+        // Two different dropped files can share a basename (same file name,
+        // different directory). The automaton carries one pattern per
+        // distinct needle, so the pairing step must still fan that single
+        // match back out to one hit per dropped path.
+        let dropped = vec![
+            "OEBPS/images/dup.png".to_string(),
+            "OEBPS/other/dup.png".to_string(),
+        ];
+        let doc = br#"<img src="dup.png">"#;
+        let hits = scan_for_dangling_basenames(&dropped, &[("OEBPS/c.xhtml", doc)]);
+        assert_eq!(
+            hits,
+            vec![
+                (
+                    "OEBPS/c.xhtml".to_string(),
+                    "OEBPS/images/dup.png".to_string()
+                ),
+                (
+                    "OEBPS/c.xhtml".to_string(),
+                    "OEBPS/other/dup.png".to_string()
+                ),
+            ],
+            "both dropped paths sharing a basename must be reported, in dropped order"
         );
     }
 
