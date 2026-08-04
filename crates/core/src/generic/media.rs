@@ -386,6 +386,33 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_standalone_marker_before_the_scan_is_copied_without_a_length_read() {
+        // TEM and RSTn carry no length field. Reading two bytes after them as
+        // a length misparses the rest of the file. This places one BEFORE the
+        // SOS, which is the only position the dedicated branch handles - the
+        // existing RST test puts one inside the scan data, where the verbatim
+        // copy-to-end path covers it and the branch is never reached.
+        let mut jpeg = vec![0xFF, 0xD8]; // SOI
+        jpeg.extend_from_slice(&[0xFF, 0x01]); // TEM, no length
+        let payload = b"Exif\0\0BUYER-1";
+        jpeg.extend_from_slice(&[0xFF, 0xE1]);
+        jpeg.extend_from_slice(&((payload.len() + 2) as u16).to_be_bytes());
+        jpeg.extend_from_slice(payload);
+        jpeg.extend_from_slice(&[0xFF, 0xDA, 0x00, 0x02, 0xFF, 0xD9]); // SOS then EOI
+
+        let out = strip_jpeg(&jpeg).expect("still parseable with a standalone marker");
+        assert!(
+            !out.windows(5).any(|w| w == b"BUYER"),
+            "EXIF must still be stripped"
+        );
+        assert!(
+            out.windows(2).any(|w| w == [0xFF, 0x01]),
+            "the standalone marker itself must be preserved"
+        );
+        assert!(out.ends_with(&[0xFF, 0xD9]));
+    }
+
     /// A complete, parseable JPEG (SOI through EOI) carrying a droppable
     /// APP1 (EXIF) segment with `payload` - unlike
     /// `truncated_jpeg_with_a_droppable_segment`, this one is a shape
