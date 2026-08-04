@@ -837,3 +837,27 @@ fn a_nav_path_the_writer_will_synthesize_is_not_scrubbed_as_content() {
         out.report.transformations
     );
 }
+
+/// The companion to `a_nav_path_the_writer_will_synthesize_is_not_scrubbed_as_content`
+/// one layer down: the prune walk must also root on the path the writer will
+/// use, or it drops the stray nav and reports "nothing references" it while
+/// the writer ships a regenerated nav at that exact path.
+#[test]
+fn a_nav_path_the_writer_will_synthesize_is_not_reported_as_unreferenced() {
+    let out = convert(
+        Input::Epub(common::epub2_with_a_stray_nav_xhtml()),
+        &opts_for(&["generic"]),
+    )
+    .expect("converts");
+    assert!(
+        !out.report.transformations.iter().any(|t| {
+            t.kind == "generic-unreferenced" && t.file.as_deref() == Some("OEBPS/nav.xhtml")
+        }),
+        "must not report dropping a path the writer then writes: {:#?}",
+        out.report.transformations
+    );
+    assert!(
+        common::entry(&out.epub, "OEBPS/nav.xhtml").is_some(),
+        "the writer ships a nav at that path either way"
+    );
+}

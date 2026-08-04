@@ -209,13 +209,27 @@ pub fn read_epub(bytes: &[u8]) -> Result<ReadEpub, ConvertError> {
     // and needs to declare nothing.
     if let Some(enc_bytes) = encryption_xml {
         let enc_text = String::from_utf8_lossy(&enc_bytes);
-        let unique_id = parsed_opf.metadata.identifier.as_deref().unwrap_or("");
+        // The raw identifier text, NOT `metadata.identifier`: see
+        // `ParsedOpf::identifier_for_font_key` for why whitespace folding
+        // upstream would silently produce the wrong SHA-1 here.
+        let unique_id = parsed_opf
+            .identifier_for_font_key
+            .as_deref()
+            .unwrap_or_default();
         // XOR is its own inverse, so applying it to one resource twice would
         // silently restore the scrambled bytes. Two `EncryptedData` entries
         // can name the same resource - a literal duplicate, two differently
         // spelled URIs that `normalize_href` resolves to the same path, or
         // two entries with different algorithms over one resource - so each
         // normalized path is de-obfuscated at most once, tracked here.
+        //
+        // A path is recorded only once a key was actually derived and applied.
+        // Recording on entry instead would let a FAILED attempt burn the slot:
+        // an Adobe entry whose identifier is not a `urn:uuid:` yields no key
+        // and leaves the bytes untouched, so a following IDPF entry for the
+        // same font - the one that would have worked - was skipped as a
+        // duplicate and the font stayed scrambled. Retrying after a failure is
+        // safe precisely because a failure changes nothing.
         let mut deobfuscated_paths: std::collections::HashSet<String> =
             std::collections::HashSet::new();
         for (uri, algorithm) in font_obfuscated_resources(&enc_text)? {
@@ -223,7 +237,7 @@ pub fn read_epub(bytes: &[u8]) -> Result<ReadEpub, ConvertError> {
             let Some(resource) = resources.get_mut(&path) else {
                 continue;
             };
-            if !deobfuscated_paths.insert(path.clone()) {
+            if deobfuscated_paths.contains(&path) {
                 warnings.push(Warning {
                     message: format!(
                         "{path}: META-INF/encryption.xml names this resource more than \
@@ -234,6 +248,7 @@ pub fn read_epub(bytes: &[u8]) -> Result<ReadEpub, ConvertError> {
                 continue;
             }
             if deobfuscate(&mut resource.data, algorithm, unique_id) {
+                deobfuscated_paths.insert(path.clone());
                 transformations.push(Transformation {
                     kind: "font-deobfuscated".to_string(),
                     detail: "undid EPUB font obfuscation so the font is usable".to_string(),
@@ -606,6 +621,18 @@ struct ParsedOpf {
     /// into `metadata.media_duration` instead, alongside every other
     /// `<metadata>` field.
     media_durations: std::collections::HashMap<String, String>,
+    /// The unique identifier's text with NO whitespace folding, for deriving
+    /// font-obfuscation keys and nothing else.
+    ///
+    /// `metadata.identifier` has been through `collapse_whitespace`, which is
+    /// Unicode-`White_Space`-based: it turns NBSP, VT, FF, NEL and the wider
+    /// spaces into U+0020. The IDPF algorithm strips exactly four characters
+    /// (space, tab, CR, LF) and hashes everything else, so folding one of
+    /// those others into a space upstream makes `idpf_key` strip a character
+    /// the spec says to keep. That yields a different SHA-1 from every other
+    /// reader, and unlike a missing key it is silent: a key is still derived,
+    /// so the font is XORed into garbage and reported as de-obfuscated.
+    identifier_for_font_key: Option<String>,
 }
 
 fn parse_opf(
@@ -633,7 +660,8 @@ fn parse_opf(
     // Resolving a duration's `refines="#id"` to a resource needs the
     // manifest, so this runs after it - unlike every other `<metadata>`
     // field, which `parse_metadata` reads standalone.
-    let (media_duration, media_durations) = parse_media_durations(metadata_node, &manifest);
+    let (media_duration, media_durations) =
+        parse_media_durations(metadata_node, &manifest, warnings);
     metadata.media_duration = media_duration;
 
     let spine_node = package
@@ -658,6 +686,13 @@ fn parse_opf(
         ncx_path = manifest.get(toc_id).map(|item| item.href.clone());
     }
 
+    // Stripped of the OCF four, and of nothing else. A plain `.trim()` would
+    // be wrong in both directions: it leaves interior whitespace the IDPF key
+    // must not hash, and it removes NBSP, which that key must hash.
+    let identifier_for_font_key = unique_identifier_node(metadata_node, unique_identifier)
+        .map(|n| super::fonts::strip_ocf_whitespace(&collect_text(n)))
+        .filter(|s| !s.is_empty());
+
     Ok(ParsedOpf {
         metadata,
         manifest,
@@ -666,6 +701,7 @@ fn parse_opf(
         nav_path,
         ncx_path,
         media_durations,
+        identifier_for_font_key,
     })
 }
 
@@ -706,6 +742,25 @@ fn refinement(metadata_node: Node, id: &str, property: &str) -> Option<String> {
         })
         .map(|n| collapse_whitespace(&collect_text(n)))
         .filter(|s| !s.is_empty())
+}
+
+/// The `<dc:identifier>` the package's `unique-identifier` points at, falling
+/// back to the first one. Shared so the metadata's identifier and the
+/// font-obfuscation key are always read off the same element - a key derived
+/// from a different identifier than the one the book declares would silently
+/// scramble every embedded font.
+fn unique_identifier_node<'a, 'd>(
+    metadata_node: Node<'a, 'd>,
+    unique_identifier: Option<&str>,
+) -> Option<Node<'a, 'd>> {
+    let id_nodes: Vec<Node<'a, 'd>> = metadata_node
+        .descendants()
+        .filter(|n| n.is_element() && n.tag_name().name() == "identifier")
+        .collect();
+    unique_identifier
+        .and_then(|uid| id_nodes.iter().find(|n| n.attribute("id") == Some(uid)))
+        .or_else(|| id_nodes.first())
+        .copied()
 }
 
 /// A `dc:identifier`'s scheme (e.g. `ISBN`), from the EPUB2 `opf:scheme`
@@ -829,10 +884,7 @@ fn parse_metadata(
         .descendants()
         .filter(|n| n.is_element() && n.tag_name().name() == "identifier")
         .collect();
-    let unique_node = unique_identifier
-        .and_then(|uid| id_nodes.iter().find(|n| n.attribute("id") == Some(uid)))
-        .or_else(|| id_nodes.first())
-        .copied();
+    let unique_node = unique_identifier_node(metadata_node, unique_identifier);
     let identifier = unique_node
         .map(|n| collapse_whitespace(&collect_text(n)))
         .filter(|s| !s.is_empty());
@@ -883,6 +935,7 @@ fn parse_metadata(
 fn parse_media_durations(
     metadata_node: Node,
     manifest: &IndexMap<String, ManifestItem>,
+    warnings: &mut Vec<Warning>,
 ) -> (Option<String>, std::collections::HashMap<String, String>) {
     let mut global = None;
     let mut per_item = std::collections::HashMap::new();
@@ -896,11 +949,21 @@ fn parse_media_durations(
             continue;
         }
         match meta.attribute("refines").and_then(|r| r.strip_prefix('#')) {
-            Some(id) => {
-                if let Some(item) = manifest.get(id) {
+            Some(id) => match manifest.get(id) {
+                Some(item) => {
                     per_item.insert(item.href.clone(), value);
                 }
-            }
+                // Same malformed-source case the manifest's `resolve_idref`
+                // warns about, and warned about here too so the two report
+                // consistently: silence made a lost duration look intentional.
+                None => warnings.push(Warning {
+                    message: format!(
+                        "metadata has media:duration refines=\"#{id}\", which does not match \
+                         any manifest item's id; dropping the duration"
+                    ),
+                    file: None,
+                }),
+            },
             None => {
                 if global.is_none() {
                     global = Some(value);
@@ -1382,6 +1445,44 @@ fn collapse_whitespace(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_media_duration_refining_an_unknown_id_warns_rather_than_vanishing() {
+        // The sibling media-overlay/fallback idref path warns on a dangling
+        // idref; this one used to drop the duration in silence, so the same
+        // malformed source produced two different diagnostics.
+        // `r##` because the document contains `"#nosuchid"`, which would close
+        // an `r#` raw string at the `"#`.
+        let opf = r##"<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="pub-id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:title>T</dc:title>
+    <dc:language>en</dc:language>
+    <dc:identifier id="pub-id">urn:uuid:00000000-0000-0000-0000-000000000000</dc:identifier>
+    <meta property="media:duration" refines="#nosuchid">0:10:00</meta>
+    <meta property="media:duration">0:20:00</meta>
+  </metadata>
+  <manifest>
+    <item id="ch1" href="text/chapter1.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine><itemref idref="ch1"/></spine>
+</package>"##;
+        let doc = roxmltree::Document::parse(opf).expect("parses");
+        let mut warnings = Vec::new();
+        let parsed = parse_opf(&doc, "OEBPS", "OEBPS/content.opf", &mut warnings).expect("parses");
+
+        assert_eq!(
+            parsed.metadata.media_duration.as_deref(),
+            Some("0:20:00"),
+            "the unrefined global duration is unaffected"
+        );
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.message.contains("media:duration") && w.message.contains("nosuchid")),
+            "expected a warning naming the dangling refines id, got: {warnings:?}"
+        );
+    }
 
     #[test]
     fn meta_inf_preview_includes_text_at_exactly_the_256_byte_cap() {

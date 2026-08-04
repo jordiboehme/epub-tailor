@@ -200,8 +200,14 @@
     </button>
   </div>
 
+  <!-- role="status" because this is the only feedback the add action gives:
+       nothing else on screen changes when the picked file is already a layer.
+       Note the region is mounted with its text already in place rather than
+       filled after mounting, which not every screen reader announces - this
+       raises the odds, it does not guarantee them. -->
   {#if duplicateNotice}
     <p
+      role="status"
       class="inline-flex w-fit items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-[11px] text-amber-800 dark:bg-amber-500/10 dark:text-amber-400"
     >
       {duplicateNotice}

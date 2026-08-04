@@ -366,12 +366,15 @@ pub(crate) fn apply_resource_filters(
     if rules.is_empty() {
         return;
     }
+    // The path the writer will USE, not `book.nav_path`: with no nav of its
+    // own the writer still emits `<opf_dir>/nav.xhtml`, so a rule matching
+    // that path would report removing a file the output ships regardless.
+    let nav_path = crate::epub::write::effective_nav_path(book);
     let protected: Vec<&str> = book
         .spine
         .iter()
         .map(String::as_str)
-        .chain([book.opf_path.as_str()])
-        .chain(book.nav_path.as_deref())
+        .chain([book.opf_path.as_str(), nav_path.as_str()])
         .chain(book.ncx_path.as_deref())
         .collect();
     let doomed: Vec<String> = book

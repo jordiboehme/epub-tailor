@@ -38,20 +38,32 @@ fn xor_prefix(data: &mut [u8], key: &[u8], len: usize) {
     }
 }
 
-/// The IDPF key: SHA-1 over the identifier with every whitespace character
-/// removed, per OCF 3.3 section 4.4.3. That section names exactly four
-/// characters as whitespace - U+0020 SPACE, U+0009 TAB, U+000D CR and
-/// U+000A LF - which is narrower than Rust's `char::is_whitespace` (the
-/// Unicode `White_Space` property, which also strips U+00A0 NBSP and half a
-/// dozen others): using the wider set would hash a different string than the
-/// identifier's producer did whenever one of those extra characters was
-/// present, silently deriving the wrong key.
-fn idpf_key(unique_id: &str) -> Vec<u8> {
-    let stripped: String = unique_id
+/// `unique_id` with every whitespace character OCF 3.3 section 4.4.3 names
+/// removed. That section names exactly four - U+0020 SPACE, U+0009 TAB,
+/// U+000D CR and U+000A LF - which is narrower than Rust's
+/// `char::is_whitespace` (the Unicode `White_Space` property, which also
+/// covers U+00A0 NBSP and half a dozen others): using the wider set would
+/// hash a different string than the identifier's producer did whenever one of
+/// those extra characters was present, silently deriving the wrong key.
+///
+/// Public to the crate so the reader can apply it once, when it lifts the
+/// identifier out of the OPF, and both key derivations below see the same
+/// normalized string. In particular [`uuid_hex_digits`] matches a literal
+/// `urn:uuid:` prefix, so an indented `<dc:identifier>` would otherwise fail
+/// the match on its leading newline and derive no Adobe key at all.
+pub(crate) fn strip_ocf_whitespace(unique_id: &str) -> String {
+    unique_id
         .chars()
         .filter(|c| !matches!(c, ' ' | '\t' | '\r' | '\n'))
-        .collect();
-    Sha1::digest(stripped.as_bytes()).to_vec()
+        .collect()
+}
+
+/// The IDPF key: SHA-1 over the identifier, whitespace-stripped per
+/// [`strip_ocf_whitespace`]. Applied again here rather than assumed, so the
+/// key is correct however the caller obtained the identifier - the operation
+/// is idempotent.
+fn idpf_key(unique_id: &str) -> Vec<u8> {
+    Sha1::digest(strip_ocf_whitespace(unique_id).as_bytes()).to_vec()
 }
 
 /// The 32 lowercase hex digits of `unique_id`'s UUID, if `unique_id` is a

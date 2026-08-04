@@ -132,6 +132,40 @@ pub(crate) fn split_oversize_chapters(
                         });
                     }
                 }
+                // Dropping the linkage is not enough: the SMIL document itself
+                // is still in the book, and every `<text src="...">` inside it
+                // names the document just removed. Shipping it is an invalid
+                // EPUB - epubcheck reports RSC-007, referenced resource not
+                // found - so the overlay goes too.
+                //
+                // Unconditionally, even when another document still narrates
+                // through the same SMIL: sparing it there would keep exactly
+                // the dangling `<text src>` this exists to remove, only with
+                // the invalid file also still reachable. The other document
+                // loses its narration rather than its validity, and does not
+                // lose it silently - `write.rs::resolve_linkage` warns when it
+                // finds that linkage's target gone.
+                if let Some(smil) = removed.as_ref().and_then(|r| r.media_overlay.clone())
+                    && book.resources.shift_remove(&smil).is_some()
+                {
+                    let also = book
+                        .resources
+                        .values()
+                        .filter(|r| r.media_overlay.as_deref() == Some(smil.as_str()))
+                        .count();
+                    let shared = if also > 0 {
+                        format!("; {also} other document(s) narrated through it and lose narration")
+                    } else {
+                        String::new()
+                    };
+                    warnings.push(Warning {
+                        message: format!(
+                            "{smil} was dropped too: it narrated {path}, which no longer exists \
+                             as a single document{shared}"
+                        ),
+                        file: Some(smil.clone()),
+                    });
+                }
                 chapters_split += 1;
                 for part in parts {
                     source_of.insert(part.path.clone(), path.clone());
@@ -938,6 +972,121 @@ mod tests {
         assert!(
             fallback_warning.is_some_and(|w| w.file.as_deref() == Some("text/a.xhtml")),
             "expected a fallback warning naming text/a.xhtml, got: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn splitting_a_narrated_chapter_drops_the_overlay_that_narrated_it() {
+        // Dropping only the linkage leaves the SMIL in the book with every
+        // `<text src="text/a.xhtml#...">` naming a document that no longer
+        // exists - epubcheck RSC-007, an invalid EPUB. The overlay has to go
+        // with it.
+        let pad = "y".repeat(30);
+        let body_a = format!(
+            "<h1 id=\"sec1\">Section 1</h1><p>{pad}</p>\
+             <h1 id=\"sec2\">Section 2</h1><p>{pad}</p>\
+             <h1 id=\"sec3\">Section 3</h1><p>{pad}</p>"
+        );
+        let (mut book, mut chapters) = book_with_two_chapters(&body_a, "<p>b</p>");
+        book.resources.insert(
+            "text/a.smil".to_string(),
+            Resource {
+                data: br#"<smil><body><par><text src="text/a.xhtml#sec1"/></par></body></smil>"#
+                    .to_vec(),
+                media_type: "application/smil+xml".to_string(),
+                media_duration: Some("0:01:00".to_string()),
+                ..Default::default()
+            },
+        );
+        book.resources
+            .get_mut("text/a.xhtml")
+            .unwrap()
+            .media_overlay = Some("text/a.smil".to_string());
+
+        let doc_a = &chapters[0].1;
+        let body = find_body(doc_a).unwrap();
+        let blocks = child_elements(&body);
+        let sizes: Vec<usize> = blocks.iter().map(|b| serialize_fragment(b).len()).collect();
+        let shell = serialize_xhtml(doc_a).len() - sizes.iter().sum::<usize>();
+        let opts = opts_with_limit(shell + sizes[0] + sizes[1] + 5);
+        let mut transformations = Vec::new();
+        let mut warnings = Vec::new();
+
+        let split = split_oversize_chapters(
+            &mut book,
+            &mut chapters,
+            &opts,
+            &mut transformations,
+            &mut warnings,
+        )
+        .chapters_split;
+        assert_eq!(split, 1, "the fixture must actually force a split");
+        assert!(
+            !book.resources.contains_key("text/a.smil"),
+            "the orphaned overlay must not ship: {:?}",
+            book.resources.keys().collect::<Vec<_>>()
+        );
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.file.as_deref() == Some("text/a.smil")),
+            "dropping the overlay must be reported against the overlay, got: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn a_shared_overlay_goes_too_because_it_still_names_the_split_document() {
+        // The same SMIL can cover more than one document. Keeping it because
+        // another document still points at it would keep the exact dangling
+        // `<text src="text/a.xhtml#...">` that dropping it exists to remove -
+        // an invalid EPUB either way, just with the invalid file reachable.
+        // So it goes, and text/b.xhtml loses narration, not validity.
+        let pad = "y".repeat(30);
+        let body_a = format!(
+            "<h1 id=\"sec1\">Section 1</h1><p>{pad}</p>\
+             <h1 id=\"sec2\">Section 2</h1><p>{pad}</p>\
+             <h1 id=\"sec3\">Section 3</h1><p>{pad}</p>"
+        );
+        let (mut book, mut chapters) = book_with_two_chapters(&body_a, "<p>b</p>");
+        book.resources.insert(
+            "text/shared.smil".to_string(),
+            Resource {
+                data: b"<smil/>".to_vec(),
+                media_type: "application/smil+xml".to_string(),
+                ..Default::default()
+            },
+        );
+        for doc in ["text/a.xhtml", "text/b.xhtml"] {
+            book.resources.get_mut(doc).unwrap().media_overlay =
+                Some("text/shared.smil".to_string());
+        }
+
+        let doc_a = &chapters[0].1;
+        let body = find_body(doc_a).unwrap();
+        let blocks = child_elements(&body);
+        let sizes: Vec<usize> = blocks.iter().map(|b| serialize_fragment(b).len()).collect();
+        let shell = serialize_xhtml(doc_a).len() - sizes.iter().sum::<usize>();
+        let opts = opts_with_limit(shell + sizes[0] + sizes[1] + 5);
+        let mut transformations = Vec::new();
+        let mut warnings = Vec::new();
+
+        split_oversize_chapters(
+            &mut book,
+            &mut chapters,
+            &opts,
+            &mut transformations,
+            &mut warnings,
+        );
+        assert!(
+            !book.resources.contains_key("text/shared.smil"),
+            "an overlay still naming the split document must not ship: {:?}",
+            book.resources.keys().collect::<Vec<_>>()
+        );
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.message.contains("lose narration")),
+            "the other document losing narration must be reported: {warnings:?}"
         );
     }
 
