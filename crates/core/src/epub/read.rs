@@ -216,6 +216,14 @@ pub fn read_epub(bytes: &[u8]) -> Result<ReadEpub, ConvertError> {
         // spelled URIs that `normalize_href` resolves to the same path, or
         // two entries with different algorithms over one resource - so each
         // normalized path is de-obfuscated at most once, tracked here.
+        //
+        // A path is recorded only once a key was actually derived and applied.
+        // Recording on entry instead would let a FAILED attempt burn the slot:
+        // an Adobe entry whose identifier is not a `urn:uuid:` yields no key
+        // and leaves the bytes untouched, so a following IDPF entry for the
+        // same font - the one that would have worked - was skipped as a
+        // duplicate and the font stayed scrambled. Retrying after a failure is
+        // safe precisely because a failure changes nothing.
         let mut deobfuscated_paths: std::collections::HashSet<String> =
             std::collections::HashSet::new();
         for (uri, algorithm) in font_obfuscated_resources(&enc_text)? {
@@ -223,7 +231,7 @@ pub fn read_epub(bytes: &[u8]) -> Result<ReadEpub, ConvertError> {
             let Some(resource) = resources.get_mut(&path) else {
                 continue;
             };
-            if !deobfuscated_paths.insert(path.clone()) {
+            if deobfuscated_paths.contains(&path) {
                 warnings.push(Warning {
                     message: format!(
                         "{path}: META-INF/encryption.xml names this resource more than \
@@ -234,6 +242,7 @@ pub fn read_epub(bytes: &[u8]) -> Result<ReadEpub, ConvertError> {
                 continue;
             }
             if deobfuscate(&mut resource.data, algorithm, unique_id) {
+                deobfuscated_paths.insert(path.clone());
                 transformations.push(Transformation {
                     kind: "font-deobfuscated".to_string(),
                     detail: "undid EPUB font obfuscation so the font is usable".to_string(),

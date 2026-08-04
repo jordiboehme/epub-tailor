@@ -622,8 +622,14 @@ pub(crate) fn prune(
 
     // Roots: the package document, the navigation document, the NCX, the cover
     // and every spine document. None of these is ever droppable.
+    //
+    // The nav root is the path the writer will USE, not `book.nav_path`: when
+    // that is `None` the writer still emits `<opf_dir>/nav.xhtml`. Rooting on
+    // the raw field instead let an EPUB 2 book with a non-spine XHTML sitting
+    // at that path be dropped and reported as "nothing references" it, while
+    // the writer went on to ship a regenerated nav at that very path.
     queue.push(book.opf_path.clone());
-    queue.extend(book.nav_path.clone());
+    queue.push(crate::epub::write::effective_nav_path(book));
     queue.extend(book.ncx_path.clone());
     queue.extend(book.cover.clone());
     queue.extend(book.spine.iter().cloned());

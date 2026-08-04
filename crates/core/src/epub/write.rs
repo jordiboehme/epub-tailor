@@ -680,8 +680,10 @@ fn percent_encode(s: &str, keep_slash: bool) -> String {
 /// The path [`write_epub`] will write the nav document to: `book.nav_path`
 /// when the book had one, otherwise `<opf_dir>/nav.xhtml`.
 ///
-/// Shared rather than inlined because callers outside the writer need to know
-/// which resource the writer is going to overwrite. Guarding on `nav_path`
+/// Shared rather than inlined because three callers outside the writer need
+/// to know which resource the writer is going to overwrite: the invisible-
+/// character scrub, the reachability walk's roots and the resource filter's
+/// protected list. Guarding on `nav_path`
 /// alone misses the fallback: an EPUB 2 book has `nav_path: None` but may
 /// still carry a non-spine XHTML at exactly `<opf_dir>/nav.xhtml`, and that
 /// file's stored bytes never ship - the writer regenerates them from
