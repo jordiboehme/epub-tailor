@@ -73,11 +73,15 @@ fn idpf_key(unique_id: &str) -> Vec<u8> {
 /// identifier does not actually have.
 ///
 /// Hyphens are removed wherever they fall rather than required in canonical
-/// 8-4-4-4-12 grouping, which is what Python's `uuid.UUID` and Calibre both
-/// do. The stricter reading rejected identifiers those tools accept, and the
-/// key they derive is the one the book was obfuscated with - so being stricter
-/// here does not protect anything, it just fails to unscramble fonts that
-/// every other reader handles.
+/// 8-4-4-4-12 grouping. The stricter reading rejected identifiers other tools
+/// accept, and the key those tools derive is the one the book was actually
+/// obfuscated with - so being stricter here protects nothing, it just fails to
+/// unscramble fonts every other reader handles.
+///
+/// Close to, but not the same as, Python's `uuid.UUID`: that also accepts a
+/// `{...}`-wrapped form, which this does not. Note too that the caller has
+/// already run [`strip_ocf_whitespace`], so an identifier with whitespace
+/// where the hyphens should be reaches here as bare hex and is accepted.
 fn uuid_hex_digits(unique_id: &str) -> Option<String> {
     let lower = unique_id.to_ascii_lowercase();
     let rest = lower.strip_prefix("urn:uuid:")?;

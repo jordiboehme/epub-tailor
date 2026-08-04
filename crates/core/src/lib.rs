@@ -841,15 +841,20 @@ fn prune_dangling_toc_entries(book: &mut Book, warnings: &mut Vec<Warning>) {
             .split_once('#')
             .map_or(entry.href.as_str(), |(p, _)| p);
         if spine.contains(path) {
-            // The floor is unreachable with today's TOC parsers - both step
-            // level by exactly 1, so `shift` can never exceed `original_level
-            // - 1`. Kept as insurance against a future parser that skips a
-            // level, with an assertion so that parser's bug surfaces in tests
-            // instead of being silently clamped away in release.
+            // The floor is unreachable for any entry whose level is >= 1, and
+            // a level-skipping parser would not change that: the ancestor
+            // stack holds strictly increasing levels, so `shift` is at most
+            // the number of open ancestors and stays below `original_level`
+            // however far the levels jump. Only a level of 0 could reach the
+            // floor, which no parser and no public constructor produces. The
+            // assertion pins that precondition rather than the shift
+            // arithmetic, so a future source of 0-level entries surfaces in
+            // tests instead of being silently clamped in release.
             debug_assert!(
-                original_level > shift,
-                "level {original_level} under a shift of {shift}: a TOC parser produced a \
-                 level jump the re-levelling cannot express"
+                original_level >= 1,
+                "TOC entry '{}' has level 0; levels are 1-based and the re-levelling \
+                 floor silently absorbs anything lower",
+                entry.title
             );
             entry.level = original_level.saturating_sub(shift).max(1);
             ancestors.push((original_level, shift));

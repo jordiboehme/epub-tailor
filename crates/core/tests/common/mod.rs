@@ -1266,6 +1266,7 @@ pub fn epub2_with_a_stray_nav_xhtml() -> Vec<u8> {
     <item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
     <item id="ch1" href="text/chapter1.xhtml" media-type="application/xhtml+xml"/>
     <item id="stray" href="nav.xhtml" media-type="application/xhtml+xml"/>
+    <item id="strayimg" href="stray-only.png" media-type="image/png"/>
   </manifest>
   <spine toc="ncx">
     <itemref idref="ch1"/>
@@ -1291,9 +1292,15 @@ pub fn epub2_with_a_stray_nav_xhtml() -> Vec<u8> {
     // The zero-width joiner between two letters is what a scrub would remove
     // and report on. `nav.xhtml` is in the manifest but not the spine, so it
     // reaches the non-spine XHTML loop.
+    //
+    // It also references `stray-only.png`, which nothing else in the book
+    // names. The writer discards these bytes and regenerates the nav, so that
+    // image is genuinely unreachable in the output - which is what lets a test
+    // tell "this path is protected from pruning" apart from "this path's links
+    // are followed", two behaviours that otherwise look identical.
     let stray_nav = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
 <html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>Contents</title></head>\n\
-<body><p>Wa\u{200d}ter</p></body></html>";
+<body><p>Wa\u{200d}ter</p><img src=\"stray-only.png\"/></body></html>";
 
     build_epub(&[
         ("mimetype", b"application/epub+zip"),
@@ -1302,6 +1309,7 @@ pub fn epub2_with_a_stray_nav_xhtml() -> Vec<u8> {
         ("OEBPS/toc.ncx", TOC_NCX),
         ("OEBPS/text/chapter1.xhtml", CHAPTER1),
         ("OEBPS/nav.xhtml", stray_nav.as_bytes()),
+        ("OEBPS/stray-only.png", &real_png()),
     ])
 }
 
