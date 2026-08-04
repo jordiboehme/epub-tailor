@@ -235,7 +235,15 @@ pub fn write_epub(
         ncx_id,
         items,
         spine,
-        media_duration: meta.media_duration.clone().unwrap_or_default(),
+        // The book-wide total is the sum of the overlays' durations, so it
+        // means nothing once none are left - a split can remove the last one
+        // (see `chapter_split`). Emitting it anyway would state a narration
+        // time for a book with no narration.
+        media_duration: if media_durations.is_empty() {
+            String::new()
+        } else {
+            meta.media_duration.clone().unwrap_or_default()
+        },
         media_durations,
     }
     .render()

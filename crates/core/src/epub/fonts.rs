@@ -67,25 +67,25 @@ fn idpf_key(unique_id: &str) -> Vec<u8> {
 }
 
 /// The 32 lowercase hex digits of `unique_id`'s UUID, if `unique_id` is a
-/// `urn:uuid:` identifier in canonical 8-4-4-4-12 form (case-insensitive
-/// prefix and digits). `None` for anything else - a bare UUID with no
-/// `urn:uuid:` prefix, a non-UUID identifier (an ISBN, say), or 32 hex
-/// digits in the wrong grouping - so a caller never guesses at a shape the
+/// `urn:uuid:` identifier (case-insensitive prefix and digits). `None` for
+/// anything else - a bare UUID with no `urn:uuid:` prefix, or a non-UUID
+/// identifier such as an ISBN - so a caller never guesses at a shape the
 /// identifier does not actually have.
+///
+/// Hyphens are removed wherever they fall rather than required in canonical
+/// 8-4-4-4-12 grouping, which is what Python's `uuid.UUID` and Calibre both
+/// do. The stricter reading rejected identifiers those tools accept, and the
+/// key they derive is the one the book was obfuscated with - so being stricter
+/// here does not protect anything, it just fails to unscramble fonts that
+/// every other reader handles.
 fn uuid_hex_digits(unique_id: &str) -> Option<String> {
     let lower = unique_id.to_ascii_lowercase();
     let rest = lower.strip_prefix("urn:uuid:")?;
-    let groups: Vec<&str> = rest.split('-').collect();
-    let expected_lens = [8, 4, 4, 4, 12];
-    if groups.len() != expected_lens.len() {
+    let digits: String = rest.chars().filter(|c| *c != '-').collect();
+    if digits.len() != 32 || !digits.bytes().all(|b| b.is_ascii_hexdigit()) {
         return None;
     }
-    for (group, expected_len) in groups.iter().zip(expected_lens) {
-        if group.len() != expected_len || !group.bytes().all(|b| b.is_ascii_hexdigit()) {
-            return None;
-        }
-    }
-    Some(groups.concat())
+    Some(digits)
 }
 
 /// Adobe's key: the identifier's UUID as 16 raw bytes. Returns an empty key
@@ -323,6 +323,46 @@ mod tests {
             "12345678-1234-1234-1234-123456789012",
         );
         assert!(!applied, "the prefix-less spelling must not be accepted");
+        assert_eq!(data, original);
+    }
+
+    #[test]
+    fn adobe_key_accepts_an_ungrouped_uuid_the_way_calibre_does() {
+        // Python's `uuid.UUID` and Calibre both strip hyphens and require 32
+        // hex digits, rather than insisting on 8-4-4-4-12. A book obfuscated
+        // by a tool that wrote the ungrouped spelling has a real key; refusing
+        // to derive it leaves the font scrambled for no gain.
+        let mut grouped = vec![0u8; 16];
+        deobfuscate(
+            &mut grouped,
+            Obfuscation::Adobe,
+            "urn:uuid:12345678-1234-1234-1234-123456789012",
+        );
+        let mut ungrouped = vec![0u8; 16];
+        let applied = deobfuscate(
+            &mut ungrouped,
+            Obfuscation::Adobe,
+            "urn:uuid:12345678123412341234123456789012",
+        );
+        assert!(applied, "the ungrouped spelling must still yield a key");
+        assert_eq!(
+            ungrouped, grouped,
+            "and it must be the same key the canonical spelling gives"
+        );
+    }
+
+    #[test]
+    fn adobe_key_still_rejects_the_wrong_number_of_hex_digits() {
+        // Relaxing the grouping must not relax the length: 31 digits is not a
+        // UUID, and guessing a key from it would scramble the font.
+        let mut data = vec![1u8, 2, 3, 4, 5];
+        let original = data.clone();
+        let applied = deobfuscate(
+            &mut data,
+            Obfuscation::Adobe,
+            "urn:uuid:1234567812341234123412345678901",
+        );
+        assert!(!applied, "31 hex digits is not a UUID");
         assert_eq!(data, original);
     }
 

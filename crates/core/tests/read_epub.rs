@@ -531,6 +531,67 @@ fn duplicate_cipher_references_deobfuscate_only_once() {
     );
 }
 
+/// Two unusable entries for one font. Neither derives a key, so neither is
+/// skipped as a duplicate, and the same sentence would otherwise be reported
+/// twice for one file.
+#[test]
+fn a_font_no_entry_can_unlock_is_reported_once_not_once_per_entry() {
+    const ENCRYPTION_XML: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
+<encryption xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <EncryptedData xmlns="http://www.w3.org/2001/04/xmlenc#">
+    <EncryptionMethod Algorithm="http://ns.adobe.com/pdf/enc#RC"/>
+    <CipherData><CipherReference URI="OEBPS/fonts/embedded.ttf"/></CipherData>
+  </EncryptedData>
+  <EncryptedData xmlns="http://www.w3.org/2001/04/xmlenc#">
+    <EncryptionMethod Algorithm="http://ns.adobe.com/pdf/enc#RC"/>
+    <CipherData><CipherReference URI="./OEBPS/fonts/embedded.ttf"/></CipherData>
+  </EncryptedData>
+</encryption>"#;
+
+    // An ISBN, so Adobe's scheme can never derive a key from it.
+    const OPF: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="pub-id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:title>Fonted</dc:title>
+    <dc:language>en</dc:language>
+    <dc:identifier id="pub-id">9783407868213</dc:identifier>
+  </metadata>
+  <manifest>
+    <item id="ch1" href="text/chapter1.xhtml" media-type="application/xhtml+xml"/>
+    <item id="font" href="fonts/embedded.ttf" media-type="application/vnd.ms-opentype"/>
+  </manifest>
+  <spine>
+    <itemref idref="ch1"/>
+  </spine>
+</package>"#;
+
+    let scrambled: Vec<u8> = (0..300u32).map(|i| (i % 250) as u8).collect();
+    let bytes = build_epub(&[
+        ("mimetype", b"application/epub+zip"),
+        ("META-INF/container.xml", CONTAINER_XML),
+        ("META-INF/encryption.xml", ENCRYPTION_XML),
+        ("OEBPS/content.opf", OPF),
+        ("OEBPS/text/chapter1.xhtml", CHAPTER1),
+        ("OEBPS/fonts/embedded.ttf", &scrambled),
+    ]);
+
+    let result = epub_tailor_core::read_epub(&bytes).expect("reads");
+    assert_eq!(
+        result.book.resources["OEBPS/fonts/embedded.ttf"].data, scrambled,
+        "no key was derivable, so the bytes must be untouched"
+    );
+    assert_eq!(
+        result
+            .warnings
+            .iter()
+            .filter(|w| w.message.contains("could not derive"))
+            .count(),
+        1,
+        "one font, one report - not one per encryption.xml entry: {:?}",
+        result.warnings
+    );
+}
+
 /// A `<dc:identifier>` written across lines - ordinary pretty-printed XML.
 /// Adobe's key derivation matches a literal `urn:uuid:` prefix, so the
 /// leading newline and indentation have to be gone before it looks; only the

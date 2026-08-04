@@ -861,3 +861,42 @@ fn a_nav_path_the_writer_will_synthesize_is_not_reported_as_unreferenced() {
         "the writer ships a nav at that path either way"
     );
 }
+
+/// The narrated fixture is otherwise reached only through the epubcheck-gated
+/// round-trip, so a local run without `EPUBCHECK_FORCE` never checked that the
+/// media-overlay linkage and both `media:duration` values survive a rebuild.
+/// This pins them with plain assertions, no external tool.
+#[test]
+fn a_narrated_book_keeps_its_overlay_and_both_durations() {
+    let out = convert(
+        Input::Epub(common::epub3_narrated()),
+        &ConvertOptions::default(),
+    )
+    .expect("converts");
+    let opf = opf_of(&out.epub);
+
+    assert!(
+        opf.contains("media-overlay="),
+        "the chapter must still declare its overlay:\n{opf}"
+    );
+    assert!(
+        opf.contains(r#"<meta property="media:duration">0:00:05.000</meta>"#),
+        "the book-wide duration must survive:\n{opf}"
+    );
+    // `r##` because the refinement's value starts with `"#`, which would close
+    // an `r#` raw string.
+    assert_eq!(
+        opf.matches(r##"property="media:duration""##).count(),
+        2,
+        "both the book-wide duration and the per-overlay refinement must \
+         survive the rebuild:\n{opf}"
+    );
+    assert!(
+        opf.contains(r##"refines="#"##),
+        "the per-overlay duration must still name its item:\n{opf}"
+    );
+    assert!(
+        common::entry(&out.epub, "OEBPS/chapter1.smil").is_some(),
+        "the SMIL itself must ship"
+    );
+}

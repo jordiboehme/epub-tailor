@@ -623,13 +623,21 @@ pub(crate) fn prune(
     // Roots: the package document, the navigation document, the NCX, the cover
     // and every spine document. None of these is ever droppable.
     //
-    // The nav root is the path the writer will USE, not `book.nav_path`: when
-    // that is `None` the writer still emits `<opf_dir>/nav.xhtml`. Rooting on
-    // the raw field instead let an EPUB 2 book with a non-spine XHTML sitting
-    // at that path be dropped and reported as "nothing references" it, while
-    // the writer went on to ship a regenerated nav at that very path.
     queue.push(book.opf_path.clone());
-    queue.push(crate::epub::write::effective_nav_path(book));
+    match &book.nav_path {
+        // A real nav: walked like any other root, because its links are the
+        // book's own navigation and can reach resources the spine does not.
+        Some(nav) => queue.push(nav.clone()),
+        // No nav of its own, but the writer still emits `<opf_dir>/nav.xhtml`.
+        // Whatever happens to sit at that path must not be dropped and
+        // reported as unreferenced when the output contains that path - but
+        // its stored bytes are discarded and regenerated, so its links must
+        // not keep anything else alive either. Marked reachable without ever
+        // being queued, which protects the path without walking it.
+        None => {
+            reachable.insert(crate::epub::write::effective_nav_path(book));
+        }
+    }
     queue.extend(book.ncx_path.clone());
     queue.extend(book.cover.clone());
     queue.extend(book.spine.iter().cloned());
@@ -1430,24 +1438,37 @@ p { background: url('img/bg.png'); }"#;
 
     #[test]
     fn the_safety_net_stays_linear_in_the_number_of_dropped_files() {
-        // 5000 dropped files over ~2 MB of surviving text: 10^10 byte
-        // comparisons for the old per-needle loop (tens of seconds), a single
-        // ~2 MB pass for the automaton (milliseconds). Wall-clock is a coarse
-        // instrument, but with three orders of magnitude between the two the
-        // bound discriminates even on a loaded machine - and unlike a counter
-        // of documents visited it cannot be satisfied by a per-needle loop
-        // hidden inside the per-document one.
-        let dropped: Vec<String> = (0..5000)
-            .map(|i| format!("OEBPS/s{i}-unused.png"))
-            .collect();
-        let doc = "<p>this paragraph names none of them</p>".repeat(50_000);
+        // Measured against `naive_scan` on the SAME input rather than against
+        // a fixed wall-clock bound. A constant like "under 5 seconds" encodes
+        // this machine's speed and is the assertion most likely to flake on a
+        // contended runner - and when it does, the failure reads like a real
+        // regression. A ratio cancels machine speed out: whatever the runner,
+        // one pass over the bytes must beat 2000 passes by a wide margin, and
+        // a per-needle loop hidden inside the per-document one would land at
+        // a ratio near 1 on any hardware.
+        // Sized so the naive side stays well under a second: the ratio is what
+        // discriminates, and a slow reference only makes the suite slow.
+        let dropped: Vec<String> = (0..500).map(|i| format!("OEBPS/s{i}-unused.png")).collect();
+        let doc = "<p>this paragraph names none of them</p>".repeat(4_000);
+        let docs: &[(&str, &[u8])] = &[("OEBPS/c.xhtml", doc.as_bytes())];
+
         let start = std::time::Instant::now();
-        let hits = scan_for_dangling_basenames(&dropped, &[("OEBPS/c.xhtml", doc.as_bytes())]);
-        let elapsed = start.elapsed();
+        let hits = scan_for_dangling_basenames(&dropped, docs);
+        let fast = start.elapsed();
+
+        let start = std::time::Instant::now();
+        let reference = naive_scan(&dropped, docs);
+        let slow = start.elapsed();
+
         assert!(hits.is_empty());
+        assert_eq!(
+            hits, reference,
+            "and it must still agree with the reference"
+        );
         assert!(
-            elapsed < std::time::Duration::from_secs(5),
-            "5000 needles over {} bytes took {elapsed:?}; the scan is not bounded",
+            fast * 10 < slow,
+            "the automaton took {fast:?} against the naive scan's {slow:?} over {} bytes; \
+             a bounded scan should win by far more than 10x",
             doc.len()
         );
     }
