@@ -357,12 +357,17 @@ fn basename_of(path: &str) -> Option<&str> {
 /// Bounded to one pass per document, not one substring search per dropped
 /// file. The loop this replaced re-ran a `windows(needle.len())` search over
 /// every surviving document for *each* dropped file, i.e. O(dropped × total
-/// textual bytes): on adversarial input (this crate's input is an arbitrary
-/// downloaded EPUB) - thousands of dropped stray files alongside tens of MB
-/// of surviving text - that is on the order of hundreds of GB of byte
-/// comparisons for one conversion. An Aho-Corasick automaton searches for
-/// every basename at once in a single pass, so the cost is O(total textual
-/// bytes + matches) no matter how long `dropped` is.
+/// textual bytes): thousands of dropped stray files alongside tens of MB of
+/// surviving text - a shape an arbitrary downloaded EPUB can present - is on
+/// the order of hundreds of GB of byte comparisons for one conversion. An
+/// Aho-Corasick automaton searches for every basename at once in a single
+/// pass, so the byte-scanning cost is O(total textual bytes + match events)
+/// however long `dropped` is. Two smaller terms remain, both far below the
+/// old one: pairing hits back to dropped paths is O(dropped × docs) hash
+/// lookups, no byte scanning; and `match events` is not bounded by the byte
+/// count when needles nest inside one another, so a document of 5 MB of `a`
+/// against needles `a`, `aa`, `aaa`... would still be slow. Real basenames
+/// carry an extension and a stem, so they do not nest that way.
 ///
 /// The semantics stay *exactly* those of the nested `windows()` loop -
 /// unanchored, byte-for-byte substring containment. That equality is the

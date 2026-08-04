@@ -4,10 +4,7 @@
 //!
 //! This module is `mod`-included by several test binaries, each of which uses
 //! only a subset of the fixtures, so unused-in-one-binary helpers are expected.
-//! `unused_imports` for the same reason: the re-export below is a single line
-//! covering every binary, so it is dead in each binary that happens not to
-//! call one of the items it names.
-#![allow(dead_code, unused_imports)]
+#![allow(dead_code)]
 
 use std::io::{Cursor, Write};
 use std::path::Path;
@@ -19,6 +16,10 @@ use zip::{CompressionMethod, ZipWriter};
 // so the CLI's integration tests can share them - an integration test cannot
 // import another crate's test module. Re-exported here so the many existing
 // `common::CONTAINER_XML` / `common::build_epub` call sites keep working.
+// Scoped to this one line rather than the module: a binary that uses no
+// `entry` must not silence staleness warnings for the `zip`/`std` imports
+// above it too.
+#[allow(unused_imports)]
 pub use epub_tailor_testfixtures::{CONTAINER_XML, NAV_XHTML, build_epub, entry, real_png};
 
 /// Run epubcheck against `path`, preferring the `epubcheck` launcher on `PATH`
