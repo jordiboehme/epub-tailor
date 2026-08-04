@@ -188,13 +188,45 @@ pub fn read_epub(bytes: &[u8]) -> Result<ReadEpub, ConvertError> {
     if let Some(enc_bytes) = encryption_xml {
         let enc_text = String::from_utf8_lossy(&enc_bytes);
         let unique_id = parsed_opf.metadata.identifier.as_deref().unwrap_or("");
+        // XOR is its own inverse, so applying it to one resource twice would
+        // silently restore the scrambled bytes. Two `EncryptedData` entries
+        // can name the same resource - a literal duplicate, two differently
+        // spelled URIs that `normalize_href` resolves to the same path, or
+        // two entries with different algorithms over one resource - so each
+        // normalized path is de-obfuscated at most once, tracked here.
+        let mut deobfuscated_paths: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
         for (uri, algorithm) in font_obfuscated_resources(&enc_text)? {
             let path = normalize_href("", &uri);
-            if let Some(resource) = resources.get_mut(&path) {
-                deobfuscate(&mut resource.data, algorithm, unique_id);
+            let Some(resource) = resources.get_mut(&path) else {
+                continue;
+            };
+            if !deobfuscated_paths.insert(path.clone()) {
+                warnings.push(Warning {
+                    message: format!(
+                        "{path}: META-INF/encryption.xml names this resource more than \
+                         once; de-obfuscating only the first entry"
+                    ),
+                    file: Some(path),
+                });
+                continue;
+            }
+            if deobfuscate(&mut resource.data, algorithm, unique_id) {
                 transformations.push(Transformation {
                     kind: "font-deobfuscated".to_string(),
                     detail: "undid EPUB font obfuscation so the font is usable".to_string(),
+                    file: Some(path),
+                });
+            } else {
+                // Adobe's scheme with a non-`urn:uuid:` identifier: no key,
+                // so `deobfuscate` left the bytes untouched. Reporting
+                // success here would be a false claim - the font is still
+                // scrambled - so this is a warning, not a transformation.
+                warnings.push(Warning {
+                    message: format!(
+                        "{path}: could not derive a font-obfuscation key from the book's \
+                         identifier; the font is still scrambled"
+                    ),
                     file: Some(path),
                 });
             }

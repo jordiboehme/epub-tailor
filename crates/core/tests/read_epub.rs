@@ -167,6 +167,14 @@ fn adept_style_drm_is_rejected() {
 
 #[test]
 fn font_obfuscation_only_is_a_warning_not_an_error() {
+    // The `CipherReference` URI deliberately names no resource in this
+    // fixture: this test only exercises `check_drm`'s classification warning
+    // (font-obfuscation-only is not DRM), not de-obfuscation itself - that is
+    // covered end to end by `font_obfuscation_is_undone_and_encryption_xml_is_dropped`
+    // and `adobe_font_obfuscation_is_undone` below. The missing-resource skip
+    // is asserted explicitly (no `font-deobfuscated` transformation) so it
+    // reads as an intentional part of this fixture, not an unstated side
+    // effect of a stale path.
     const ENCRYPTION_XML: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
 <encryption xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
   <EncryptedData xmlns="http://www.w3.org/2001/04/xmlenc#">
@@ -193,6 +201,15 @@ fn font_obfuscation_only_is_a_warning_not_an_error() {
             .any(|w| w.message.to_lowercase().contains("font")),
         "expected a warning mentioning fonts, got {:?}",
         result.warnings
+    );
+    assert!(
+        !result
+            .transformations
+            .iter()
+            .any(|t| t.kind == "font-deobfuscated"),
+        "the CipherReference URI names nothing in this fixture, so nothing should have been \
+         de-obfuscated: {:?}",
+        result.transformations
     );
 }
 
@@ -294,6 +311,230 @@ fn font_obfuscation_is_undone_and_encryption_xml_is_dropped() {
     assert_eq!(
         out_font, original_font,
         "the converted output's font bytes must be the de-obfuscated original"
+    );
+}
+
+/// The Adobe font-obfuscation key for a canonical `urn:uuid:` identifier: the
+/// 16 raw bytes of its UUID. Computed independently of `epub_tailor_core`'s
+/// own key derivation (plain hex parsing, no shared code) so this test does
+/// not just assert the implementation agrees with itself.
+fn adobe_obfuscate(data: &[u8], unique_id: &str) -> Vec<u8> {
+    let hex: String = unique_id
+        .strip_prefix("urn:uuid:")
+        .expect("test identifier must be a urn:uuid: value")
+        .chars()
+        .filter(|c| *c != '-')
+        .collect();
+    assert_eq!(hex.len(), 32, "test identifier must have 32 hex digits");
+    let key: Vec<u8> = (0..16)
+        .map(|i| u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).expect("valid hex digit pair"))
+        .collect();
+    data.iter()
+        .enumerate()
+        .map(|(i, b)| b ^ key[i % key.len()])
+        .collect()
+}
+
+/// Adobe's algorithm (`http://ns.adobe.com/pdf/enc#RC`) is only otherwise
+/// named in `read.rs` itself - never exercised end to end - so this pins it
+/// separately from the IDPF coverage above. It also directly covers the
+/// off-by-one `adobe_key` bug a review caught: a `urn:uuid:` identifier is
+/// the shape EPUB 3 recommends for `dc:identifier`, so this is the common
+/// case, not an edge case.
+#[test]
+fn adobe_font_obfuscation_is_undone() {
+    const UNIQUE_ID: &str = "urn:uuid:12345678-1234-1234-1234-123456789012";
+    let original_font: Vec<u8> = (0..300u32).map(|i| (i % 250) as u8).collect();
+    let obfuscated_font = adobe_obfuscate(&original_font, UNIQUE_ID);
+    assert_ne!(obfuscated_font, original_font);
+
+    const ENCRYPTION_XML: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
+<encryption xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <EncryptedData xmlns="http://www.w3.org/2001/04/xmlenc#">
+    <EncryptionMethod Algorithm="http://ns.adobe.com/pdf/enc#RC"/>
+    <CipherData><CipherReference URI="OEBPS/fonts/embedded.ttf"/></CipherData>
+  </EncryptedData>
+</encryption>"#;
+
+    let opf = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="pub-id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:title>Fonted</dc:title>
+    <dc:language>en</dc:language>
+    <dc:identifier id="pub-id">{UNIQUE_ID}</dc:identifier>
+  </metadata>
+  <manifest>
+    <item id="ch1" href="text/chapter1.xhtml" media-type="application/xhtml+xml"/>
+    <item id="font" href="fonts/embedded.ttf" media-type="application/vnd.ms-opentype"/>
+  </manifest>
+  <spine>
+    <itemref idref="ch1"/>
+  </spine>
+</package>"#
+    );
+
+    let bytes = build_epub(&[
+        ("mimetype", b"application/epub+zip"),
+        ("META-INF/container.xml", CONTAINER_XML),
+        ("META-INF/encryption.xml", ENCRYPTION_XML),
+        ("OEBPS/content.opf", opf.as_bytes()),
+        ("OEBPS/text/chapter1.xhtml", CHAPTER1),
+        ("OEBPS/fonts/embedded.ttf", &obfuscated_font),
+    ]);
+
+    let result = epub_tailor_core::read_epub(&bytes).expect("adobe-obfuscated epub should read");
+    let font_resource = &result.book.resources["OEBPS/fonts/embedded.ttf"];
+    assert_eq!(
+        font_resource.data, original_font,
+        "the font bytes must be de-obfuscated back to the original"
+    );
+    assert!(
+        result
+            .transformations
+            .iter()
+            .any(|t| t.kind == "font-deobfuscated"
+                && t.file.as_deref() == Some("OEBPS/fonts/embedded.ttf")),
+        "expected a font-deobfuscated transformation naming the font, got {:?}",
+        result.transformations
+    );
+}
+
+/// Adobe's scheme needs a `urn:uuid:` identifier; an ISBN-only identifier
+/// yields no usable key. The font must be left exactly as scrambled as it
+/// arrived (not further corrupted by XORing with a bogus key), and the read
+/// must warn that it could not be de-obfuscated rather than record a
+/// `font-deobfuscated` transformation that would be a false claim.
+#[test]
+fn adobe_obfuscation_without_a_uuid_identifier_warns_instead_of_claiming_success() {
+    const ENCRYPTION_XML: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
+<encryption xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <EncryptedData xmlns="http://www.w3.org/2001/04/xmlenc#">
+    <EncryptionMethod Algorithm="http://ns.adobe.com/pdf/enc#RC"/>
+    <CipherData><CipherReference URI="OEBPS/fonts/embedded.ttf"/></CipherData>
+  </EncryptedData>
+</encryption>"#;
+
+    const OPF: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="pub-id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:title>Fonted</dc:title>
+    <dc:language>en</dc:language>
+    <dc:identifier id="pub-id">9783407868213</dc:identifier>
+  </metadata>
+  <manifest>
+    <item id="ch1" href="text/chapter1.xhtml" media-type="application/xhtml+xml"/>
+    <item id="font" href="fonts/embedded.ttf" media-type="application/vnd.ms-opentype"/>
+  </manifest>
+  <spine>
+    <itemref idref="ch1"/>
+  </spine>
+</package>"#;
+
+    let scrambled: Vec<u8> = (0..300u32).map(|i| (i % 250) as u8).collect();
+    let bytes = build_epub(&[
+        ("mimetype", b"application/epub+zip"),
+        ("META-INF/container.xml", CONTAINER_XML),
+        ("META-INF/encryption.xml", ENCRYPTION_XML),
+        ("OEBPS/content.opf", OPF),
+        ("OEBPS/text/chapter1.xhtml", CHAPTER1),
+        ("OEBPS/fonts/embedded.ttf", &scrambled),
+    ]);
+
+    let result = epub_tailor_core::read_epub(&bytes).expect("should still read");
+    assert_eq!(
+        result.book.resources["OEBPS/fonts/embedded.ttf"].data, scrambled,
+        "without a usable key the font must be left untouched, not further corrupted"
+    );
+    assert!(
+        !result
+            .transformations
+            .iter()
+            .any(|t| t.kind == "font-deobfuscated"),
+        "must not claim success when no key could be derived, got {:?}",
+        result.transformations
+    );
+    assert!(
+        result
+            .warnings
+            .iter()
+            .any(|w| w.message.contains("could not derive")),
+        "expected a warning about the missing key, got {:?}",
+        result.warnings
+    );
+}
+
+/// Two `EncryptedData` entries name the SAME resource - one via a plain
+/// path, one via a `./`-prefixed path that `normalize_href` resolves to the
+/// same key - so this proves de-obfuscation runs at most once per resource.
+/// XOR is its own inverse: applying it twice would silently restore the
+/// scrambled bytes while still reporting two successes.
+#[test]
+fn duplicate_cipher_references_deobfuscate_only_once() {
+    const UNIQUE_ID: &str = "urn:uuid:00000000-0000-0000-0000-000000000000";
+    let original_font: Vec<u8> = (0..300u32).map(|i| (i % 250) as u8).collect();
+    let obfuscated_font = idpf_obfuscate(&original_font, UNIQUE_ID);
+
+    const ENCRYPTION_XML: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
+<encryption xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <EncryptedData xmlns="http://www.w3.org/2001/04/xmlenc#">
+    <EncryptionMethod Algorithm="http://www.idpf.org/2008/embedding"/>
+    <CipherData><CipherReference URI="OEBPS/fonts/embedded.ttf"/></CipherData>
+  </EncryptedData>
+  <EncryptedData xmlns="http://www.w3.org/2001/04/xmlenc#">
+    <EncryptionMethod Algorithm="http://www.idpf.org/2008/embedding"/>
+    <CipherData><CipherReference URI="./OEBPS/fonts/embedded.ttf"/></CipherData>
+  </EncryptedData>
+</encryption>"#;
+
+    let opf = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="pub-id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:title>Fonted</dc:title>
+    <dc:language>en</dc:language>
+    <dc:identifier id="pub-id">{UNIQUE_ID}</dc:identifier>
+  </metadata>
+  <manifest>
+    <item id="ch1" href="text/chapter1.xhtml" media-type="application/xhtml+xml"/>
+    <item id="font" href="fonts/embedded.ttf" media-type="application/vnd.ms-opentype"/>
+  </manifest>
+  <spine>
+    <itemref idref="ch1"/>
+  </spine>
+</package>"#
+    );
+
+    let bytes = build_epub(&[
+        ("mimetype", b"application/epub+zip"),
+        ("META-INF/container.xml", CONTAINER_XML),
+        ("META-INF/encryption.xml", ENCRYPTION_XML),
+        ("OEBPS/content.opf", opf.as_bytes()),
+        ("OEBPS/text/chapter1.xhtml", CHAPTER1),
+        ("OEBPS/fonts/embedded.ttf", &obfuscated_font),
+    ]);
+
+    let result = epub_tailor_core::read_epub(&bytes).expect("should read despite the duplicate");
+    assert_eq!(
+        result.book.resources["OEBPS/fonts/embedded.ttf"].data, original_font,
+        "a duplicate CipherReference must not XOR the font a second time"
+    );
+    assert_eq!(
+        result
+            .transformations
+            .iter()
+            .filter(|t| t.kind == "font-deobfuscated")
+            .count(),
+        1,
+        "exactly one font-deobfuscated transformation, not one per duplicate entry"
+    );
+    assert!(
+        result
+            .warnings
+            .iter()
+            .any(|w| w.message.contains("more than once")),
+        "expected a warning about the duplicate reference, got {:?}",
+        result.warnings
     );
 }
 
