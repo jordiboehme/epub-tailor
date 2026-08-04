@@ -808,7 +808,7 @@ pub fn epub3_narrated() -> Vec<u8> {
     const CHAPTER1_SMIL: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
 <smil xmlns="http://www.w3.org/ns/SMIL" xmlns:epub="http://www.idpf.org/2007/ops" version="3.0">
 <body>
-<seq id="s1" epub:textref="chapter1.xhtml">
+<seq id="s1" epub:textref="chapter1.xhtml#c1">
 <par id="p1">
 <text src="chapter1.xhtml#c1"/>
 <audio src="audio/track1.mp3" clipBegin="0:00:00.000" clipEnd="0:00:05.000"/>
