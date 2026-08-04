@@ -678,6 +678,14 @@ pub fn convert(input: Input, opts: &ConvertOptions) -> Result<Converted, Convert
         normalize_model_strings(&mut book, &mut transformations);
     }
 
+    // Unconditional, not a profile feature: a nav entry the source book
+    // points at a non-spine document is a structural defect, not a
+    // device-specific tradeoff. Runs last, after chapter splitting, alias
+    // rewriting and every `book.toc`-touching normalization above, so it
+    // sees the final hrefs and titles the writer is about to regenerate the
+    // navigation document and NCX from.
+    prune_dangling_toc_entries(&mut book, &mut warnings);
+
     let chapter_count = book.spine.len() as u32;
     ensure_output_wellformed(&book)?;
     let epub = write_epub(
@@ -748,6 +756,50 @@ pub fn convert(input: Input, opts: &ConvertOptions) -> Result<Converted, Convert
 /// Whether a media type is an (X)HTML content document.
 fn is_xhtml(media_type: &str) -> bool {
     media_type == "application/xhtml+xml" || media_type == "text/html"
+}
+
+/// Drop every `book.toc` entry whose target does not resolve to a spine
+/// document, warning once per dropped entry. `write_epub` regenerates both
+/// the navigation document and the NCX from `book.toc`, so pruning the model
+/// is enough to fix both - and it must happen here, because a source book
+/// that links a non-spine document from its nav produces output that fails
+/// this crate's own `spine-toc-sync` lint at Error severity, and nothing
+/// catches that in a release build (the post-convert self-check below is
+/// `#[cfg(debug_assertions)]`-gated).
+///
+/// Resolution mirrors `validate::check_toc_target` exactly (same
+/// `normalize_href` call, same fragment split) so this and the lint always
+/// agree on what counts as "resolves to a spine document" - anything else
+/// would just trade one inconsistency for another.
+///
+/// `book.toc` is a flat, level-tagged list, not a tree: an entry's children
+/// are whatever immediately-following entries have a strictly greater level
+/// (see `write_epub`'s `build_toc_tree`). Dropping an entry here does not
+/// touch its children's levels, so a kept child of a dropped parent is not
+/// orphaned - it is promoted to sit where the dropped parent was, becoming a
+/// sibling of what used to be its parent's siblings, while its own deeper
+/// descendants stay correctly nested under it. That fold is an emergent
+/// property of `build_toc_tree`'s level comparison, not extra logic here.
+fn prune_dangling_toc_entries(book: &mut Book, warnings: &mut Vec<Warning>) {
+    let spine: HashSet<&str> = book.spine.iter().map(String::as_str).collect();
+    let nav_path = book.nav_path.clone();
+    book.toc.retain(|entry| {
+        let resolved = crate::epub::model::normalize_href("", &entry.href);
+        let path = resolved
+            .split_once('#')
+            .map_or(resolved.as_str(), |(p, _)| p);
+        let keep = spine.contains(path);
+        if !keep {
+            warnings.push(Warning {
+                message: format!(
+                    "dropped navigation entry '{}' ({}): target is not a spine document",
+                    entry.title, entry.href
+                ),
+                file: nav_path.clone(),
+            });
+        }
+        keep
+    });
 }
 
 /// Refuse to ship a content document that is not well-formed XML.

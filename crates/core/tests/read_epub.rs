@@ -1200,6 +1200,87 @@ fn colliding_entry_names_produce_an_entry_collision_lint_finding() {
 }
 
 // ---------------------------------------------------------------------
+// A nav entry pointing outside the spine must not survive to the output.
+// ---------------------------------------------------------------------
+
+/// One spine chapter plus a manifest-listed, non-spine `stray.xhtml` - the
+/// nav below links both, so `stray.xhtml` is a dangling TOC target.
+const OPF_WITH_ONE_SPINE_CHAPTER: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="pub-id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:title>Stray Nav Target</dc:title>
+    <dc:creator>Author</dc:creator>
+    <dc:language>en</dc:language>
+    <dc:identifier id="pub-id">urn:uuid:11111111-1111-1111-1111-111111111111</dc:identifier>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="ch1" href="chapter.xhtml" media-type="application/xhtml+xml"/>
+    <item id="stray" href="stray.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine>
+    <itemref idref="ch1"/>
+  </spine>
+</package>"#;
+
+/// A nav document whose TOC list links both the one spine chapter and the
+/// non-spine `stray.xhtml`.
+const NAV_LINKING_A_NON_SPINE_DOC: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+<head><title>Nav</title></head>
+<body>
+<nav epub:type="toc">
+<ol>
+<li><a href="chapter.xhtml">Chapter One</a></li>
+<li><a href="stray.xhtml">Stray</a></li>
+</ol>
+</nav>
+</body>
+</html>"#;
+
+const CHAPTER: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>Chapter One</title></head>
+<body><h1>Chapter One</h1><p>Text.</p></body></html>"#;
+
+/// Manifest-listed but never in the spine.
+const STRAY_NOT_IN_SPINE: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>Stray</title></head>
+<body><p>Not part of the spine.</p></body></html>"#;
+
+#[test]
+fn a_nav_entry_pointing_outside_the_spine_is_dropped_not_shipped() {
+    // A nav href to a document that is not a spine item produces output the
+    // tool's own linter rates an Error. Release builds never noticed - the
+    // post-convert self-check only runs under `#[cfg(debug_assertions)]`.
+    let epub = build_epub(&[
+        ("mimetype", b"application/epub+zip"),
+        ("META-INF/container.xml", common::CONTAINER_XML),
+        ("OEBPS/content.opf", OPF_WITH_ONE_SPINE_CHAPTER),
+        ("OEBPS/nav.xhtml", NAV_LINKING_A_NON_SPINE_DOC),
+        ("OEBPS/chapter.xhtml", CHAPTER),
+        ("OEBPS/stray.xhtml", STRAY_NOT_IN_SPINE),
+    ]);
+    let out = convert(Input::Epub(epub), &ConvertOptions::default()).expect("converts");
+    let findings = lint_epub(
+        &out.epub,
+        &DeviceCaps::permissive(),
+        &Features::repair_only(),
+    );
+    let sync: Vec<_> = findings
+        .iter()
+        .filter(|f| f.code == "spine-toc-sync" && f.severity == Severity::Error)
+        .collect();
+    assert!(sync.is_empty(), "output must be self-consistent: {sync:#?}");
+    assert!(
+        out.report
+            .warnings
+            .iter()
+            .any(|w| w.message.contains("navigation")),
+        "dropping a nav entry must be reported"
+    );
+}
+
+// ---------------------------------------------------------------------
 // epubcheck gate (skip-if-unavailable), mirroring the other test binaries.
 // ---------------------------------------------------------------------
 
