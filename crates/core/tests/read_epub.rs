@@ -5,18 +5,11 @@ mod common;
 
 use std::path::PathBuf;
 
-use common::{build_epub, epub2_minimal, epub3_minimal, run_epubcheck};
+use common::{CONTAINER_XML, build_epub, epub2_minimal, epub3_minimal, run_epubcheck};
 use epub_tailor_core::{
     ConvertError, ConvertOptions, DeviceCaps, Features, Input, Severity, convert, lint_epub,
     read_epub,
 };
-
-const CONTAINER_XML: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
-<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
-  <rootfiles>
-    <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
-  </rootfiles>
-</container>"#;
 
 const CHAPTER1: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
 <html xmlns="http://www.w3.org/1999/xhtml"><head><title>Chapter 1</title></head>

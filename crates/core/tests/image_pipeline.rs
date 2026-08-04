@@ -9,7 +9,7 @@ mod common;
 use std::io::{Cursor, Read};
 use std::path::PathBuf;
 
-use common::{build_epub, run_epubcheck};
+use common::{CONTAINER_XML, build_epub, run_epubcheck};
 use epub_tailor_core::{ConvertOptions, Input, convert};
 use image::codecs::gif::GifEncoder;
 use image::codecs::png::PngEncoder;
@@ -83,14 +83,9 @@ fn webp_of(img: &RgbImage) -> Vec<u8> {
 // Fixtures
 // ---------------------------------------------------------------------
 
-const CONTAINER_XML: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
-<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
-  <rootfiles>
-    <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
-  </rootfiles>
-</container>"#;
-
-const NAV_XHTML: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
+/// Local nav doc: these fixtures put their chapter at `text/chapter.xhtml`,
+/// which the shared `common::NAV_XHTML` does not link.
+const NAV: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
 <html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
 <head><title>Nav</title></head>
 <body><nav epub:type="toc"><ol><li><a href="text/chapter.xhtml">Chapter</a></li></ol></nav></body>
@@ -134,7 +129,7 @@ fn epub_images() -> Vec<u8> {
         ("mimetype", b"application/epub+zip"),
         ("META-INF/container.xml", CONTAINER_XML),
         ("OEBPS/content.opf", CONTENT_OPF),
-        ("OEBPS/nav.xhtml", NAV_XHTML),
+        ("OEBPS/nav.xhtml", NAV),
         ("OEBPS/text/chapter.xhtml", CHAPTER),
         ("OEBPS/images/cover.png", &png_of(&photo(600, 900))),
         ("OEBPS/images/photo.png", &png_of(&photo(800, 600))),
@@ -180,7 +175,7 @@ fn epub_tall() -> Vec<u8> {
         ("mimetype", b"application/epub+zip"),
         ("META-INF/container.xml", CONTAINER_XML),
         ("OEBPS/content.opf", CONTENT_OPF),
-        ("OEBPS/nav.xhtml", NAV_XHTML),
+        ("OEBPS/nav.xhtml", NAV),
         ("OEBPS/text/chapter.xhtml", CHAPTER),
         ("OEBPS/images/tall.png", &png_of(&photo(480, 3000))),
     ])

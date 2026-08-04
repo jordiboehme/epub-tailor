@@ -1304,9 +1304,9 @@ version = "0.7.0"
 dependencies = [
  "clap",
  "epub-tailor-core",
+ "epub-tailor-testfixtures",
  "serde_json",
  "ureq",
- "zip 8.6.0",
 ]
 
 [[package]]
@@ -1336,6 +1336,7 @@ dependencies = [
  "askama",
  "comrak",
  "encoding_rs",
+ "epub-tailor-testfixtures",
  "html5ever 0.26.0",
  "image",
  "indexmap 2.14.0",
@@ -1353,6 +1354,14 @@ dependencies = [
  "thiserror 2.0.19",
  "time",
  "unicode-normalization",
+ "zip 8.6.0",
+]
+
+[[package]]
+name = "epub-tailor-testfixtures"
+version = "0.7.0"
+dependencies = [
+ "image",
  "zip 8.6.0",
 ]
 

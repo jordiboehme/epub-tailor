@@ -20,8 +20,9 @@ ureq = { workspace = true, optional = true }
 
 [dev-dependencies]
 # Only for hand-building EPUB fixtures with content `md` cannot produce (e.g.
-# a stray META-INF file), the same way `epub-tailor-core`'s own test fixtures do.
-zip.workspace = true
+# a stray META-INF file), from the same primitives `epub-tailor-core`'s own
+# test fixtures use.
+epub-tailor-testfixtures.workspace = true
 
 [lints]
 workspace = true

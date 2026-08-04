@@ -12,15 +12,8 @@ mod common;
 
 use std::path::PathBuf;
 
-use common::{build_epub, run_epubcheck};
+use common::{CONTAINER_XML, build_epub, run_epubcheck};
 use epub_tailor_core::{ConvertOptions, DeviceCaps, Features, Input, convert, lint_epub};
-
-const CONTAINER_XML: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
-<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
-  <rootfiles>
-    <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
-  </rootfiles>
-</container>"#;
 
 const CONTENT_OPF: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
 <package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="pub-id">
@@ -43,7 +36,7 @@ const CONTENT_OPF: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
 // its block ancestor's existing `id="blk"` - `relocate_ids` drops the inline
 // id and aliases it onto `blk`, so after the fix the surviving anchor is
 // `id="blk"`, not `id="toctarget"`.
-const NAV_XHTML: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
+const NAV: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
 <html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
 <head><title>Nav</title></head>
 <body><nav epub:type="toc"><ol>
@@ -59,7 +52,7 @@ fn dangling_toc_fixture() -> Vec<u8> {
         ("mimetype", b"application/epub+zip"),
         ("META-INF/container.xml", CONTAINER_XML),
         ("OEBPS/content.opf", CONTENT_OPF),
-        ("OEBPS/nav.xhtml", NAV_XHTML),
+        ("OEBPS/nav.xhtml", NAV),
         ("OEBPS/text/chapter1.xhtml", CHAPTER1),
     ])
 }
