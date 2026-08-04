@@ -22,9 +22,22 @@ jobs:
       # clippy/test jobs: it needs a built frontend (../dist) and system webview
       # libraries, and it has its own build path. CI covers the CLI/core here.
       - run: cargo clippy --workspace --exclude epub-tailor-app --all-targets -- -D warnings
+      # `epubcheck` pulls in a JRE, and installing one on 24.04 trips
+      # `needrestart`, which asks which services to restart and waits for an
+      # answer - `-y` covers apt's own questions, not that one. Two runs hung
+      # here for 25 minutes each before this was pinned down. The env vars
+      # silence both prompts; the timeout turns a future hang into a
+      # five-minute failure with an obvious cause rather than an idle runner.
       - name: Install epubcheck (Linux)
         if: matrix.os == 'ubuntu-24.04'
-        run: sudo apt-get update && sudo apt-get install -y epubcheck
+        timeout-minutes: 5
+        env:
+          DEBIAN_FRONTEND: noninteractive
+          NEEDRESTART_MODE: a
+          NEEDRESTART_SUSPEND: 1
+        run: |
+          sudo -E apt-get update -qq
+          sudo -E apt-get install -y --no-install-recommends epubcheck
       - uses: taiki-e/install-action@43aecc8d72668fbcfe75c31400bc4f890f1c5853 # v2.83.2
         with:
           tool: nextest
