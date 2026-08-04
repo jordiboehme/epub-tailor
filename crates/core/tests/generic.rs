@@ -818,3 +818,22 @@ fn a_scheme_refined_mistyped_isbn_survives_a_generic_conversion() {
         "an ISBN-13-shaped value behind an ISBN refinement must be kept:\n{opf}"
     );
 }
+
+/// The nav guard must key on the path the writer will actually use, not on
+/// `book.nav_path` alone: when that is `None` the writer emits
+/// `<opf_dir>/nav.xhtml` and discards whatever was stored there.
+#[test]
+fn a_nav_path_the_writer_will_synthesize_is_not_scrubbed_as_content() {
+    let out = convert(
+        Input::Epub(common::epub2_with_a_stray_nav_xhtml()),
+        &opts_for(&["generic"]),
+    )
+    .expect("converts");
+    assert!(
+        !out.report.transformations.iter().any(|t| {
+            t.kind == "generic-invisible" && t.file.as_deref() == Some("OEBPS/nav.xhtml")
+        }),
+        "must not report work on a file the writer replaces: {:#?}",
+        out.report.transformations
+    );
+}

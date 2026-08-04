@@ -1351,6 +1351,70 @@ pub fn epub3_gutenberg_style_ids() -> Vec<u8> {
     ])
 }
 
+/// An EPUB2 book (so `book.nav_path` is `None`) carrying a non-spine XHTML at
+/// exactly `OEBPS/nav.xhtml` - the path `write_epub` falls back to when there
+/// is no nav. Its prose holds a zero-width joiner, so any code that scrubs it
+/// reports a `generic-invisible` transformation; that is how a test can tell
+/// whether the file was touched at all. The writer discards these bytes and
+/// regenerates the nav from the model, so touching them is dead work.
+pub fn epub2_with_a_stray_nav_xhtml() -> Vec<u8> {
+    const CONTAINER_XML: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles>
+    <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
+  </rootfiles>
+</container>"#;
+
+    const CONTENT_OPF: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="2.0" unique-identifier="pub-id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:title>Stray Nav</dc:title>
+    <dc:language>en</dc:language>
+    <dc:identifier id="pub-id">urn:uuid:11112222-3333-4444-5555-666677778888</dc:identifier>
+  </metadata>
+  <manifest>
+    <item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
+    <item id="ch1" href="text/chapter1.xhtml" media-type="application/xhtml+xml"/>
+    <item id="stray" href="nav.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine toc="ncx">
+    <itemref idref="ch1"/>
+  </spine>
+</package>"#;
+
+    const TOC_NCX: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
+<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1">
+  <head><meta name="dtb:uid" content="urn:uuid:11112222-3333-4444-5555-666677778888"/></head>
+  <docTitle><text>Stray Nav</text></docTitle>
+  <navMap>
+    <navPoint id="np1" playOrder="1">
+      <navLabel><text>Chapter 1</text></navLabel>
+      <content src="text/chapter1.xhtml"/>
+    </navPoint>
+  </navMap>
+</ncx>"#;
+
+    const CHAPTER1: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>Chapter 1</title></head>
+<body><h1>Chapter 1</h1><p>Text.</p></body></html>"#;
+
+    // The zero-width joiner between two letters is what a scrub would remove
+    // and report on. `nav.xhtml` is in the manifest but not the spine, so it
+    // reaches the non-spine XHTML loop.
+    let stray_nav = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+<html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>Contents</title></head>\n\
+<body><p>Wa\u{200d}ter</p></body></html>";
+
+    build_epub(&[
+        ("mimetype", b"application/epub+zip"),
+        ("META-INF/container.xml", CONTAINER_XML),
+        ("OEBPS/content.opf", CONTENT_OPF),
+        ("OEBPS/toc.ncx", TOC_NCX),
+        ("OEBPS/text/chapter1.xhtml", CHAPTER1),
+        ("OEBPS/nav.xhtml", stray_nav.as_bytes()),
+    ])
+}
+
 /// A minimal, well-formed EPUB2 book: same two chapters, but a NCX instead of
 /// a nav doc (spine `toc="ncx"`, no `properties=nav` item anywhere).
 pub fn epub2_minimal() -> Vec<u8> {

@@ -59,10 +59,7 @@ pub fn write_epub(
     warnings: &mut Vec<Warning>,
 ) -> Result<Vec<u8>, ConvertError> {
     let opf_dir = parent_dir(&book.opf_path);
-    let nav_path = book
-        .nav_path
-        .clone()
-        .unwrap_or_else(|| join_dir(&opf_dir, "nav.xhtml"));
+    let nav_path = effective_nav_path(book);
     let ncx_path = book
         .ncx_path
         .clone()
@@ -679,6 +676,22 @@ fn percent_encode(s: &str, keep_slash: bool) -> String {
 // ---------------------------------------------------------------------
 // Misc helpers
 // ---------------------------------------------------------------------
+
+/// The path [`write_epub`] will write the nav document to: `book.nav_path`
+/// when the book had one, otherwise `<opf_dir>/nav.xhtml`.
+///
+/// Shared rather than inlined because callers outside the writer need to know
+/// which resource the writer is going to overwrite. Guarding on `nav_path`
+/// alone misses the fallback: an EPUB 2 book has `nav_path: None` but may
+/// still carry a non-spine XHTML at exactly `<opf_dir>/nav.xhtml`, and that
+/// file's stored bytes never ship - the writer regenerates them from
+/// `book.metadata` and `book.toc`. Any work done on it is dead work that
+/// still reports a transformation.
+pub(crate) fn effective_nav_path(book: &Book) -> String {
+    book.nav_path
+        .clone()
+        .unwrap_or_else(|| join_dir(&parent_dir(&book.opf_path), "nav.xhtml"))
+}
 
 /// Parent directory of a zip-absolute path (`""` if it has no `/`).
 fn parent_dir(path: &str) -> String {

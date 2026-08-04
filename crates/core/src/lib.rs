@@ -632,16 +632,21 @@ pub fn convert(input: Input, opts: &ConvertOptions) -> Result<Converted, Convert
         .filter(|(path, resource)| !spine.contains(path.as_str()) && is_xhtml(&resource.media_type))
         .map(|(path, _)| path.clone())
         .collect();
+    // The writer regenerates the nav document from `book.metadata` and
+    // `book.toc` (see `write_epub`'s `NavTemplate`), discarding whatever is
+    // stored at this path entirely. Asked through the writer's own helper
+    // rather than read off `book.nav_path`, because the writer falls back to
+    // `<opf_dir>/nav.xhtml` when that is `None` - so an EPUB 2 book with a
+    // non-spine XHTML sitting at exactly that path would otherwise be
+    // scrubbed pointlessly and report a transformation for bytes that never
+    // ship.
+    let nav_path = crate::epub::write::effective_nav_path(&book);
     for path in non_spine {
         let doc = parse_xhtml(&book.resources[&path].data)?;
-        // The writer regenerates the nav document from `book.metadata` and
-        // `book.toc` (see `write_epub`'s `NavTemplate`), discarding whatever
-        // is stored here entirely - scrubbing this DOM would be dead work
-        // that still reports a transformation for a file whose bytes never
-        // ship. `scrub_model_strings` (below) covers the nav's real source
-        // instead. Every other non-spine XHTML document's bytes do ship as
-        // stored, so they still get scrubbed.
-        if opts.features.strip_invisible_chars && book.nav_path.as_deref() != Some(path.as_str()) {
+        // `scrub_model_strings` (below) covers the nav's real source instead.
+        // Every other non-spine XHTML document's bytes do ship as stored, so
+        // they still get scrubbed.
+        if opts.features.strip_invisible_chars && nav_path != path {
             generic::invisible::scrub_chapter(&doc, &mut transformations, &path);
         }
         let srcset_targets =
