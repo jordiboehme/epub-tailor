@@ -6,6 +6,7 @@ use indexmap::IndexMap;
 use roxmltree::{Document, Node};
 use zip::ZipArchive;
 
+use crate::epub::fonts::{Obfuscation, deobfuscate};
 use crate::epub::model::{
     Book, Creator, Identifier, Metadata, Resource, Series, TocEntry, normalize_entry_name,
     normalize_href,
@@ -23,14 +24,16 @@ pub struct ReadEpub {
     /// transcoded encodings, dropped files, dangling references, ...).
     pub warnings: Vec<Warning>,
     /// Transformations made while reading (currently: dropped META-INF
-    /// payloads). Separate from `warnings` because these are reportable
-    /// changes to the content, not just issues noticed in passing.
+    /// payloads and de-obfuscated fonts). Separate from `warnings` because
+    /// these are reportable changes to the content, not just issues noticed
+    /// in passing.
     pub transformations: Vec<Transformation>,
 }
 
 /// Font-obfuscation algorithms that `META-INF/encryption.xml` may declare
-/// without the book being treated as DRM-protected (the fonts are stripped
-/// anyway, so de-obfuscating them would be pointless work).
+/// without the book being treated as DRM-protected. Each resource an entry
+/// using one of these covers is de-obfuscated in place (see
+/// [`font_obfuscated_resources`]) rather than left scrambled.
 const FONT_OBFUSCATION_ALGORITHMS: [&str; 2] = [
     "http://www.idpf.org/2008/embedding",
     "http://ns.adobe.com/pdf/enc#RC",
@@ -87,15 +90,20 @@ pub fn read_epub(bytes: &[u8]) -> Result<ReadEpub, ConvertError> {
     let opf_path = parse_container(&container_text)?;
 
     // Partition entries into resources (in zip order) vs. dropped META-INF
-    // extras, excluding `mimetype` and `META-INF/` itself.
+    // extras, excluding `mimetype` and `META-INF/` itself. `encryption.xml`'s
+    // bytes are kept aside (not emitted as a resource): once the fonts it
+    // covers are de-obfuscated below, the declaration is no longer needed.
     let mut dropped_meta_inf: Vec<(String, Vec<u8>)> = Vec::new();
     let mut resources_raw: IndexMap<String, Vec<u8>> = IndexMap::new();
+    let mut encryption_xml: Option<Vec<u8>> = None;
     for (name, data) in all_entries {
         if name == "mimetype" {
             continue;
         }
         if let Some(rest) = name.strip_prefix("META-INF/") {
-            if rest != "container.xml" && rest != "encryption.xml" {
+            if rest == "encryption.xml" {
+                encryption_xml = Some(data);
+            } else if rest != "container.xml" {
                 dropped_meta_inf.push((name, data));
             }
             continue;
@@ -147,6 +155,20 @@ pub fn read_epub(bytes: &[u8]) -> Result<ReadEpub, ConvertError> {
         .values()
         .map(|item| (item.href.as_str(), item.media_type.as_str()))
         .collect();
+    // Keyed by the *narrating/fallback-carrying* item's own href, pointing at
+    // the (already id->href resolved) target's href - so the loop below can
+    // look each resource's linkage up by the same `path` it is keying
+    // `resources` on.
+    let href_media_overlay: std::collections::HashMap<&str, &str> = parsed_opf
+        .manifest
+        .values()
+        .filter_map(|item| Some((item.href.as_str(), item.media_overlay.as_deref()?)))
+        .collect();
+    let href_fallback: std::collections::HashMap<&str, &str> = parsed_opf
+        .manifest
+        .values()
+        .filter_map(|item| Some((item.href.as_str(), item.fallback.as_deref()?)))
+        .collect();
 
     let mut resources = IndexMap::new();
     for (path, data) in resources_raw {
@@ -163,13 +185,74 @@ pub fn read_epub(bytes: &[u8]) -> Result<ReadEpub, ConvertError> {
         } else {
             data
         };
+        let media_overlay = href_media_overlay.get(path.as_str()).map(|s| s.to_string());
+        let fallback = href_fallback.get(path.as_str()).map(|s| s.to_string());
+        // Already href-keyed (it names the SMIL item its own duration
+        // refines, not a linking item's target), unlike the two maps above.
+        let media_duration = parsed_opf.media_durations.get(&path).cloned();
         resources.insert(
             path,
             Resource {
                 data: final_data,
                 media_type,
+                media_overlay,
+                fallback,
+                media_duration,
             },
         );
+    }
+
+    // `check_drm` above already rejected any `encryption.xml` that declares a
+    // non-font-obfuscation algorithm, so every `EncryptedData` entry reaching
+    // this point is font obfuscation: de-obfuscate each covered resource in
+    // place, keyed off the unique identifier, so the output declares nothing
+    // and needs to declare nothing.
+    if let Some(enc_bytes) = encryption_xml {
+        let enc_text = String::from_utf8_lossy(&enc_bytes);
+        let unique_id = parsed_opf.metadata.identifier.as_deref().unwrap_or("");
+        // XOR is its own inverse, so applying it to one resource twice would
+        // silently restore the scrambled bytes. Two `EncryptedData` entries
+        // can name the same resource - a literal duplicate, two differently
+        // spelled URIs that `normalize_href` resolves to the same path, or
+        // two entries with different algorithms over one resource - so each
+        // normalized path is de-obfuscated at most once, tracked here.
+        let mut deobfuscated_paths: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
+        for (uri, algorithm) in font_obfuscated_resources(&enc_text)? {
+            let path = normalize_href("", &uri);
+            let Some(resource) = resources.get_mut(&path) else {
+                continue;
+            };
+            if !deobfuscated_paths.insert(path.clone()) {
+                warnings.push(Warning {
+                    message: format!(
+                        "{path}: META-INF/encryption.xml names this resource more than \
+                         once; de-obfuscating only the first entry"
+                    ),
+                    file: Some(path),
+                });
+                continue;
+            }
+            if deobfuscate(&mut resource.data, algorithm, unique_id) {
+                transformations.push(Transformation {
+                    kind: "font-deobfuscated".to_string(),
+                    detail: "undid EPUB font obfuscation so the font is usable".to_string(),
+                    file: Some(path),
+                });
+            } else {
+                // Adobe's scheme with a non-`urn:uuid:` identifier: no key,
+                // so `deobfuscate` left the bytes untouched. Reporting
+                // success here would be a false claim - the font is still
+                // scrambled - so this is a warning, not a transformation.
+                warnings.push(Warning {
+                    message: format!(
+                        "{path}: could not derive a font-obfuscation key from the book's \
+                         identifier; the font is still scrambled"
+                    ),
+                    file: Some(path),
+                });
+            }
+        }
     }
 
     let book = Book {
@@ -217,12 +300,54 @@ fn meta_inf_preview(data: &[u8]) -> String {
 /// presence first).
 pub(crate) enum EncryptionClass {
     /// Every `EncryptedData` entry uses a font-obfuscation algorithm: not
-    /// DRM (the fonts are stripped anyway, so de-obfuscating them would be
-    /// pointless work), but worth a nod since the book does carry the file.
+    /// DRM. `read_epub` de-obfuscates each covered font in place and drops
+    /// the declaration; `crate::validate`'s `drm` lint still surfaces this as
+    /// an informational finding, since it is a real (if benign) fact about
+    /// the source file.
     FontObfuscationOnly,
     /// At least one entry uses a real encryption algorithm: the book is
     /// DRM-protected.
     Drm,
+}
+
+/// One `<EncryptedData>` entry from `META-INF/encryption.xml`: its declared
+/// algorithm and the resource its `<CipherReference URI="...">` names, when
+/// present. Either may be absent in a malformed document; callers that need
+/// one treat a missing value as "does not qualify" rather than erroring.
+struct EncryptedDataEntry {
+    algorithm: Option<String>,
+    cipher_uri: Option<String>,
+}
+
+/// Parse every `<EncryptedData>` entry out of a decoded
+/// `META-INF/encryption.xml` document. Shared by [`classify_encryption_xml`]
+/// (which only needs each entry's algorithm) and
+/// [`font_obfuscated_resources`] (which also needs the covered resource).
+fn parse_encrypted_data_entries(text: &str) -> Result<Vec<EncryptedDataEntry>, ConvertError> {
+    let doc = Document::parse(text).map_err(|e| {
+        ConvertError::InvalidEpub(format!("malformed META-INF/encryption.xml: {e}"))
+    })?;
+
+    Ok(doc
+        .descendants()
+        .filter(|n| n.is_element() && n.tag_name().name() == "EncryptedData")
+        .map(|enc_data| {
+            let algorithm = enc_data
+                .descendants()
+                .find(|n| n.is_element() && n.tag_name().name() == "EncryptionMethod")
+                .and_then(|n| n.attribute("Algorithm"))
+                .map(str::to_string);
+            let cipher_uri = enc_data
+                .descendants()
+                .find(|n| n.is_element() && n.tag_name().name() == "CipherReference")
+                .and_then(|n| n.attribute("URI"))
+                .map(str::to_string);
+            EncryptedDataEntry {
+                algorithm,
+                cipher_uri,
+            }
+        })
+        .collect())
 }
 
 /// Classify a decoded `META-INF/encryption.xml` document's `EncryptedData`
@@ -230,30 +355,50 @@ pub(crate) enum EncryptionClass {
 /// a hard [`ConvertError::DrmProtected`]) and `crate::validate`'s `drm` lint
 /// (which turns it into an `Error`-severity finding instead).
 pub(crate) fn classify_encryption_xml(text: &str) -> Result<EncryptionClass, ConvertError> {
-    let doc = Document::parse(text).map_err(|e| {
-        ConvertError::InvalidEpub(format!("malformed META-INF/encryption.xml: {e}"))
-    })?;
+    let entries = parse_encrypted_data_entries(text)?;
 
-    let mut non_font_algorithm = false;
-    for enc_data in doc
-        .descendants()
-        .filter(|n| n.is_element() && n.tag_name().name() == "EncryptedData")
-    {
-        let algorithm = enc_data
-            .descendants()
-            .find(|n| n.is_element() && n.tag_name().name() == "EncryptionMethod")
-            .and_then(|n| n.attribute("Algorithm"));
-        match algorithm {
-            Some(algo) if FONT_OBFUSCATION_ALGORITHMS.contains(&algo) => {}
-            _ => non_font_algorithm = true,
-        }
-    }
+    let non_font_algorithm = entries.iter().any(|entry| {
+        !matches!(
+            entry.algorithm.as_deref(),
+            Some(algo) if FONT_OBFUSCATION_ALGORITHMS.contains(&algo)
+        )
+    });
 
     if non_font_algorithm {
         Ok(EncryptionClass::Drm)
     } else {
         Ok(EncryptionClass::FontObfuscationOnly)
     }
+}
+
+/// The algorithm URI's [`Obfuscation`] variant, or `None` for a non-font (DRM)
+/// algorithm.
+fn font_obfuscation_algorithm(algorithm: &str) -> Option<Obfuscation> {
+    match algorithm {
+        "http://www.idpf.org/2008/embedding" => Some(Obfuscation::Idpf),
+        "http://ns.adobe.com/pdf/enc#RC" => Some(Obfuscation::Adobe),
+        _ => None,
+    }
+}
+
+/// Every resource `META-INF/encryption.xml` declares as font-obfuscated, as
+/// `(container-relative URI, algorithm)` pairs. Only meaningful once
+/// [`classify_encryption_xml`] has confirmed the document is
+/// [`EncryptionClass::FontObfuscationOnly`] - by the time [`read_epub`] calls
+/// this, [`check_drm`] has already turned any non-font entry into a hard
+/// error, so every entry reaching here uses a font-obfuscation algorithm.
+/// An entry missing its algorithm or `CipherReference` URI is skipped: there
+/// is nothing to de-obfuscate without knowing which resource, with which key.
+fn font_obfuscated_resources(text: &str) -> Result<Vec<(String, Obfuscation)>, ConvertError> {
+    let entries = parse_encrypted_data_entries(text)?;
+    Ok(entries
+        .into_iter()
+        .filter_map(|entry| {
+            let algorithm = font_obfuscation_algorithm(entry.algorithm.as_deref()?)?;
+            let uri = entry.cipher_uri?;
+            Some((uri, algorithm))
+        })
+        .collect())
 }
 
 fn check_drm<R: Read + Seek>(
@@ -281,7 +426,7 @@ fn check_drm<R: Read + Seek>(
         EncryptionClass::FontObfuscationOnly => {
             warnings.push(Warning {
                 message: "obfuscated fonts detected (META-INF/encryption.xml uses font \
-                          obfuscation only); fonts are stripped anyway"
+                          obfuscation only); de-obfuscating and dropping the declaration"
                     .to_string(),
                 file: None,
             });
@@ -440,6 +585,12 @@ struct ManifestItem {
     href: String,
     media_type: String,
     properties: Vec<String>,
+    /// Resolved href of the SMIL document this item's `media-overlay` idref
+    /// names, or `None` if the item carries none or the idref is dangling.
+    media_overlay: Option<String>,
+    /// Resolved href of the item this item's `fallback` idref names, or
+    /// `None` if absent or dangling.
+    fallback: Option<String>,
 }
 
 struct ParsedOpf {
@@ -449,6 +600,12 @@ struct ParsedOpf {
     cover: Option<String>,
     nav_path: Option<String>,
     ncx_path: Option<String>,
+    /// Per-SMIL-item read-aloud duration, href -> value - the resolved form
+    /// of every `<meta refines="#id" property="media:duration">` in the
+    /// source `<metadata>`. The book-wide duration (no `refines`) is folded
+    /// into `metadata.media_duration` instead, alongside every other
+    /// `<metadata>` field.
+    media_durations: std::collections::HashMap<String, String>,
 }
 
 fn parse_opf(
@@ -465,13 +622,19 @@ fn parse_opf(
         .find(|n| n.is_element() && n.tag_name().name() == "metadata")
         .ok_or_else(|| ConvertError::InvalidEpub("OPF missing <metadata>".to_string()))?;
 
-    let metadata = parse_metadata(metadata_node, unique_identifier, warnings);
+    let mut metadata = parse_metadata(metadata_node, unique_identifier, warnings);
 
     let manifest_node = package
         .children()
         .find(|n| n.is_element() && n.tag_name().name() == "manifest")
         .ok_or_else(|| ConvertError::InvalidEpub("OPF missing <manifest>".to_string()))?;
-    let manifest = parse_manifest(manifest_node, opf_dir);
+    let manifest = parse_manifest(manifest_node, opf_dir, warnings);
+
+    // Resolving a duration's `refines="#id"` to a resource needs the
+    // manifest, so this runs after it - unlike every other `<metadata>`
+    // field, which `parse_metadata` reads standalone.
+    let (media_duration, media_durations) = parse_media_durations(metadata_node, &manifest);
+    metadata.media_duration = media_duration;
 
     let spine_node = package
         .children()
@@ -502,6 +665,7 @@ fn parse_opf(
         cover,
         nav_path,
         ncx_path,
+        media_durations,
     })
 }
 
@@ -701,15 +865,96 @@ fn parse_metadata(
         date: first_dc(metadata_node, "date"),
         rights: first_dc(metadata_node, "rights"),
         series: parse_series(metadata_node),
+        // Set by `parse_opf` once the manifest (needed to resolve a
+        // per-item duration's `refines` idref to a resource) is parsed.
+        media_duration: None,
     }
 }
 
-fn parse_manifest(manifest_node: Node, opf_dir: &str) -> IndexMap<String, ManifestItem> {
-    let mut manifest = IndexMap::new();
-    for item in manifest_node
+/// Every `<meta property="media:duration">` in `<metadata>`: the book-wide
+/// one (no `refines`, first one wins if the source has more than one) and
+/// each SMIL item's own (`refines="#id"`, `id` resolved through `manifest`
+/// to that item's href - the same id -> href resolution
+/// [`crate::generic::reachable`]'s `opf_refs` and [`parse_manifest`]'s
+/// `media-overlay`/`fallback` handling both use). EPUB 3 requires both
+/// whenever any manifest item carries `media-overlay`; dropping them was the
+/// same closed-field-set bug this module's `media-overlay`/`fallback`
+/// handling fixes, one level up in `<metadata>` instead of `<manifest>`.
+fn parse_media_durations(
+    metadata_node: Node,
+    manifest: &IndexMap<String, ManifestItem>,
+) -> (Option<String>, std::collections::HashMap<String, String>) {
+    let mut global = None;
+    let mut per_item = std::collections::HashMap::new();
+    for meta in metadata_node
+        .descendants()
+        .filter(|n| n.is_element() && n.tag_name().name() == "meta")
+        .filter(|n| n.attribute("property") == Some("media:duration"))
+    {
+        let value = collapse_whitespace(&collect_text(meta));
+        if value.is_empty() {
+            continue;
+        }
+        match meta.attribute("refines").and_then(|r| r.strip_prefix('#')) {
+            Some(id) => {
+                if let Some(item) = manifest.get(id) {
+                    per_item.insert(item.href.clone(), value);
+                }
+            }
+            None => {
+                if global.is_none() {
+                    global = Some(value);
+                }
+            }
+        }
+    }
+    (global, per_item)
+}
+
+fn parse_manifest(
+    manifest_node: Node,
+    opf_dir: &str,
+    warnings: &mut Vec<Warning>,
+) -> IndexMap<String, ManifestItem> {
+    let item_nodes: Vec<Node> = manifest_node
         .children()
         .filter(|n| n.is_element() && n.tag_name().name() == "item")
-    {
+        .collect();
+
+    // id -> resolved href, built up front so a `media-overlay`/`fallback`
+    // idref resolves regardless of document order. Mirrors
+    // `generic::reachable::opf_refs`, which resolves the same two attributes
+    // the same way for its own reachability walk.
+    let id_href: std::collections::HashMap<&str, String> = item_nodes
+        .iter()
+        .filter_map(|n| {
+            let id = n.attribute("id")?;
+            let href = n.attribute("href")?;
+            Some((id, normalize_href(opf_dir, href)))
+        })
+        .collect();
+
+    // Resolve `item`'s `attr` idref to the href `id_href` resolved it to, or
+    // `None` (with a warning) when the idref names no manifest item - a
+    // malformed source file, not something write_epub can repair later.
+    let resolve_idref = |item: Node, attr: &str, warnings: &mut Vec<Warning>| -> Option<String> {
+        let idref = item.attribute(attr)?;
+        if let Some(href) = id_href.get(idref) {
+            return Some(href.clone());
+        }
+        warnings.push(Warning {
+            message: format!(
+                "manifest item '{}' has {attr}=\"{idref}\", which does not match any \
+                 manifest item's id; dropping the linkage",
+                item.attribute("id").unwrap_or("")
+            ),
+            file: None,
+        });
+        None
+    };
+
+    let mut manifest = IndexMap::new();
+    for item in &item_nodes {
         let (Some(id), Some(href_raw)) = (item.attribute("id"), item.attribute("href")) else {
             continue;
         };
@@ -719,12 +964,16 @@ fn parse_manifest(manifest_node: Node, opf_dir: &str) -> IndexMap<String, Manife
             .attribute("properties")
             .map(|p| p.split_whitespace().map(String::from).collect())
             .unwrap_or_default();
+        let media_overlay = resolve_idref(*item, "media-overlay", warnings);
+        let fallback = resolve_idref(*item, "fallback", warnings);
         manifest.insert(
             id.to_string(),
             ManifestItem {
                 href,
                 media_type,
                 properties,
+                media_overlay,
+                fallback,
             },
         );
     }

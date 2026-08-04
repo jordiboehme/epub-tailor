@@ -40,6 +40,19 @@ export function addFileLayer(stack: ProfileLayer[], path: string): ProfileLayer[
 }
 
 /**
+ * Why `addFileLayer` returned the stack unchanged, phrased for the user, or
+ * `null` when the path is genuinely new. The built-in add panel can show this
+ * state up front (it disables an already-present entry and relabels it), but
+ * the file picker cannot: the app only learns the path after the OS dialog
+ * closes, so a duplicate there reads as a click the app ignored unless it
+ * says otherwise.
+ */
+export function describeDuplicateLayer(stack: ProfileLayer[], path: string): string | null {
+  if (!stack.some((layer) => layer.kind === "file" && layer.path === path)) return null;
+  return `${baseName(path)} is already in the stack`;
+}
+
+/**
  * Remove the layer at `index`, refusing when it is the only one left - a
  * stack of zero layers is never a valid composition (see
  * `migrateProfileStack`'s docstring in `settings.svelte.ts`). Returns the

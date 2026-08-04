@@ -10,6 +10,7 @@
     baseName,
     addBuiltinLayer,
     addFileLayer,
+    describeDuplicateLayer,
     removeLayerAt,
     moveLayer,
     hasDeviceClash,
@@ -20,6 +21,10 @@
 
   let adding = $state(false);
   let query = $state("");
+  // Why a notice rather than a disabled entry like the built-in panel uses:
+  // the file picker only reveals its path after the OS dialog closes, so a
+  // duplicate cannot be shown as unavailable beforehand.
+  let duplicateNotice = $state<string | null>(null);
 
   const filtered = $derived(
     profiles.builtins.filter((p) =>
@@ -54,11 +59,13 @@
       filters: [{ name: "Profile JSON", extensions: ["json"] }],
     });
     if (typeof selection !== "string") return;
+    duplicateNotice = describeDuplicateLayer(settings.profileStack, selection);
     settings.profileStack = addFileLayer(settings.profileStack, selection);
   }
 
   function removeLayer(index: number) {
     settings.profileStack = removeLayerAt(settings.profileStack, index);
+    duplicateNotice = null;
   }
 
   function move(index: number, delta: number) {
@@ -192,4 +199,12 @@
       + Add profile JSON...
     </button>
   </div>
+
+  {#if duplicateNotice}
+    <p
+      class="inline-flex w-fit items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-[11px] text-amber-800 dark:bg-amber-500/10 dark:text-amber-400"
+    >
+      {duplicateNotice}
+    </p>
+  {/if}
 </div>

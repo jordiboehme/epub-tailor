@@ -5,18 +5,11 @@ mod common;
 
 use std::path::PathBuf;
 
-use common::{build_epub, epub2_minimal, epub3_minimal, run_epubcheck};
+use common::{CONTAINER_XML, build_epub, epub2_minimal, epub3_minimal, run_epubcheck};
 use epub_tailor_core::{
     ConvertError, ConvertOptions, DeviceCaps, Features, Input, Severity, convert, lint_epub,
     read_epub,
 };
-
-const CONTAINER_XML: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
-<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
-  <rootfiles>
-    <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
-  </rootfiles>
-</container>"#;
 
 const CHAPTER1: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
 <html xmlns="http://www.w3.org/1999/xhtml"><head><title>Chapter 1</title></head>
@@ -167,6 +160,14 @@ fn adept_style_drm_is_rejected() {
 
 #[test]
 fn font_obfuscation_only_is_a_warning_not_an_error() {
+    // The `CipherReference` URI deliberately names no resource in this
+    // fixture: this test only exercises `check_drm`'s classification warning
+    // (font-obfuscation-only is not DRM), not de-obfuscation itself - that is
+    // covered end to end by `font_obfuscation_is_undone_and_encryption_xml_is_dropped`
+    // and `adobe_font_obfuscation_is_undone` below. The missing-resource skip
+    // is asserted explicitly (no `font-deobfuscated` transformation) so it
+    // reads as an intentional part of this fixture, not an unstated side
+    // effect of a stale path.
     const ENCRYPTION_XML: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
 <encryption xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
   <EncryptedData xmlns="http://www.w3.org/2001/04/xmlenc#">
@@ -192,6 +193,340 @@ fn font_obfuscation_only_is_a_warning_not_an_error() {
             .iter()
             .any(|w| w.message.to_lowercase().contains("font")),
         "expected a warning mentioning fonts, got {:?}",
+        result.warnings
+    );
+    assert!(
+        !result
+            .transformations
+            .iter()
+            .any(|t| t.kind == "font-deobfuscated"),
+        "the CipherReference URI names nothing in this fixture, so nothing should have been \
+         de-obfuscated: {:?}",
+        result.transformations
+    );
+}
+
+/// The IDPF font-obfuscation key for `unique_id`: SHA-1 of the identifier
+/// with whitespace stripped (there is none here), matching
+/// `epub_tailor_core`'s own `fonts::idpf_key` - kept independent (computed by
+/// hand from the `sha1` crate directly) so the test does not just assert the
+/// implementation agrees with itself.
+fn idpf_obfuscate(data: &[u8], unique_id: &str) -> Vec<u8> {
+    use sha1::{Digest, Sha1};
+    let key = Sha1::digest(unique_id.as_bytes());
+    data.iter()
+        .enumerate()
+        .map(|(i, b)| b ^ key[i % key.len()])
+        .collect()
+}
+
+#[test]
+fn font_obfuscation_is_undone_and_encryption_xml_is_dropped() {
+    const UNIQUE_ID: &str = "urn:uuid:00000000-0000-0000-0000-000000000000";
+    let original_font: Vec<u8> = (0..300u32).map(|i| (i % 250) as u8).collect();
+    let obfuscated_font = idpf_obfuscate(&original_font, UNIQUE_ID);
+    // The obfuscation must actually have changed the bytes, or this fixture
+    // would not exercise de-obfuscation at all.
+    assert_ne!(obfuscated_font, original_font);
+
+    const ENCRYPTION_XML: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
+<encryption xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <EncryptedData xmlns="http://www.w3.org/2001/04/xmlenc#">
+    <EncryptionMethod Algorithm="http://www.idpf.org/2008/embedding"/>
+    <CipherData><CipherReference URI="OEBPS/fonts/embedded.ttf"/></CipherData>
+  </EncryptedData>
+</encryption>"#;
+
+    let opf = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="pub-id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:title>Fonted</dc:title>
+    <dc:language>en</dc:language>
+    <dc:identifier id="pub-id">{UNIQUE_ID}</dc:identifier>
+  </metadata>
+  <manifest>
+    <item id="ch1" href="text/chapter1.xhtml" media-type="application/xhtml+xml"/>
+    <item id="font" href="fonts/embedded.ttf" media-type="application/vnd.ms-opentype"/>
+  </manifest>
+  <spine>
+    <itemref idref="ch1"/>
+  </spine>
+</package>"#
+    );
+
+    let bytes = build_epub(&[
+        ("mimetype", b"application/epub+zip"),
+        ("META-INF/container.xml", CONTAINER_XML),
+        ("META-INF/encryption.xml", ENCRYPTION_XML),
+        ("OEBPS/content.opf", opf.as_bytes()),
+        ("OEBPS/text/chapter1.xhtml", CHAPTER1),
+        ("OEBPS/fonts/embedded.ttf", &obfuscated_font),
+    ]);
+
+    // Reading alone must de-obfuscate the font in the `Book` model and record
+    // the transformation.
+    let result = epub_tailor_core::read_epub(&bytes).expect("font-obfuscated epub should read");
+    let font_resource = &result.book.resources["OEBPS/fonts/embedded.ttf"];
+    assert_eq!(
+        font_resource.data, original_font,
+        "the font bytes must be de-obfuscated back to the original"
+    );
+    assert!(
+        result
+            .transformations
+            .iter()
+            .any(|t| t.kind == "font-deobfuscated"
+                && t.file.as_deref() == Some("OEBPS/fonts/embedded.ttf")),
+        "expected a font-deobfuscated transformation naming the font, got {:?}",
+        result.transformations
+    );
+
+    // End to end through `convert()` (the `epub` profile: repair-only, so the
+    // font is not stripped and would otherwise reach the output still
+    // scrambled): the output carries the original font bytes and no longer
+    // declares `META-INF/encryption.xml`.
+    let converted = convert(
+        Input::Epub(bytes),
+        &ConvertOptions {
+            features: Features::repair_only(),
+            ..ConvertOptions::default()
+        },
+    )
+    .expect("font-obfuscated epub should convert");
+
+    assert!(
+        common::entry(&converted.epub, "META-INF/encryption.xml").is_none(),
+        "the converted output must not declare META-INF/encryption.xml"
+    );
+    let out_font = common::entry(&converted.epub, "OEBPS/fonts/embedded.ttf")
+        .expect("the font resource must survive conversion");
+    assert_eq!(
+        out_font, original_font,
+        "the converted output's font bytes must be the de-obfuscated original"
+    );
+}
+
+/// The Adobe font-obfuscation key for a canonical `urn:uuid:` identifier: the
+/// 16 raw bytes of its UUID. Computed independently of `epub_tailor_core`'s
+/// own key derivation (plain hex parsing, no shared code) so this test does
+/// not just assert the implementation agrees with itself.
+fn adobe_obfuscate(data: &[u8], unique_id: &str) -> Vec<u8> {
+    let hex: String = unique_id
+        .strip_prefix("urn:uuid:")
+        .expect("test identifier must be a urn:uuid: value")
+        .chars()
+        .filter(|c| *c != '-')
+        .collect();
+    assert_eq!(hex.len(), 32, "test identifier must have 32 hex digits");
+    let key: Vec<u8> = (0..16)
+        .map(|i| u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).expect("valid hex digit pair"))
+        .collect();
+    data.iter()
+        .enumerate()
+        .map(|(i, b)| b ^ key[i % key.len()])
+        .collect()
+}
+
+/// Adobe's algorithm (`http://ns.adobe.com/pdf/enc#RC`) is only otherwise
+/// named in `read.rs` itself - never exercised end to end - so this pins it
+/// separately from the IDPF coverage above. It also directly covers the
+/// off-by-one `adobe_key` bug a review caught: a `urn:uuid:` identifier is
+/// the shape EPUB 3 recommends for `dc:identifier`, so this is the common
+/// case, not an edge case.
+#[test]
+fn adobe_font_obfuscation_is_undone() {
+    const UNIQUE_ID: &str = "urn:uuid:12345678-1234-1234-1234-123456789012";
+    let original_font: Vec<u8> = (0..300u32).map(|i| (i % 250) as u8).collect();
+    let obfuscated_font = adobe_obfuscate(&original_font, UNIQUE_ID);
+    assert_ne!(obfuscated_font, original_font);
+
+    const ENCRYPTION_XML: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
+<encryption xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <EncryptedData xmlns="http://www.w3.org/2001/04/xmlenc#">
+    <EncryptionMethod Algorithm="http://ns.adobe.com/pdf/enc#RC"/>
+    <CipherData><CipherReference URI="OEBPS/fonts/embedded.ttf"/></CipherData>
+  </EncryptedData>
+</encryption>"#;
+
+    let opf = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="pub-id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:title>Fonted</dc:title>
+    <dc:language>en</dc:language>
+    <dc:identifier id="pub-id">{UNIQUE_ID}</dc:identifier>
+  </metadata>
+  <manifest>
+    <item id="ch1" href="text/chapter1.xhtml" media-type="application/xhtml+xml"/>
+    <item id="font" href="fonts/embedded.ttf" media-type="application/vnd.ms-opentype"/>
+  </manifest>
+  <spine>
+    <itemref idref="ch1"/>
+  </spine>
+</package>"#
+    );
+
+    let bytes = build_epub(&[
+        ("mimetype", b"application/epub+zip"),
+        ("META-INF/container.xml", CONTAINER_XML),
+        ("META-INF/encryption.xml", ENCRYPTION_XML),
+        ("OEBPS/content.opf", opf.as_bytes()),
+        ("OEBPS/text/chapter1.xhtml", CHAPTER1),
+        ("OEBPS/fonts/embedded.ttf", &obfuscated_font),
+    ]);
+
+    let result = epub_tailor_core::read_epub(&bytes).expect("adobe-obfuscated epub should read");
+    let font_resource = &result.book.resources["OEBPS/fonts/embedded.ttf"];
+    assert_eq!(
+        font_resource.data, original_font,
+        "the font bytes must be de-obfuscated back to the original"
+    );
+    assert!(
+        result
+            .transformations
+            .iter()
+            .any(|t| t.kind == "font-deobfuscated"
+                && t.file.as_deref() == Some("OEBPS/fonts/embedded.ttf")),
+        "expected a font-deobfuscated transformation naming the font, got {:?}",
+        result.transformations
+    );
+}
+
+/// Adobe's scheme needs a `urn:uuid:` identifier; an ISBN-only identifier
+/// yields no usable key. The font must be left exactly as scrambled as it
+/// arrived (not further corrupted by XORing with a bogus key), and the read
+/// must warn that it could not be de-obfuscated rather than record a
+/// `font-deobfuscated` transformation that would be a false claim.
+#[test]
+fn adobe_obfuscation_without_a_uuid_identifier_warns_instead_of_claiming_success() {
+    const ENCRYPTION_XML: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
+<encryption xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <EncryptedData xmlns="http://www.w3.org/2001/04/xmlenc#">
+    <EncryptionMethod Algorithm="http://ns.adobe.com/pdf/enc#RC"/>
+    <CipherData><CipherReference URI="OEBPS/fonts/embedded.ttf"/></CipherData>
+  </EncryptedData>
+</encryption>"#;
+
+    const OPF: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="pub-id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:title>Fonted</dc:title>
+    <dc:language>en</dc:language>
+    <dc:identifier id="pub-id">9783407868213</dc:identifier>
+  </metadata>
+  <manifest>
+    <item id="ch1" href="text/chapter1.xhtml" media-type="application/xhtml+xml"/>
+    <item id="font" href="fonts/embedded.ttf" media-type="application/vnd.ms-opentype"/>
+  </manifest>
+  <spine>
+    <itemref idref="ch1"/>
+  </spine>
+</package>"#;
+
+    let scrambled: Vec<u8> = (0..300u32).map(|i| (i % 250) as u8).collect();
+    let bytes = build_epub(&[
+        ("mimetype", b"application/epub+zip"),
+        ("META-INF/container.xml", CONTAINER_XML),
+        ("META-INF/encryption.xml", ENCRYPTION_XML),
+        ("OEBPS/content.opf", OPF),
+        ("OEBPS/text/chapter1.xhtml", CHAPTER1),
+        ("OEBPS/fonts/embedded.ttf", &scrambled),
+    ]);
+
+    let result = epub_tailor_core::read_epub(&bytes).expect("should still read");
+    assert_eq!(
+        result.book.resources["OEBPS/fonts/embedded.ttf"].data, scrambled,
+        "without a usable key the font must be left untouched, not further corrupted"
+    );
+    assert!(
+        !result
+            .transformations
+            .iter()
+            .any(|t| t.kind == "font-deobfuscated"),
+        "must not claim success when no key could be derived, got {:?}",
+        result.transformations
+    );
+    assert!(
+        result
+            .warnings
+            .iter()
+            .any(|w| w.message.contains("could not derive")),
+        "expected a warning about the missing key, got {:?}",
+        result.warnings
+    );
+}
+
+/// Two `EncryptedData` entries name the SAME resource - one via a plain
+/// path, one via a `./`-prefixed path that `normalize_href` resolves to the
+/// same key - so this proves de-obfuscation runs at most once per resource.
+/// XOR is its own inverse: applying it twice would silently restore the
+/// scrambled bytes while still reporting two successes.
+#[test]
+fn duplicate_cipher_references_deobfuscate_only_once() {
+    const UNIQUE_ID: &str = "urn:uuid:00000000-0000-0000-0000-000000000000";
+    let original_font: Vec<u8> = (0..300u32).map(|i| (i % 250) as u8).collect();
+    let obfuscated_font = idpf_obfuscate(&original_font, UNIQUE_ID);
+
+    const ENCRYPTION_XML: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
+<encryption xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <EncryptedData xmlns="http://www.w3.org/2001/04/xmlenc#">
+    <EncryptionMethod Algorithm="http://www.idpf.org/2008/embedding"/>
+    <CipherData><CipherReference URI="OEBPS/fonts/embedded.ttf"/></CipherData>
+  </EncryptedData>
+  <EncryptedData xmlns="http://www.w3.org/2001/04/xmlenc#">
+    <EncryptionMethod Algorithm="http://www.idpf.org/2008/embedding"/>
+    <CipherData><CipherReference URI="./OEBPS/fonts/embedded.ttf"/></CipherData>
+  </EncryptedData>
+</encryption>"#;
+
+    let opf = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="pub-id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:title>Fonted</dc:title>
+    <dc:language>en</dc:language>
+    <dc:identifier id="pub-id">{UNIQUE_ID}</dc:identifier>
+  </metadata>
+  <manifest>
+    <item id="ch1" href="text/chapter1.xhtml" media-type="application/xhtml+xml"/>
+    <item id="font" href="fonts/embedded.ttf" media-type="application/vnd.ms-opentype"/>
+  </manifest>
+  <spine>
+    <itemref idref="ch1"/>
+  </spine>
+</package>"#
+    );
+
+    let bytes = build_epub(&[
+        ("mimetype", b"application/epub+zip"),
+        ("META-INF/container.xml", CONTAINER_XML),
+        ("META-INF/encryption.xml", ENCRYPTION_XML),
+        ("OEBPS/content.opf", opf.as_bytes()),
+        ("OEBPS/text/chapter1.xhtml", CHAPTER1),
+        ("OEBPS/fonts/embedded.ttf", &obfuscated_font),
+    ]);
+
+    let result = epub_tailor_core::read_epub(&bytes).expect("should read despite the duplicate");
+    assert_eq!(
+        result.book.resources["OEBPS/fonts/embedded.ttf"].data, original_font,
+        "a duplicate CipherReference must not XOR the font a second time"
+    );
+    assert_eq!(
+        result
+            .transformations
+            .iter()
+            .filter(|t| t.kind == "font-deobfuscated")
+            .count(),
+        1,
+        "exactly one font-deobfuscated transformation, not one per duplicate entry"
+    );
+    assert!(
+        result
+            .warnings
+            .iter()
+            .any(|w| w.message.contains("more than once")),
+        "expected a warning about the duplicate reference, got {:?}",
         result.warnings
     );
 }
@@ -854,6 +1189,198 @@ fn colliding_entry_names_produce_an_entry_collision_lint_finding() {
             .iter()
             .any(|f| f.code == "entry-collision" && f.severity == Severity::Warning),
         "expected an entry-collision Warning finding, got: {findings:#?}"
+    );
+}
+
+// ---------------------------------------------------------------------
+// A nav entry pointing outside the spine must not survive to the output.
+// ---------------------------------------------------------------------
+
+/// One spine chapter plus a manifest-listed, non-spine `stray.xhtml` - the
+/// nav below links both, so `stray.xhtml` is a dangling TOC target.
+const OPF_WITH_ONE_SPINE_CHAPTER: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="pub-id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:title>Stray Nav Target</dc:title>
+    <dc:creator>Author</dc:creator>
+    <dc:language>en</dc:language>
+    <dc:identifier id="pub-id">urn:uuid:11111111-1111-1111-1111-111111111111</dc:identifier>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="ch1" href="chapter.xhtml" media-type="application/xhtml+xml"/>
+    <item id="stray" href="stray.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine>
+    <itemref idref="ch1"/>
+  </spine>
+</package>"#;
+
+/// A nav document whose TOC list links both the one spine chapter and the
+/// non-spine `stray.xhtml`.
+const NAV_LINKING_A_NON_SPINE_DOC: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+<head><title>Nav</title></head>
+<body>
+<nav epub:type="toc">
+<ol>
+<li><a href="chapter.xhtml">Chapter One</a></li>
+<li><a href="stray.xhtml">Stray</a></li>
+</ol>
+</nav>
+</body>
+</html>"#;
+
+const CHAPTER: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>Chapter One</title></head>
+<body><h1>Chapter One</h1><p>Text.</p></body></html>"#;
+
+/// Manifest-listed but never in the spine.
+const STRAY_NOT_IN_SPINE: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>Stray</title></head>
+<body><p>Not part of the spine.</p></body></html>"#;
+
+#[test]
+fn a_nav_entry_pointing_outside_the_spine_is_dropped_not_shipped() {
+    // A nav href to a document that is not a spine item produces output the
+    // tool's own linter rates an Error. Release builds never noticed - the
+    // post-convert self-check only runs under `#[cfg(debug_assertions)]`.
+    let epub = build_epub(&[
+        ("mimetype", b"application/epub+zip"),
+        ("META-INF/container.xml", common::CONTAINER_XML),
+        ("OEBPS/content.opf", OPF_WITH_ONE_SPINE_CHAPTER),
+        ("OEBPS/nav.xhtml", NAV_LINKING_A_NON_SPINE_DOC),
+        ("OEBPS/chapter.xhtml", CHAPTER),
+        ("OEBPS/stray.xhtml", STRAY_NOT_IN_SPINE),
+    ]);
+    let out = convert(Input::Epub(epub), &ConvertOptions::default()).expect("converts");
+    let findings = lint_epub(
+        &out.epub,
+        &DeviceCaps::permissive(),
+        &Features::repair_only(),
+    );
+    let sync: Vec<_> = findings
+        .iter()
+        .filter(|f| f.code == "spine-toc-sync" && f.severity == Severity::Error)
+        .collect();
+    assert!(sync.is_empty(), "output must be self-consistent: {sync:#?}");
+    assert!(
+        out.report
+            .warnings
+            .iter()
+            .any(|w| w.message.contains("navigation")),
+        "dropping a nav entry must be reported"
+    );
+}
+
+// ---------------------------------------------------------------------
+// A dropped entry's surviving child must be promoted, not absorbed into a
+// preceding sibling's subtree.
+// ---------------------------------------------------------------------
+
+/// Two spine chapters plus a manifest-listed, non-spine `stray.xhtml`.
+const OPF_WITH_TWO_SPINE_CHAPTERS: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="pub-id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:title>Nested Stray Nav Target</dc:title>
+    <dc:creator>Author</dc:creator>
+    <dc:language>en</dc:language>
+    <dc:identifier id="pub-id">urn:uuid:22222222-2222-2222-2222-222222222222</dc:identifier>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="ch1" href="chapter1.xhtml" media-type="application/xhtml+xml"/>
+    <item id="ch2" href="chapter2.xhtml" media-type="application/xhtml+xml"/>
+    <item id="stray" href="stray.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine>
+    <itemref idref="ch1"/>
+    <itemref idref="ch2"/>
+  </spine>
+</package>"#;
+
+/// A nav whose dangling `stray.xhtml` entry has a surviving child that
+/// points at `chapter2.xhtml`, a valid spine document nested only under the
+/// dropped entry - not under "Chapter 1", its preceding sibling.
+const NAV_WITH_DROPPED_PARENT_AND_SURVIVING_CHILD: &[u8] =
+    br#"<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+<head><title>Nav</title></head>
+<body>
+<nav epub:type="toc">
+<ol>
+<li><a href="chapter1.xhtml">Chapter 1</a></li>
+<li><a href="stray.xhtml">Stray</a>
+<ol>
+<li><a href="chapter2.xhtml">Section under Stray</a></li>
+</ol>
+</li>
+</ol>
+</nav>
+</body>
+</html>"#;
+
+const CHAPTER1_DOC: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>Chapter 1</title></head>
+<body><h1>Chapter 1</h1><p>Text.</p></body></html>"#;
+
+const CHAPTER2_DOC: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>Chapter 2</title></head>
+<body><h1>Chapter 2</h1><p>Text.</p></body></html>"#;
+
+fn read_zip_entry(epub: &[u8], name: &str) -> String {
+    let mut archive =
+        zip::ZipArchive::new(std::io::Cursor::new(epub)).expect("output is a valid zip");
+    let mut file = archive.by_name(name).expect("entry exists in output");
+    let mut buf = String::new();
+    std::io::Read::read_to_string(&mut file, &mut buf).expect("entry is valid utf-8");
+    buf
+}
+
+#[test]
+fn a_dropped_entrys_surviving_child_is_promoted_not_absorbed_by_a_sibling() {
+    // "Stray" (dangling: not a spine document) has a child, "Section under
+    // Stray", that does point at a spine document. Dropping "Stray" must
+    // promote that child to sit where "Stray" was - a sibling of "Chapter
+    // 1" - not let it get folded into "Chapter 1"'s subtree by
+    // `build_toc_tree`'s level-only fold.
+    let epub = build_epub(&[
+        ("mimetype", b"application/epub+zip"),
+        ("META-INF/container.xml", common::CONTAINER_XML),
+        ("OEBPS/content.opf", OPF_WITH_TWO_SPINE_CHAPTERS),
+        (
+            "OEBPS/nav.xhtml",
+            NAV_WITH_DROPPED_PARENT_AND_SURVIVING_CHILD,
+        ),
+        ("OEBPS/chapter1.xhtml", CHAPTER1_DOC),
+        ("OEBPS/chapter2.xhtml", CHAPTER2_DOC),
+        ("OEBPS/stray.xhtml", STRAY_NOT_IN_SPINE),
+    ]);
+    let out = convert(Input::Epub(epub), &ConvertOptions::default()).expect("converts");
+
+    let nav = read_zip_entry(&out.epub, "OEBPS/nav.xhtml");
+    assert!(
+        nav.contains("chapter1.xhtml") && nav.contains("chapter2.xhtml"),
+        "both surviving targets must still be linked from the nav:\n{nav}"
+    );
+    // The nav document has exactly one TOC list (no landmarks nav in this
+    // fixture). With "Stray" dropped and its child promoted to top level,
+    // both survivors are top-level siblings, so there is no nested `<ol>`
+    // left anywhere in the document. Before the fix, the promoted child was
+    // folded into "Chapter 1"'s `<li>` as a nested `<ol>`, which this catches
+    // even though the output still passes `spine-toc-sync` (well-formed,
+    // just structurally wrong).
+    assert_eq!(
+        nav.matches("<ol>").count(),
+        1,
+        "the promoted child must be a top-level sibling, not nested under \
+         the preceding sibling's <li>:\n{nav}"
+    );
+    let ch1_idx = nav.find("chapter1.xhtml").unwrap();
+    let ch2_idx = nav.find("chapter2.xhtml").unwrap();
+    assert!(
+        ch1_idx < ch2_idx,
+        "document order must be preserved: chapter1 then the promoted chapter2:\n{nav}"
     );
 }
 

@@ -114,7 +114,16 @@ impl<'a> ImageRegistry<'a> {
         let flattened = href.replace('/', "-");
         let path = reserve_unique_image_path(&mut self.reserved, &flattened);
         let media_type = guess_image_media_type(&path);
-        resources.insert(path.clone(), Resource { data, media_type });
+        resources.insert(
+            path.clone(),
+            Resource {
+                data,
+                media_type,
+                media_overlay: None,
+                fallback: None,
+                media_duration: None,
+            },
+        );
         self.resolved.insert(href.to_string(), path.clone());
         Some(path)
     }

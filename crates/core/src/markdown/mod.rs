@@ -79,6 +79,7 @@ pub fn build_book(
         Resource {
             data: Vec::new(),
             media_type: "application/oebps-package+xml".to_string(),
+            ..Default::default()
         },
     );
     let mut spine = Vec::new();
@@ -125,6 +126,7 @@ pub fn build_book(
             Resource {
                 data: bytes,
                 media_type: "application/xhtml+xml".to_string(),
+                ..Default::default()
             },
         );
         spine.push(chapter_path.clone());

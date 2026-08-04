@@ -65,6 +65,40 @@ fn strip_jpeg(data: &[u8]) -> Option<Vec<u8>> {
     None
 }
 
+/// CRC-32/ISO-HDLC lookup table (the algorithm PNG chunk CRCs use), built at
+/// compile time from the standard reflected polynomial `0xEDB88320`.
+const CRC32_TABLE: [u32; 256] = {
+    let mut table = [0u32; 256];
+    let mut n = 0usize;
+    while n < 256 {
+        let mut c = n as u32;
+        let mut k = 0;
+        while k < 8 {
+            c = if c & 1 != 0 {
+                0xEDB8_8320 ^ (c >> 1)
+            } else {
+                c >> 1
+            };
+            k += 1;
+        }
+        table[n] = c;
+        n += 1;
+    }
+    table
+};
+
+/// CRC-32/ISO-HDLC over `bytes`, matching the checksum PNG stores at the end
+/// of every chunk (computed there over the chunk's type and data, never its
+/// length or the CRC field itself).
+fn crc32(bytes: &[u8]) -> u32 {
+    let mut crc = 0xFFFF_FFFFu32;
+    for &b in bytes {
+        let idx = ((crc ^ b as u32) & 0xFF) as usize;
+        crc = CRC32_TABLE[idx] ^ (crc >> 8);
+    }
+    crc ^ 0xFFFF_FFFF
+}
+
 /// Rewrite a PNG without its ancillary text chunks. Returns `None` when the
 /// input is not a parseable PNG - including a truncated one that never
 /// reaches `IEND` - so the caller leaves it untouched rather than writing
@@ -80,8 +114,15 @@ fn strip_png(data: &[u8]) -> Option<Vec<u8>> {
     while i + 8 <= data.len() {
         let len = u32::from_be_bytes(data.get(i..i + 4)?.try_into().ok()?) as usize;
         let kind: &[u8; 4] = data.get(i + 4..i + 8)?.try_into().ok()?;
-        let end = i + 12 + len; // length + type + data + CRC
+        let end = i.checked_add(12).and_then(|v| v.checked_add(len))?; // length + type + data + CRC
         if end > data.len() {
+            return None;
+        }
+        // Validate the chunk's trailing CRC-32, computed over its type and
+        // data (never the length field or the CRC field itself), before
+        // trusting the chunk enough to keep or re-emit it.
+        let stored_crc = u32::from_be_bytes(data[end - 4..end].try_into().ok()?);
+        if crc32(&data[i + 4..end - 4]) != stored_crc {
             return None;
         }
         if !PNG_DROP.contains(&kind) {
@@ -168,15 +209,34 @@ mod tests {
         out
     }
 
-    /// A truncated PNG: signature, then one droppable `tEXt` chunk, cut
-    /// immediately after it - no `IEND`. Same failure shape as the JPEG case.
+    /// Append one well-formed, correctly-CRC'd PNG chunk (length + type +
+    /// data + CRC-32 over type-and-data) to `out`.
+    fn push_png_chunk(out: &mut Vec<u8>, kind: &[u8; 4], data: &[u8]) {
+        out.extend_from_slice(&(data.len() as u32).to_be_bytes());
+        let mut type_and_data = Vec::with_capacity(4 + data.len());
+        type_and_data.extend_from_slice(kind);
+        type_and_data.extend_from_slice(data);
+        out.extend_from_slice(&type_and_data);
+        out.extend_from_slice(&crc32(&type_and_data).to_be_bytes());
+    }
+
+    /// A minimal, fully-valid PNG: signature, one `tEXt` chunk, then `IEND`,
+    /// every chunk carrying a genuine CRC - so that flipping a single CRC
+    /// byte in a test is an isolated, meaningful mutation rather than
+    /// coincidentally already-wrong.
+    pub(super) fn minimal_png_with_text_chunk() -> Vec<u8> {
+        let mut out = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+        push_png_chunk(&mut out, b"tEXt", b"comment-data");
+        push_png_chunk(&mut out, b"IEND", &[]);
+        out
+    }
+
+    /// A truncated PNG: signature, then one droppable `tEXt` chunk (with a
+    /// genuine CRC), cut immediately after it - no `IEND`. Same failure
+    /// shape as the JPEG case.
     fn truncated_png_with_a_droppable_chunk() -> Vec<u8> {
         let mut out = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
-        let text = b"comment-data";
-        out.extend_from_slice(&(text.len() as u32).to_be_bytes());
-        out.extend_from_slice(b"tEXt");
-        out.extend_from_slice(text);
-        out.extend_from_slice(&[0, 0, 0, 0]); // CRC, unchecked by the stripper
+        push_png_chunk(&mut out, b"tEXt", b"comment-data");
         out
     }
 
@@ -197,6 +257,51 @@ mod tests {
     }
 
     #[test]
+    fn crc32_matches_known_good_vectors() {
+        // Independently verified via Python's zlib.crc32, a mature reference
+        // implementation of the same CRC-32/ISO-HDLC algorithm PNG uses.
+        assert_eq!(crc32(b""), 0x0000_0000);
+        assert_eq!(
+            crc32(b"123456789"),
+            0xCBF4_3926,
+            "the standard CRC-32 check value"
+        );
+        assert_eq!(
+            crc32(b"IEND"),
+            0xAE42_6082,
+            "CRC of a zero-length IEND chunk's type-and-data"
+        );
+    }
+
+    #[test]
+    fn a_png_with_a_corrupt_chunk_crc_is_left_alone() {
+        let mut png = super::tests::minimal_png_with_text_chunk();
+        let len = png.len();
+        // The last 4 bytes of the file are the IEND chunk's CRC field
+        // (len-12..len-8 is IEND's length, len-8..len-4 is the type "IEND",
+        // len-4..len is the CRC): flip a bit inside that CRC field itself,
+        // not the type that precedes it.
+        png[len - 1] ^= 0xFF; // corrupt the IEND CRC
+        assert!(strip_png(&png).is_none(), "a bad CRC must not be rewritten");
+    }
+
+    #[test]
+    fn a_png_with_an_over_long_declared_chunk_length_is_rejected() {
+        let mut png = super::tests::minimal_png_with_text_chunk();
+        // Declare a chunk length of u32::MAX, far longer than the file
+        // actually is. This does not discriminate the checked-arithmetic
+        // change on a 64-bit target - `i + 12 + len` cannot overflow `usize`
+        // here since `len` is at most `u32::MAX` and `i` is tiny, so the
+        // pre-existing `end > data.len()` bounds check already rejects it
+        // even without checked arithmetic. It still pins the required
+        // behaviour (an over-long declared length must be rejected, not
+        // wrapped or read out of bounds) and is the only overflow-adjacent
+        // shape constructible from a 4-byte length field on this platform.
+        png[8..12].copy_from_slice(&u32::MAX.to_be_bytes());
+        assert!(strip_png(&png).is_none());
+    }
+
+    #[test]
     fn strip_leaves_truncated_resources_byte_identical() {
         let jpeg = truncated_jpeg_with_a_droppable_segment();
         let png = truncated_png_with_a_droppable_chunk();
@@ -206,6 +311,7 @@ mod tests {
             Resource {
                 data: jpeg.clone(),
                 media_type: "image/jpeg".to_string(),
+                ..Default::default()
             },
         );
         resources.insert(
@@ -213,6 +319,7 @@ mod tests {
             Resource {
                 data: png.clone(),
                 media_type: "image/png".to_string(),
+                ..Default::default()
             },
         );
         let mut book = Book {
@@ -279,6 +386,33 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_standalone_marker_before_the_scan_is_copied_without_a_length_read() {
+        // TEM and RSTn carry no length field. Reading two bytes after them as
+        // a length misparses the rest of the file. This places one BEFORE the
+        // SOS, which is the only position the dedicated branch handles - the
+        // existing RST test puts one inside the scan data, where the verbatim
+        // copy-to-end path covers it and the branch is never reached.
+        let mut jpeg = vec![0xFF, 0xD8]; // SOI
+        jpeg.extend_from_slice(&[0xFF, 0x01]); // TEM, no length
+        let payload = b"Exif\0\0BUYER-1";
+        jpeg.extend_from_slice(&[0xFF, 0xE1]);
+        jpeg.extend_from_slice(&((payload.len() + 2) as u16).to_be_bytes());
+        jpeg.extend_from_slice(payload);
+        jpeg.extend_from_slice(&[0xFF, 0xDA, 0x00, 0x02, 0xFF, 0xD9]); // SOS then EOI
+
+        let out = strip_jpeg(&jpeg).expect("still parseable with a standalone marker");
+        assert!(
+            !out.windows(5).any(|w| w == b"BUYER"),
+            "EXIF must still be stripped"
+        );
+        assert!(
+            out.windows(2).any(|w| w == [0xFF, 0x01]),
+            "the standalone marker itself must be preserved"
+        );
+        assert!(out.ends_with(&[0xFF, 0xD9]));
+    }
+
     /// A complete, parseable JPEG (SOI through EOI) carrying a droppable
     /// APP1 (EXIF) segment with `payload` - unlike
     /// `truncated_jpeg_with_a_droppable_segment`, this one is a shape
@@ -305,6 +439,7 @@ mod tests {
             Resource {
                 data: jpeg,
                 media_type: media_type.to_string(),
+                ..Default::default()
             },
         );
         let mut book = Book {
@@ -359,13 +494,8 @@ mod tests {
     /// branch [`strip_png`] itself never runs on nothing else covers.
     fn png_with_text_payload(payload: &[u8]) -> Vec<u8> {
         let mut out = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
-        out.extend_from_slice(&(payload.len() as u32).to_be_bytes());
-        out.extend_from_slice(b"tEXt");
-        out.extend_from_slice(payload);
-        out.extend_from_slice(&[0, 0, 0, 0]); // CRC, unchecked by the stripper
-        out.extend_from_slice(&[0, 0, 0, 0]); // IEND: zero-length, no data
-        out.extend_from_slice(b"IEND");
-        out.extend_from_slice(&[0, 0, 0, 0]); // CRC, unchecked by the stripper
+        push_png_chunk(&mut out, b"tEXt", payload);
+        push_png_chunk(&mut out, b"IEND", &[]);
         out
     }
 
@@ -381,6 +511,7 @@ mod tests {
             Resource {
                 data: png,
                 media_type: media_type.to_string(),
+                ..Default::default()
             },
         );
         let mut book = Book {

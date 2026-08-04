@@ -12,6 +12,16 @@ use std::process::{Command, Output};
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipWriter};
 
+// The fixture primitives live in the dev-only `epub-tailor-testfixtures` crate
+// so the CLI's integration tests can share them - an integration test cannot
+// import another crate's test module. Re-exported here so the many existing
+// `common::CONTAINER_XML` / `common::build_epub` call sites keep working.
+// Scoped to this one line rather than the module: a binary that uses no
+// `entry` must not silence staleness warnings for the `zip`/`std` imports
+// above it too.
+#[allow(unused_imports)]
+pub use epub_tailor_testfixtures::{CONTAINER_XML, NAV_XHTML, build_epub, entry, real_png};
+
 /// Run epubcheck against `path`, preferring the `epubcheck` launcher on `PATH`
 /// and falling back to `java -jar $EPUBCHECK_JAR`. Returns `None` if neither is
 /// available, or if the epubcheck gate is not requested for this run - so the
@@ -36,52 +46,6 @@ pub fn run_epubcheck(path: &Path) -> Option<Output> {
         return Some(output);
     }
     None
-}
-
-/// A minimal, valid `META-INF/container.xml` pointing at `OEBPS/content.opf`.
-/// Shared by fixtures that build their own OPF/chapters but still need a
-/// container document.
-pub const CONTAINER_XML: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
-<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
-  <rootfiles>
-    <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
-  </rootfiles>
-</container>"#;
-
-/// A minimal EPUB3 nav document with a single TOC entry pointing at
-/// `chapter.xhtml`. Shared by fixtures that need a nav doc but do not care
-/// about its contents.
-pub const NAV_XHTML: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
-<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
-<head><title>Nav</title></head>
-<body>
-<nav epub:type="toc">
-<ol>
-<li><a href="chapter.xhtml">InventedWatermark.example Chapter</a></li>
-</ol>
-</nav>
-</body>
-</html>"#;
-
-/// Build a ZIP archive from `entries` (path, raw bytes), in the given order.
-/// `mimetype` (if present) is written STORED (uncompressed); everything else
-/// is written DEFLATE. Callers are responsible for ordering `entries` so that
-/// `mimetype` comes first, matching the EPUB OCF requirement.
-pub fn build_epub(entries: &[(&str, &[u8])]) -> Vec<u8> {
-    let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
-    let stored = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
-    let deflated = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
-
-    for (name, data) in entries {
-        let options = if *name == "mimetype" {
-            stored
-        } else {
-            deflated
-        };
-        writer.start_file(*name, options).expect("start_file");
-        writer.write_all(data).expect("write entry data");
-    }
-    writer.finish().expect("finish zip").into_inner()
 }
 
 /// Extension-based media type guess for [`book_with_image`]'s embedded raster.
@@ -239,6 +203,50 @@ pub fn book_with_css_referenced_asset() -> Vec<u8> {
     ])
 }
 
+/// A minimal EPUB3 book whose chapter links `style.css`, which references
+/// `sub.css` through a plain `@import "sub.css";` string literal placed
+/// *after* a malformed `url()` rule that a CSS AST parser cannot recover
+/// through cleanly (an unclosed `url(broken.png}` - see
+/// `generic::reachable::raw_url_refs`'s docs for why). `sub.css` has NO
+/// manifest item; it is reachable only by walking the CSS. Pins the
+/// regression a code review caught in this task: replacing the naive
+/// `url()`-scanning `css_refs` with an AST walk silently dropped the
+/// `@import` string-literal safety net the old scanner used to provide,
+/// costing exactly this shape (`@import` reachable only past a malformed
+/// rule) through `convert()` end to end, not just the unit-level
+/// `reachable` walk.
+pub fn book_with_css_import_after_a_malformed_rule() -> Vec<u8> {
+    const CONTENT_OPF: &[u8] = br##"<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="pub-id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="pub-id">urn:uuid:cccc1111-2222-4333-8444-555555555555</dc:identifier>
+    <dc:title>Book</dc:title>
+    <dc:language>en</dc:language>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="ch" href="chapter.xhtml" media-type="application/xhtml+xml"/>
+    <item id="css" href="style.css" media-type="text/css"/>
+  </manifest>
+  <spine><itemref idref="ch"/></spine>
+</package>"##;
+    const CHAPTER: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>C</title>
+<link rel="stylesheet" type="text/css" href="style.css"/></head>
+<body><p>Text.</p></body></html>"#;
+    const STYLE_CSS: &[u8] = b"a{background:url(broken.png}\n@import \"sub.css\";\n";
+    const SUB_CSS: &[u8] = b"body { color: red; }\n";
+    build_epub(&[
+        ("mimetype", b"application/epub+zip"),
+        ("META-INF/container.xml", CONTAINER_XML),
+        ("OEBPS/content.opf", CONTENT_OPF),
+        ("OEBPS/nav.xhtml", NAV_XHTML),
+        ("OEBPS/chapter.xhtml", CHAPTER),
+        ("OEBPS/style.css", STYLE_CSS),
+        ("OEBPS/sub.css", SUB_CSS),
+    ])
+}
+
 /// A minimal EPUB3 book whose chapter has a single `<img srcset="only.png
 /// 2x">` and, deliberately, NO `src` at all - the shape that goes
 /// permanently broken if `srcset` targets are not fed to the reachability
@@ -313,21 +321,6 @@ pub fn book_with_orphan_chapter_srcset_image() -> Vec<u8> {
         ("OEBPS/orphan.xhtml", ORPHAN),
         ("OEBPS/wm.png", WM_PNG),
     ])
-}
-
-/// A real, decodable 24x24 grayscale PNG. Every other srcset fixture here
-/// uses a bare 8-byte PNG *signature* that the image pipeline cannot decode,
-/// so it never re-encodes it and never renames it - which is exactly why a
-/// whole class of stranding went unseen. This one is a genuine image, so the
-/// optimizer really does re-encode it (to `.jpg`) and really does rename it.
-pub fn real_png() -> Vec<u8> {
-    let img =
-        image::GrayImage::from_fn(24, 24, |x, y| image::Luma([((x * 10 + y * 3) % 240) as u8]));
-    let mut out = Cursor::new(Vec::new());
-    image::DynamicImage::ImageLuma8(img)
-        .write_to(&mut out, image::ImageFormat::Png)
-        .expect("encode png");
-    out.into_inner()
 }
 
 /// A minimal EPUB3 book with one ordinary, nav-linked spine chapter carrying
@@ -669,27 +662,10 @@ fn build_epub_with_epoch(entries: &[(&str, &[u8])], year: u16) -> Vec<u8> {
     writer.finish().expect("finish zip").into_inner()
 }
 
-/// Read one zip entry's raw bytes by name, if present.
-pub fn entry(epub: &[u8], name: &str) -> Option<Vec<u8>> {
-    use std::io::Read;
-    let mut zip = zip::ZipArchive::new(Cursor::new(epub)).ok()?;
-    let mut file = zip.by_name(name).ok()?;
-    let mut buf = Vec::new();
-    file.read_to_end(&mut buf).ok()?;
-    Some(buf)
-}
-
 /// A minimal, well-formed EPUB3 book: two chapters, a nav doc with a nested
 /// table of contents (to exercise TOC levels), one stylesheet, one cover
 /// image referenced both via `meta[name=cover]` and `properties=cover-image`.
 pub fn epub3_minimal() -> Vec<u8> {
-    const CONTAINER_XML: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
-<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
-  <rootfiles>
-    <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
-  </rootfiles>
-</container>"#;
-
     const CONTENT_OPF: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
 <package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="pub-id">
   <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
@@ -712,7 +688,7 @@ pub fn epub3_minimal() -> Vec<u8> {
   </spine>
 </package>"#;
 
-    const NAV_XHTML: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
+    const NAV: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
 <html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
 <head><title>Nav</title></head>
 <body>
@@ -743,7 +719,7 @@ pub fn epub3_minimal() -> Vec<u8> {
         ("mimetype", b"application/epub+zip"),
         ("META-INF/container.xml", CONTAINER_XML),
         ("OEBPS/content.opf", CONTENT_OPF),
-        ("OEBPS/nav.xhtml", NAV_XHTML),
+        ("OEBPS/nav.xhtml", NAV),
         ("OEBPS/text/chapter1.xhtml", CHAPTER1),
         ("OEBPS/text/chapter2.xhtml", CHAPTER2),
         ("OEBPS/styles/main.css", MAIN_CSS),
@@ -778,6 +754,95 @@ const COVER_JPG: &[u8] = &[
     0x00, 0x08, 0x01, 0x01, 0x00, 0x00, 0x3F, 0x00, 0xF6, 0x0A, 0xFF, 0xD9,
 ];
 
+/// A minimal, epubcheck-realistic read-aloud EPUB3: one spine chapter narrated
+/// by a SMIL media overlay, with the `media:duration` metadata EPUB 3 requires
+/// whenever any manifest item carries `media-overlay` - the global
+/// `<meta property="media:duration">` plus one refining the SMIL item itself.
+/// Unlike `book_with_media_overlay` in `generic.rs` (which exists purely to
+/// pin the writer's id-remapping by literal string, and deliberately uses a
+/// non-core `application/x-weird+xml` fallback target that a real reading
+/// system would never see), every resource and media type here is exactly
+/// what a real narrated EPUB 3 ships, so a converted copy can be asserted
+/// epubcheck-CLEAN, not merely free of dangling references.
+pub fn epub3_narrated() -> Vec<u8> {
+    const CONTENT_OPF: &[u8] = br##"<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="pub-id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:title>Narrated Book</dc:title>
+    <dc:creator>Jane Author</dc:creator>
+    <dc:language>en</dc:language>
+    <dc:identifier id="pub-id">urn:uuid:8f6a2e10-9b3c-4d5e-8a1f-2c3d4e5f6a7b</dc:identifier>
+    <meta property="dcterms:modified">2024-01-01T00:00:00Z</meta>
+    <meta property="media:duration">0:00:05.000</meta>
+    <meta property="media:duration" refines="#mo1">0:00:05.000</meta>
+    <meta name="cover" content="cover-img"/>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="ch1" href="chapter1.xhtml" media-type="application/xhtml+xml" media-overlay="mo1"/>
+    <item id="mo1" href="chapter1.smil" media-type="application/smil+xml"/>
+    <item id="audio1" href="audio/track1.mp3" media-type="audio/mpeg"/>
+    <item id="cover-img" href="images/cover.jpg" media-type="image/jpeg" properties="cover-image"/>
+  </manifest>
+  <spine>
+    <itemref idref="ch1"/>
+  </spine>
+</package>"##;
+
+    const NAV: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+<head><title>Nav</title></head>
+<body>
+<nav epub:type="toc">
+<ol>
+<li><a href="chapter1.xhtml">Chapter 1</a></li>
+</ol>
+</nav>
+</body>
+</html>"#;
+
+    const CHAPTER1: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>Chapter 1</title></head>
+<body><p id="c1">Text.</p></body></html>"#;
+
+    const CHAPTER1_SMIL: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
+<smil xmlns="http://www.w3.org/ns/SMIL" xmlns:epub="http://www.idpf.org/2007/ops" version="3.0">
+<body>
+<seq id="s1" epub:textref="chapter1.xhtml">
+<par id="p1">
+<text src="chapter1.xhtml#c1"/>
+<audio src="audio/track1.mp3" clipBegin="0:00:00.000" clipEnd="0:00:05.000"/>
+</par>
+</seq>
+</body>
+</smil>"#;
+
+    // A minimal, structurally valid MPEG-1 Layer III frame (a fixed-size
+    // header + silence payload) - epubcheck's media-overlay checks validate
+    // the SMIL/manifest/metadata wiring around this file, not its audio
+    // content, but a real-shaped frame keeps the fixture honest.
+    const TRACK1_MP3: &[u8] = &[
+        0xFF, 0xFB, 0x90, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    ];
+
+    build_epub(&[
+        ("mimetype", b"application/epub+zip"),
+        ("META-INF/container.xml", CONTAINER_XML),
+        ("OEBPS/content.opf", CONTENT_OPF),
+        ("OEBPS/nav.xhtml", NAV),
+        ("OEBPS/chapter1.xhtml", CHAPTER1),
+        ("OEBPS/chapter1.smil", CHAPTER1_SMIL),
+        ("OEBPS/audio/track1.mp3", TRACK1_MP3),
+        ("OEBPS/images/cover.jpg", COVER_JPG),
+    ])
+}
+
 /// A one-chapter EPUB3 whose single chapter is a "kitchen sink" exercising every
 /// M3 transform: a table with a caption and header, ordered lists (typed,
 /// nested, with a bulleted sublist), a `<pre>` code block, an `<aside>`, a
@@ -786,13 +851,6 @@ const COVER_JPG: &[u8] = &[
 /// aliased onto a block that already has one), a decomposed-Unicode string, and
 /// an over-long word.
 pub fn epub3_kitchen_sink() -> Vec<u8> {
-    const CONTAINER_XML: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
-<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
-  <rootfiles>
-    <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
-  </rootfiles>
-</container>"#;
-
     const CONTENT_OPF: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
 <package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="pub-id">
   <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
@@ -812,7 +870,7 @@ pub fn epub3_kitchen_sink() -> Vec<u8> {
   </spine>
 </package>"#;
 
-    const NAV_XHTML: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
+    const NAV: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
 <html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
 <head><title>Nav</title></head>
 <body>
@@ -829,7 +887,7 @@ pub fn epub3_kitchen_sink() -> Vec<u8> {
         ("mimetype", b"application/epub+zip"),
         ("META-INF/container.xml", CONTAINER_XML),
         ("OEBPS/content.opf", CONTENT_OPF),
-        ("OEBPS/nav.xhtml", NAV_XHTML),
+        ("OEBPS/nav.xhtml", NAV),
         ("OEBPS/text/kitchen.xhtml", chapter.as_bytes()),
         ("OEBPS/images/cover.jpg", COVER_JPG),
     ])
@@ -879,13 +937,6 @@ fn kitchen_chapter() -> String {
 /// external stylesheet full of junk, a `<link>` pointing at an embedded font,
 /// and an embedded font file to be stripped.
 pub fn epub3_css_kitchen() -> Vec<u8> {
-    const CONTAINER_XML: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
-<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
-  <rootfiles>
-    <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
-  </rootfiles>
-</container>"#;
-
     const CONTENT_OPF: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
 <package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="pub-id">
   <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
@@ -907,7 +958,7 @@ pub fn epub3_css_kitchen() -> Vec<u8> {
   </spine>
 </package>"#;
 
-    const NAV_XHTML: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
+    const NAV: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
 <html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
 <head><title>Nav</title></head>
 <body>
@@ -956,7 +1007,7 @@ body { color: green; text-align: justify; }
         ("mimetype", b"application/epub+zip"),
         ("META-INF/container.xml", CONTAINER_XML),
         ("OEBPS/content.opf", CONTENT_OPF),
-        ("OEBPS/nav.xhtml", NAV_XHTML),
+        ("OEBPS/nav.xhtml", NAV),
         ("OEBPS/text/chapter.xhtml", CHAPTER),
         ("OEBPS/styles/ext.css", EXT_CSS),
         ("OEBPS/fonts/DejaVu.ttf", FONT),
@@ -975,13 +1026,6 @@ body { color: green; text-align: justify; }
 /// each rule matching only its own chapter, and leave chapter 3 (which
 /// contributed nothing) entirely untouched.
 pub fn epub3_style_bleed() -> Vec<u8> {
-    const CONTAINER_XML: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
-<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
-  <rootfiles>
-    <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
-  </rootfiles>
-</container>"#;
-
     const CONTENT_OPF: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
 <package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="pub-id">
   <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
@@ -1003,7 +1047,7 @@ pub fn epub3_style_bleed() -> Vec<u8> {
   </spine>
 </package>"#;
 
-    const NAV_XHTML: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
+    const NAV: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
 <html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
 <head><title>Nav</title></head>
 <body>
@@ -1040,7 +1084,7 @@ pub fn epub3_style_bleed() -> Vec<u8> {
         ("mimetype", b"application/epub+zip"),
         ("META-INF/container.xml", CONTAINER_XML),
         ("OEBPS/content.opf", CONTENT_OPF),
-        ("OEBPS/nav.xhtml", NAV_XHTML),
+        ("OEBPS/nav.xhtml", NAV),
         ("OEBPS/text/chapter1.xhtml", CHAPTER1),
         ("OEBPS/text/chapter2.xhtml", CHAPTER2),
         ("OEBPS/text/chapter3.xhtml", CHAPTER3),
@@ -1078,13 +1122,6 @@ pub fn epub3_oversize_chapter() -> Vec<u8> {
             chapter1_body.push_str(&format!("<p>{filler}</p>\n"));
         }
     }
-
-    const CONTAINER_XML: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
-<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
-  <rootfiles>
-    <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
-  </rootfiles>
-</container>"#;
 
     const CONTENT_OPF: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
 <package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="pub-id">
@@ -1162,13 +1199,6 @@ pub fn epub3_oversize_chapter() -> Vec<u8> {
 /// `<a href="#Pagexv">` back-reference exercises that the surviving
 /// (first-occurrence) id still resolves after dedupe.
 pub fn epub3_gutenberg_style_ids() -> Vec<u8> {
-    const CONTAINER_XML: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
-<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
-  <rootfiles>
-    <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
-  </rootfiles>
-</container>"#;
-
     const CONTENT_OPF: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
 <package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="pub-id">
   <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
@@ -1186,7 +1216,7 @@ pub fn epub3_gutenberg_style_ids() -> Vec<u8> {
   </spine>
 </package>"#;
 
-    const NAV_XHTML: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
+    const NAV: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
 <html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
 <head><title>Nav</title></head>
 <body>
@@ -1213,21 +1243,71 @@ pub fn epub3_gutenberg_style_ids() -> Vec<u8> {
         ("mimetype", b"application/epub+zip"),
         ("META-INF/container.xml", CONTAINER_XML),
         ("OEBPS/content.opf", CONTENT_OPF),
-        ("OEBPS/nav.xhtml", NAV_XHTML),
+        ("OEBPS/nav.xhtml", NAV),
         ("OEBPS/text/chapter1.xhtml", CHAPTER1),
+    ])
+}
+
+/// An EPUB2 book (so `book.nav_path` is `None`) carrying a non-spine XHTML at
+/// exactly `OEBPS/nav.xhtml` - the path `write_epub` falls back to when there
+/// is no nav. Its prose holds a zero-width joiner, so any code that scrubs it
+/// reports a `generic-invisible` transformation; that is how a test can tell
+/// whether the file was touched at all. The writer discards these bytes and
+/// regenerates the nav from the model, so touching them is dead work.
+pub fn epub2_with_a_stray_nav_xhtml() -> Vec<u8> {
+    const CONTENT_OPF: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="2.0" unique-identifier="pub-id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:title>Stray Nav</dc:title>
+    <dc:language>en</dc:language>
+    <dc:identifier id="pub-id">urn:uuid:11112222-3333-4444-5555-666677778888</dc:identifier>
+  </metadata>
+  <manifest>
+    <item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
+    <item id="ch1" href="text/chapter1.xhtml" media-type="application/xhtml+xml"/>
+    <item id="stray" href="nav.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine toc="ncx">
+    <itemref idref="ch1"/>
+  </spine>
+</package>"#;
+
+    const TOC_NCX: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
+<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1">
+  <head><meta name="dtb:uid" content="urn:uuid:11112222-3333-4444-5555-666677778888"/></head>
+  <docTitle><text>Stray Nav</text></docTitle>
+  <navMap>
+    <navPoint id="np1" playOrder="1">
+      <navLabel><text>Chapter 1</text></navLabel>
+      <content src="text/chapter1.xhtml"/>
+    </navPoint>
+  </navMap>
+</ncx>"#;
+
+    const CHAPTER1: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>Chapter 1</title></head>
+<body><h1>Chapter 1</h1><p>Text.</p></body></html>"#;
+
+    // The zero-width joiner between two letters is what a scrub would remove
+    // and report on. `nav.xhtml` is in the manifest but not the spine, so it
+    // reaches the non-spine XHTML loop.
+    let stray_nav = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+<html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>Contents</title></head>\n\
+<body><p>Wa\u{200d}ter</p></body></html>";
+
+    build_epub(&[
+        ("mimetype", b"application/epub+zip"),
+        ("META-INF/container.xml", CONTAINER_XML),
+        ("OEBPS/content.opf", CONTENT_OPF),
+        ("OEBPS/toc.ncx", TOC_NCX),
+        ("OEBPS/text/chapter1.xhtml", CHAPTER1),
+        ("OEBPS/nav.xhtml", stray_nav.as_bytes()),
     ])
 }
 
 /// A minimal, well-formed EPUB2 book: same two chapters, but a NCX instead of
 /// a nav doc (spine `toc="ncx"`, no `properties=nav` item anywhere).
 pub fn epub2_minimal() -> Vec<u8> {
-    const CONTAINER_XML: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
-<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
-  <rootfiles>
-    <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
-  </rootfiles>
-</container>"#;
-
     const CONTENT_OPF: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
 <package xmlns="http://www.idpf.org/2007/opf" version="2.0" unique-identifier="pub-id">
   <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
@@ -1294,13 +1374,6 @@ pub fn epub2_minimal() -> Vec<u8> {
 ///   `Image` and `ImageAll`, so the anchor survives. The id sits on an inner
 ///   `<span>` so cell flattening keeps it (and the referencing link resolves).
 pub fn epub3_tables() -> Vec<u8> {
-    const CONTAINER_XML: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
-<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
-  <rootfiles>
-    <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
-  </rootfiles>
-</container>"#;
-
     const CONTENT_OPF: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
 <package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="pub-id">
   <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
@@ -1318,7 +1391,7 @@ pub fn epub3_tables() -> Vec<u8> {
   </spine>
 </package>"#;
 
-    const NAV_XHTML: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
+    const NAV: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
 <html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
 <head><title>Nav</title></head>
 <body>
@@ -1361,7 +1434,7 @@ pub fn epub3_tables() -> Vec<u8> {
         ("mimetype", b"application/epub+zip"),
         ("META-INF/container.xml", CONTAINER_XML),
         ("OEBPS/content.opf", CONTENT_OPF),
-        ("OEBPS/nav.xhtml", NAV_XHTML),
+        ("OEBPS/nav.xhtml", NAV),
         ("OEBPS/text/chapter.xhtml", CHAPTER),
     ])
 }
@@ -1372,13 +1445,6 @@ pub fn epub3_tables() -> Vec<u8> {
 /// single `chapter-table-1.png` with the inner grid drawn inside the parent
 /// cell (and the transformation detail marked `(nested)`).
 pub fn epub3_nested_tables() -> Vec<u8> {
-    const CONTAINER_XML: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
-<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
-  <rootfiles>
-    <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
-  </rootfiles>
-</container>"#;
-
     const CONTENT_OPF: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
 <package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="pub-id">
   <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
@@ -1396,7 +1462,7 @@ pub fn epub3_nested_tables() -> Vec<u8> {
   </spine>
 </package>"#;
 
-    const NAV_XHTML: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
+    const NAV: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
 <html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
 <head><title>Nav</title></head>
 <body>
@@ -1431,7 +1497,7 @@ pub fn epub3_nested_tables() -> Vec<u8> {
         ("mimetype", b"application/epub+zip"),
         ("META-INF/container.xml", CONTAINER_XML),
         ("OEBPS/content.opf", CONTENT_OPF),
-        ("OEBPS/nav.xhtml", NAV_XHTML),
+        ("OEBPS/nav.xhtml", NAV),
         ("OEBPS/text/chapter.xhtml", CHAPTER),
     ])
 }
@@ -1445,13 +1511,6 @@ pub fn epub3_nested_tables() -> Vec<u8> {
 /// only the teal/orange pair.
 #[allow(dead_code)]
 pub fn epub3_color_kitchen() -> Vec<u8> {
-    const CONTAINER_XML: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
-<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
-  <rootfiles>
-    <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
-  </rootfiles>
-</container>"#;
-
     const CONTENT_OPF: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
 <package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="pub-id">
   <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
@@ -1473,7 +1532,7 @@ pub fn epub3_color_kitchen() -> Vec<u8> {
   </spine>
 </package>"#;
 
-    const NAV_XHTML: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
+    const NAV: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
 <html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
 <head><title>Nav</title></head>
 <body>
@@ -1548,7 +1607,7 @@ h1 { color: #b22222; text-align: center; }
         ("mimetype", b"application/epub+zip"),
         ("META-INF/container.xml", CONTAINER_XML),
         ("OEBPS/content.opf", CONTENT_OPF),
-        ("OEBPS/nav.xhtml", NAV_XHTML),
+        ("OEBPS/nav.xhtml", NAV),
         ("OEBPS/text/chapter1.xhtml", CHAPTER_1),
         ("OEBPS/text/chapter2.xhtml", CHAPTER_2),
         ("OEBPS/styles/ext.css", EXT_CSS),

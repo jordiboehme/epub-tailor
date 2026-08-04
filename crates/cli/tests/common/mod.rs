@@ -5,12 +5,13 @@
 //! unused-in-one-binary helpers are expected.
 #![allow(dead_code)]
 
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use zip::write::SimpleFileOptions;
-use zip::{CompressionMethod, ZipWriter};
+// The same fixture primitives `epub-tailor-core`'s integration tests build on,
+// shared through a dev-only crate because an integration test cannot import
+// another crate's test module.
+use epub_tailor_testfixtures::{CONTAINER_XML, build_epub};
 
 pub fn bin() -> Command {
     Command::new(env!("CARGO_BIN_EXE_epub-tailor"))
@@ -49,12 +50,6 @@ pub fn book_with_meta_inf_in(
     meta_inf_path: &str,
     payload: &str,
 ) -> PathBuf {
-    const CONTAINER_XML: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
-<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
-  <rootfiles>
-    <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
-  </rootfiles>
-</container>"#;
     const CONTENT_OPF: &[u8] = br##"<?xml version="1.0" encoding="UTF-8"?>
 <package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="pub-id">
   <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
@@ -68,7 +63,10 @@ pub fn book_with_meta_inf_in(
   </manifest>
   <spine><itemref idref="ch"/></spine>
 </package>"##;
-    const NAV_XHTML: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
+    // Local nav doc: the shared `NAV_XHTML` titles its one entry with the
+    // watermark string the core tests scrub for, which would show up in the
+    // human report this fixture exists to exercise.
+    const NAV: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
 <html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
 <head><title>Nav</title></head>
 <body><nav epub:type="toc"><ol><li><a href="chapter.xhtml">Chapter</a></li></ol></nav></body>
@@ -77,30 +75,14 @@ pub fn book_with_meta_inf_in(
 <html xmlns="http://www.w3.org/1999/xhtml"><head><title>C</title></head>
 <body><p>Text.</p></body></html>"#;
 
-    let mut writer = ZipWriter::new(std::io::Cursor::new(Vec::new()));
-    let stored = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
-    let deflated = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
-    let entries: [(&str, &[u8]); 5] = [
+    let bytes = build_epub(&[
         ("mimetype", b"application/epub+zip"),
         ("META-INF/container.xml", CONTAINER_XML),
         (meta_inf_path, payload.as_bytes()),
         ("OEBPS/content.opf", CONTENT_OPF),
-        ("OEBPS/nav.xhtml", NAV_XHTML),
-    ];
-    for (entry_name, data) in entries {
-        let options = if entry_name == "mimetype" {
-            stored
-        } else {
-            deflated
-        };
-        writer.start_file(entry_name, options).expect("start_file");
-        writer.write_all(data).expect("write entry data");
-    }
-    writer
-        .start_file("OEBPS/chapter.xhtml", deflated)
-        .expect("start_file");
-    writer.write_all(CHAPTER).expect("write chapter");
-    let bytes = writer.finish().expect("finish zip").into_inner();
+        ("OEBPS/nav.xhtml", NAV),
+        ("OEBPS/chapter.xhtml", CHAPTER),
+    ]);
 
     let out = dir.join(format!("{name}.epub"));
     std::fs::write(&out, bytes).expect("write fixture epub");

@@ -40,13 +40,6 @@ fn epub3_decomposed_titles() -> Vec<u8> {
     let toc1 = "U\u{308}ber Endor";
     let toc2 = "Fu\u{308}r die Rebellion";
 
-    const CONTAINER_XML: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
-<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
-  <rootfiles>
-    <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
-  </rootfiles>
-</container>"#;
-
     let content_opf = format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="pub-id">
@@ -112,7 +105,7 @@ fn epub3_decomposed_titles() -> Vec<u8> {
 
     common::build_epub(&[
         ("mimetype", b"application/epub+zip"),
-        ("META-INF/container.xml", CONTAINER_XML),
+        ("META-INF/container.xml", common::CONTAINER_XML),
         ("OEBPS/content.opf", content_opf.as_bytes()),
         ("OEBPS/nav.xhtml", nav_xhtml.as_bytes()),
         ("OEBPS/toc.ncx", toc_ncx.as_bytes()),

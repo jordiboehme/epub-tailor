@@ -7,17 +7,12 @@
 
 mod common;
 
-use common::build_epub;
+use common::{CONTAINER_XML, build_epub};
 use epub_tailor_core::{ConvertOptions, Features, Input, convert, find_invalid_qname, lint_epub};
 
-const CONTAINER_XML: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
-<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
-  <rootfiles>
-    <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
-  </rootfiles>
-</container>"#;
-
-const NAV_XHTML: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
+/// Local nav doc: these fixtures put their chapter at `text/chapter1.xhtml`,
+/// which the shared `common::NAV_XHTML` does not link.
+const NAV: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
 <html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
 <head><title>Nav</title></head>
 <body><nav epub:type="toc"><ol>
@@ -116,7 +111,7 @@ fn corrupted_titlepage_heals_under_a_filters_only_profile() {
         ("mimetype", b"application/epub+zip"),
         ("META-INF/container.xml", CONTAINER_XML),
         ("OEBPS/content.opf", &opf),
-        ("OEBPS/nav.xhtml", NAV_XHTML),
+        ("OEBPS/nav.xhtml", NAV),
         ("OEBPS/titlepage.xhtml", CORRUPT_TITLEPAGE),
         ("OEBPS/text/chapter1.xhtml", CHAPTER1),
     ]);
@@ -167,7 +162,7 @@ fn inline_math_survives_default_conversion_wellformed() {
         ("mimetype", b"application/epub+zip"),
         ("META-INF/container.xml", CONTAINER_XML),
         ("OEBPS/content.opf", &opf),
-        ("OEBPS/nav.xhtml", NAV_XHTML),
+        ("OEBPS/nav.xhtml", NAV),
         ("OEBPS/text/math.xhtml", MATH_CHAPTER),
         ("OEBPS/text/chapter1.xhtml", CHAPTER1),
     ]);
@@ -196,7 +191,7 @@ fn non_spine_inline_svg_stays_wellformed_under_defaults() {
         ("mimetype", b"application/epub+zip"),
         ("META-INF/container.xml", CONTAINER_XML),
         ("OEBPS/content.opf", &opf),
-        ("OEBPS/nav.xhtml", NAV_XHTML),
+        ("OEBPS/nav.xhtml", NAV),
         ("OEBPS/extra.xhtml", EXTRA),
         ("OEBPS/text/chapter1.xhtml", CHAPTER1),
     ]);

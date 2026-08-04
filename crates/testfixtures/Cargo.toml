@@ -1,0 +1,10 @@
+[package]
+name = "epub-tailor-testfixtures"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+zip.workspace = true
+image.workspace = true

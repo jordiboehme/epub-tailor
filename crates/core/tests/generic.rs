@@ -118,6 +118,95 @@ fn generic_replaces_a_uuid_unique_identifier_deterministically() {
     );
 }
 
+/// A chapter narrated by a SMIL media overlay, plus an unsupported-type item
+/// with a fallback - both link their target by manifest id, which the writer
+/// must remap through its own id reassignment (`IdAllocator`) rather than
+/// copy verbatim or silently drop.
+///
+/// The linking item's `media-overlay`/`fallback` idref (`narration-id`,
+/// `fallback-id`) is deliberately a *different* string from its target's
+/// `href` (`mo1`, `fb`), so a reader that just echoed the idref back as if it
+/// were already a path - instead of actually resolving id -> href through the
+/// manifest, the way `generic::reachable::opf_refs` does - could not pass
+/// this test by coincidence.
+///
+/// The package document sits at the zip root (not the usual `OEBPS/`), and
+/// the SMIL/fallback targets are given bare, extension-less hrefs (`mo1`,
+/// `fb`) that are also valid XML-id shapes: `IdAllocator::allocate` derives
+/// the *regenerated* id from a resource's path, and a path that already
+/// looks like an id round-trips through it unchanged. That lets this fixture
+/// pin the regenerated ids by literal string, without needing to know the
+/// allocator's internals from the test side.
+fn book_with_media_overlay() -> Vec<u8> {
+    common::build_epub(&[
+        ("mimetype", b"application/epub+zip"),
+        (
+            "META-INF/container.xml",
+            br#"<?xml version="1.0" encoding="UTF-8"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles>
+    <rootfile full-path="content.opf" media-type="application/oebps-package+xml"/>
+  </rootfiles>
+</container>"#,
+        ),
+        (
+            "content.opf",
+            br#"<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="pub-id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="pub-id">urn:uuid:2f6b7e2a-4c2d-4c2d-8a3e-9b6f9e6a1a10</dc:identifier>
+    <dc:title>Narrated Book</dc:title>
+    <dc:language>en</dc:language>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="ch1" href="chapter.xhtml" media-type="application/xhtml+xml" media-overlay="narration-id"/>
+    <item id="narration-id" href="mo1" media-type="application/smil+xml"/>
+    <item id="weird" href="weird.dat" media-type="application/x-weird+xml" fallback="fallback-id"/>
+    <item id="fallback-id" href="fb" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine><itemref idref="ch1"/></spine>
+</package>"#,
+        ),
+        ("nav.xhtml", common::NAV_XHTML),
+        (
+            "chapter.xhtml",
+            br#"<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>C</title></head>
+<body><p>Text.</p></body></html>"#,
+        ),
+        (
+            "mo1",
+            br#"<smil xmlns="http://www.w3.org/ns/SMIL" xmlns:epub="http://www.idpf.org/2007/ops" version="3.0">
+<body><seq id="s1" epub:textref="chapter.xhtml">
+<par id="p1"><text src="chapter.xhtml"/><audio src="track.mp3"/></par>
+</seq></body></smil>"#,
+        ),
+        ("weird.dat", b"weird payload"),
+        (
+            "fb",
+            br#"<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>Fallback</title></head>
+<body><p>Fallback.</p></body></html>"#,
+        ),
+    ])
+}
+
+#[test]
+fn a_media_overlay_and_fallback_survive_the_rebuild() {
+    let out =
+        convert(Input::Epub(book_with_media_overlay()), &opts_for(&["epub"])).expect("converts");
+    let opf = opf_of(&out.epub);
+    assert!(
+        opf.contains("media-overlay=\"mo1\""),
+        "narration linkage lost:\n{opf}"
+    );
+    assert!(
+        opf.contains("fallback=\"fb\""),
+        "fallback chain lost:\n{opf}"
+    );
+}
+
 /// A one-pixel JPEG carrying an APP1 (EXIF) segment.
 fn jpeg_with_exif() -> Vec<u8> {
     let mut out = vec![0xFF, 0xD8]; // SOI
@@ -397,6 +486,28 @@ fn generic_keeps_a_file_referenced_only_from_css() {
     assert!(
         common::entry(&out.epub, "OEBPS/bg.png").is_some(),
         "a CSS-referenced asset must survive even when unmanifested"
+    );
+}
+
+#[test]
+fn generic_keeps_an_import_target_reached_only_past_a_malformed_url_rule() {
+    // Regression a code review caught: swapping `css_refs`'s naive `url()`
+    // scanner for a real AST walk silently dropped the raw `@import`
+    // string-literal recovery the old scanner used to provide. lightningcss
+    // discards a misplaced `@import` per grammar (never valid after another
+    // rule) and, separately, a malformed `url(` ahead of it can make the
+    // tokenizer itself swallow everything up to the next `)` - either way
+    // the AST walk alone never reaches `sub.css`. Proven end to end through
+    // `convert()`, not just the unit-level `reachable` walk.
+    let mut epub = common::book_with_css_import_after_a_malformed_rule();
+    let out = convert(
+        Input::Epub(std::mem::take(&mut epub)),
+        &opts_for(&["generic"]),
+    )
+    .expect("converts");
+    assert!(
+        common::entry(&out.epub, "OEBPS/sub.css").is_some(),
+        "an @import target reached only past a malformed rule must survive"
     );
 }
 
@@ -705,5 +816,24 @@ fn a_scheme_refined_mistyped_isbn_survives_a_generic_conversion() {
     assert!(
         opf.contains("9783407868214"),
         "an ISBN-13-shaped value behind an ISBN refinement must be kept:\n{opf}"
+    );
+}
+
+/// The nav guard must key on the path the writer will actually use, not on
+/// `book.nav_path` alone: when that is `None` the writer emits
+/// `<opf_dir>/nav.xhtml` and discards whatever was stored there.
+#[test]
+fn a_nav_path_the_writer_will_synthesize_is_not_scrubbed_as_content() {
+    let out = convert(
+        Input::Epub(common::epub2_with_a_stray_nav_xhtml()),
+        &opts_for(&["generic"]),
+    )
+    .expect("converts");
+    assert!(
+        !out.report.transformations.iter().any(|t| {
+            t.kind == "generic-invisible" && t.file.as_deref() == Some("OEBPS/nav.xhtml")
+        }),
+        "must not report work on a file the writer replaces: {:#?}",
+        out.report.transformations
     );
 }

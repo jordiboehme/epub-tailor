@@ -1304,9 +1304,9 @@ version = "0.7.0"
 dependencies = [
  "clap",
  "epub-tailor-core",
+ "epub-tailor-testfixtures",
  "serde_json",
  "ureq",
- "zip 8.6.0",
 ]
 
 [[package]]
@@ -1332,9 +1332,11 @@ dependencies = [
 name = "epub-tailor-core"
 version = "0.7.0"
 dependencies = [
+ "aho-corasick",
  "askama",
  "comrak",
  "encoding_rs",
+ "epub-tailor-testfixtures",
  "html5ever 0.26.0",
  "image",
  "indexmap 2.14.0",
@@ -1348,9 +1350,18 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml_ng",
+ "sha1",
  "thiserror 2.0.19",
  "time",
  "unicode-normalization",
+ "zip 8.6.0",
+]
+
+[[package]]
+name = "epub-tailor-testfixtures"
+version = "0.7.0"
+dependencies = [
+ "image",
  "zip 8.6.0",
 ]
 
@@ -4489,6 +4500,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "170fb83ab34de17dc69aa7c67482b22218ddb85da56546f9bd6b929e32a05930"
 dependencies = [
  "stable_deref_trait",
+]
+
+[[package]]
+name = "sha1"
+version = "0.10.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a978451301f4db1d02937a4ab3ccce137717b81826e79b7d49ffe3244a13c3b8"
+dependencies = [
+ "cfg-if",
+ "cpufeatures",
+ "digest",
 ]
 
 [[package]]

@@ -9,7 +9,7 @@ mod common;
 use std::io::{Cursor, Read};
 use std::path::PathBuf;
 
-use common::{build_epub, run_epubcheck};
+use common::{CONTAINER_XML, build_epub, run_epubcheck};
 use epub_tailor_core::{ConvertOptions, Input, convert};
 use image::codecs::png::PngEncoder;
 use image::{DynamicImage, ExtendedColorType, ImageEncoder, RgbImage};
@@ -114,14 +114,9 @@ fn entry_bytes(epub: &[u8], name: &str) -> Vec<u8> {
     out
 }
 
-const CONTAINER_XML: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
-<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
-  <rootfiles>
-    <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
-  </rootfiles>
-</container>"#;
-
-const NAV_XHTML: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
+/// Local nav doc: these fixtures put their chapter at `text/chapter.xhtml`,
+/// which the shared `common::NAV_XHTML` does not link.
+const NAV: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
 <html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
 <head><title>Nav</title></head>
 <body><nav epub:type="toc"><ol><li><a href="text/chapter.xhtml">Chapter</a></li></ol></nav></body>
@@ -180,7 +175,7 @@ fn epub_svg_full() -> Vec<u8> {
         ("mimetype", b"application/epub+zip"),
         ("META-INF/container.xml", CONTAINER_XML),
         ("OEBPS/content.opf", CONTENT_OPF),
-        ("OEBPS/nav.xhtml", NAV_XHTML),
+        ("OEBPS/nav.xhtml", NAV),
         ("OEBPS/text/chapter.xhtml", CHAPTER),
         ("OEBPS/images/cover.svg", COVER_SVG),
         ("OEBPS/images/cover.jpg", &jpeg_of(&photo(480, 800))),
@@ -292,7 +287,7 @@ fn epub_vector_cover() -> Vec<u8> {
         ("mimetype", b"application/epub+zip"),
         ("META-INF/container.xml", CONTAINER_XML),
         ("OEBPS/content.opf", CONTENT_OPF),
-        ("OEBPS/nav.xhtml", NAV_XHTML),
+        ("OEBPS/nav.xhtml", NAV),
         ("OEBPS/text/chapter.xhtml", CHAPTER),
         ("OEBPS/images/cover.svg", COVER_SVG),
     ])
@@ -365,7 +360,7 @@ fn epub_data_uri_wrapper() -> Vec<u8> {
         ("mimetype", b"application/epub+zip"),
         ("META-INF/container.xml", CONTAINER_XML),
         ("OEBPS/content.opf", CONTENT_OPF),
-        ("OEBPS/nav.xhtml", NAV_XHTML),
+        ("OEBPS/nav.xhtml", NAV),
         ("OEBPS/text/chapter.xhtml", CHAPTER),
         ("OEBPS/images/wrap.svg", wrap_svg.as_bytes()),
     ])
@@ -431,7 +426,7 @@ fn epub_href_wrapper() -> Vec<u8> {
         ("mimetype", b"application/epub+zip"),
         ("META-INF/container.xml", CONTAINER_XML),
         ("OEBPS/content.opf", CONTENT_OPF),
-        ("OEBPS/nav.xhtml", NAV_XHTML),
+        ("OEBPS/nav.xhtml", NAV),
         ("OEBPS/text/chapter.xhtml", CHAPTER),
         ("OEBPS/images/wrap.svg", WRAP_SVG),
         ("OEBPS/images/pic.jpg", &jpeg_of(&photo(300, 200))),
@@ -489,7 +484,7 @@ fn epub_g_wrapped_href() -> Vec<u8> {
         ("mimetype", b"application/epub+zip"),
         ("META-INF/container.xml", CONTAINER_XML),
         ("OEBPS/content.opf", CONTENT_OPF),
-        ("OEBPS/nav.xhtml", NAV_XHTML),
+        ("OEBPS/nav.xhtml", NAV),
         ("OEBPS/text/chapter.xhtml", CHAPTER),
         ("OEBPS/images/wrap.svg", WRAP_SVG),
         ("OEBPS/images/pic.jpg", &jpeg_of(&photo(300, 200))),
@@ -551,7 +546,7 @@ fn epub_dangling_href_wrapper() -> Vec<u8> {
         ("mimetype", b"application/epub+zip"),
         ("META-INF/container.xml", CONTAINER_XML),
         ("OEBPS/content.opf", CONTENT_OPF),
-        ("OEBPS/nav.xhtml", NAV_XHTML),
+        ("OEBPS/nav.xhtml", NAV),
         ("OEBPS/text/chapter.xhtml", CHAPTER),
         ("OEBPS/images/wrap.svg", WRAP_SVG),
     ])
@@ -616,7 +611,7 @@ fn epub_inline_wrapper() -> Vec<u8> {
         ("mimetype", b"application/epub+zip"),
         ("META-INF/container.xml", CONTAINER_XML),
         ("OEBPS/content.opf", CONTENT_OPF),
-        ("OEBPS/nav.xhtml", NAV_XHTML),
+        ("OEBPS/nav.xhtml", NAV),
         ("OEBPS/text/chapter.xhtml", CHAPTER),
         ("OEBPS/images/cover.jpg", &jpeg_of(&photo(300, 400))),
     ])
@@ -674,7 +669,7 @@ fn epub_malformed_svg() -> (Vec<u8>, Vec<u8>) {
         ("mimetype", b"application/epub+zip"),
         ("META-INF/container.xml", CONTAINER_XML),
         ("OEBPS/content.opf", CONTENT_OPF),
-        ("OEBPS/nav.xhtml", NAV_XHTML),
+        ("OEBPS/nav.xhtml", NAV),
         ("OEBPS/text/chapter.xhtml", CHAPTER),
         ("OEBPS/images/broken.svg", broken),
     ]);
@@ -775,7 +770,7 @@ fn epub_single_svg_resource(title: &str, uuid: &str, svg: &[u8]) -> Vec<u8> {
         ("mimetype", b"application/epub+zip"),
         ("META-INF/container.xml", CONTAINER_XML),
         ("OEBPS/content.opf", content_opf.as_bytes()),
-        ("OEBPS/nav.xhtml", NAV_XHTML),
+        ("OEBPS/nav.xhtml", NAV),
         ("OEBPS/text/chapter.xhtml", CHAPTER),
         ("OEBPS/images/diagram.svg", svg),
     ])

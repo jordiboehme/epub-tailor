@@ -1,6 +1,7 @@
 //! EPUB reading: parsing an `.epub` archive into the shared [`model::Book`]
 //! representation. Writing/transforming land in later milestones.
 
+pub(crate) mod fonts;
 pub mod model;
 pub mod read;
 pub mod stamp;

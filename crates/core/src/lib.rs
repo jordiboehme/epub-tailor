@@ -541,6 +541,7 @@ pub fn convert(input: Input, opts: &ConvertOptions) -> Result<Converted, Convert
             Resource {
                 data: ET_STYLES.as_bytes().to_vec(),
                 media_type: "text/css".to_string(),
+                ..Default::default()
             },
         );
         transformations.push(Transformation {
@@ -597,11 +598,26 @@ pub fn convert(input: Input, opts: &ConvertOptions) -> Result<Converted, Convert
 
     for (path, doc) in &chapters {
         let bytes = serialize_xhtml(doc);
+        // This overwrites an already-existing resource (a split chapter part
+        // is a fresh path with nothing to carry) in place, so any
+        // media-overlay/fallback linkage the source OPF attached to it must
+        // survive the DOM round-trip - dropping it here would silently lose
+        // a read-aloud book's narration wiring downstream in `write_epub`.
+        let (media_overlay, fallback) = book
+            .resources
+            .get(path)
+            .map(|r| (r.media_overlay.clone(), r.fallback.clone()))
+            .unwrap_or_default();
         book.resources.insert(
             path.clone(),
             Resource {
                 data: bytes,
                 media_type: "application/xhtml+xml".to_string(),
+                media_overlay,
+                fallback,
+                // A spine XHTML document is never itself a SMIL item, so it
+                // is never what a duration refinement targets.
+                media_duration: None,
             },
         );
     }
@@ -616,16 +632,21 @@ pub fn convert(input: Input, opts: &ConvertOptions) -> Result<Converted, Convert
         .filter(|(path, resource)| !spine.contains(path.as_str()) && is_xhtml(&resource.media_type))
         .map(|(path, _)| path.clone())
         .collect();
+    // The writer regenerates the nav document from `book.metadata` and
+    // `book.toc` (see `write_epub`'s `NavTemplate`), discarding whatever is
+    // stored at this path entirely. Asked through the writer's own helper
+    // rather than read off `book.nav_path`, because the writer falls back to
+    // `<opf_dir>/nav.xhtml` when that is `None` - so an EPUB 2 book with a
+    // non-spine XHTML sitting at exactly that path would otherwise be
+    // scrubbed pointlessly and report a transformation for bytes that never
+    // ship.
+    let nav_path = crate::epub::write::effective_nav_path(&book);
     for path in non_spine {
         let doc = parse_xhtml(&book.resources[&path].data)?;
-        // The writer regenerates the nav document from `book.metadata` and
-        // `book.toc` (see `write_epub`'s `NavTemplate`), discarding whatever
-        // is stored here entirely - scrubbing this DOM would be dead work
-        // that still reports a transformation for a file whose bytes never
-        // ship. `scrub_model_strings` (below) covers the nav's real source
-        // instead. Every other non-spine XHTML document's bytes do ship as
-        // stored, so they still get scrubbed.
-        if opts.features.strip_invisible_chars && book.nav_path.as_deref() != Some(path.as_str()) {
+        // `scrub_model_strings` (below) covers the nav's real source instead.
+        // Every other non-spine XHTML document's bytes do ship as stored, so
+        // they still get scrubbed.
+        if opts.features.strip_invisible_chars && nav_path != path {
             generic::invisible::scrub_chapter(&doc, &mut transformations, &path);
         }
         let srcset_targets =
@@ -678,6 +699,14 @@ pub fn convert(input: Input, opts: &ConvertOptions) -> Result<Converted, Convert
         normalize_model_strings(&mut book, &mut transformations);
     }
 
+    // Unconditional, not a profile feature: a nav entry the source book
+    // points at a non-spine document is a structural defect, not a
+    // device-specific tradeoff. Runs last, after chapter splitting, alias
+    // rewriting and every `book.toc`-touching normalization above, so it
+    // sees the final hrefs and titles the writer is about to regenerate the
+    // navigation document and NCX from.
+    prune_dangling_toc_entries(&mut book, &mut warnings);
+
     let chapter_count = book.spine.len() as u32;
     ensure_output_wellformed(&book)?;
     let epub = write_epub(
@@ -687,6 +716,7 @@ pub fn convert(input: Input, opts: &ConvertOptions) -> Result<Converted, Convert
         opts.features
             .normalize_identity
             .then_some(crate::epub::write::GENERIC_MODIFIED),
+        &mut warnings,
     )?;
     let bytes_out = epub.len() as u64;
 
@@ -748,6 +778,84 @@ pub fn convert(input: Input, opts: &ConvertOptions) -> Result<Converted, Convert
 /// Whether a media type is an (X)HTML content document.
 fn is_xhtml(media_type: &str) -> bool {
     media_type == "application/xhtml+xml" || media_type == "text/html"
+}
+
+/// Drop every `book.toc` entry whose target does not resolve to a spine
+/// document, warning once per dropped entry. `write_epub` regenerates both
+/// the navigation document and the NCX from `book.toc`, so pruning the model
+/// is enough to fix both - and it must happen here, because a source book
+/// that links a non-spine document from its nav produces output that fails
+/// this crate's own `spine-toc-sync` lint at Error severity, and nothing
+/// catches that in a release build (the post-convert self-check below is
+/// `#[cfg(debug_assertions)]`-gated).
+///
+/// Resolution mirrors `validate::check_toc_target`'s notion of "resolves to a
+/// spine document": split the href on its first `#` and look the path part up
+/// in the spine set. Unlike the lint, this does *not* call `normalize_href`
+/// with the nav/NCX directory as base, and that is deliberate, not an
+/// oversight: `read_epub` (`parse_nav_list`, `parse_nav_points`) already runs
+/// every `TocEntry.href` through `normalize_href` at parse time, so by the
+/// time this runs `entry.href` is already a decoded, zip-absolute path with
+/// no base left to apply. Passing a real base here would double-resolve it.
+/// This invariant - `TocEntry.href` is always pre-resolved - is what makes a
+/// plain `#`-split correct; if it ever stops holding, this needs a base again
+/// too.
+///
+/// `book.toc` is a flat, level-tagged list, not a tree: an entry's children
+/// are whatever immediately-following entries have a strictly greater level
+/// (see `write_epub`'s `build_toc_tree`). Dropping an entry here must not
+/// merely leave its children's levels untouched, because `build_toc_tree`'s
+/// fold has no notion of original parentage - it only compares levels. An
+/// untouched child would be re-parented onto whatever *survives* immediately
+/// before it (typically the dropped entry's preceding sibling), silently
+/// misrepresenting the book's structure. So every surviving entry is
+/// re-leveled by the number of dropped ancestors between it and the root:
+/// that is what actually promotes it to sit where its nearest surviving
+/// ancestor's siblings sit, per level, and it composes correctly for nested
+/// drops (a dropped entry whose own parent was also dropped) because each
+/// ancestor's shift is tracked independently on a stack and summed once, not
+/// reapplied.
+fn prune_dangling_toc_entries(book: &mut Book, warnings: &mut Vec<Warning>) {
+    let spine: HashSet<&str> = book.spine.iter().map(String::as_str).collect();
+    let toc_source = book.nav_path.clone().or_else(|| book.ncx_path.clone());
+
+    // Ancestor stack, one entry per currently-open level: (that ancestor's
+    // original level, the level-shift its descendants must apply). A kept
+    // ancestor pushes its own shift unchanged (nothing extra for its
+    // children); a dropped ancestor pushes `shift + 1`, promoting everything
+    // under it by one more level than it was itself promoted by.
+    let mut ancestors: Vec<(u8, u8)> = Vec::new();
+    let mut kept = Vec::with_capacity(book.toc.len());
+
+    for mut entry in std::mem::take(&mut book.toc) {
+        while ancestors
+            .last()
+            .is_some_and(|&(level, _)| level >= entry.level)
+        {
+            ancestors.pop();
+        }
+        let shift = ancestors.last().map_or(0, |&(_, shift)| shift);
+        let original_level = entry.level;
+        let path = entry
+            .href
+            .split_once('#')
+            .map_or(entry.href.as_str(), |(p, _)| p);
+        if spine.contains(path) {
+            entry.level = original_level.saturating_sub(shift).max(1);
+            ancestors.push((original_level, shift));
+            kept.push(entry);
+        } else {
+            warnings.push(Warning {
+                message: format!(
+                    "dropped navigation entry '{}' ({}): target is not a spine document",
+                    entry.title, entry.href
+                ),
+                file: toc_source.clone(),
+            });
+            ancestors.push((original_level, shift + 1));
+        }
+    }
+    book.toc = kept;
 }
 
 /// Refuse to ship a content document that is not well-formed XML.
@@ -910,11 +1018,20 @@ fn set_cover(book: &mut Book, cover: &CoverImage, transformations: &mut Vec<Tran
         n += 1;
     }
 
+    // When `path` collides with the *current* cover, the loop above exits
+    // without renaming and this overwrites that resource in place - the one
+    // in-place overwrite in this file that deliberately does NOT carry
+    // linkage forward. Unlike the chapter/CSS rewrites and the image/SVG
+    // renames elsewhere in this file, this is a genuine content replacement:
+    // the caller supplied a new cover image, so an old cover's `fallback`
+    // (say, declared because the old cover was some unsupported format) has
+    // no reason to still describe the new bytes replacing it.
     book.resources.insert(
         path.clone(),
         Resource {
             data: cover.data.clone(),
             media_type: cover.media_type.clone(),
+            ..Default::default()
         },
     );
     let replaced = book.cover.is_some();
@@ -1072,12 +1189,20 @@ fn process_images(
                         stem_of(&path),
                         format.ext(),
                     );
-                    book.resources.shift_remove(&path);
+                    // Same resource, new path: carry over whatever linkage it
+                    // had (rare for an image, but `fallback` can legally
+                    // target one) rather than dropping it on a format change.
+                    let old = book.resources.shift_remove(&path);
                     book.resources.insert(
                         unique.clone(),
                         Resource {
                             data: out,
                             media_type: format.media_type().to_string(),
+                            media_overlay: old.as_ref().and_then(|r| r.media_overlay.clone()),
+                            fallback: old.as_ref().and_then(|r| r.fallback.clone()),
+                            // An image is never a SMIL item, so never what a
+                            // duration refinement targets.
+                            media_duration: None,
                         },
                     );
                     if book.cover.as_deref() == Some(path.as_str()) {
@@ -1096,7 +1221,14 @@ fn process_images(
                 let tile_count = tiles.len();
                 let dir = parent_dir(&path);
                 let stem = stem_of(&path).to_string();
-                book.resources.shift_remove(&path);
+                // Any linkage the source image had (rare, but `fallback` can
+                // legally target an image) goes to the first tile - the same
+                // "first part stands in for the whole" choice the cover
+                // reassignment below already makes.
+                let old = book.resources.shift_remove(&path);
+                let (first_media_overlay, first_fallback) = old
+                    .map(|r| (r.media_overlay, r.fallback))
+                    .unwrap_or_default();
                 let mut tile_paths = Vec::with_capacity(tile_count);
                 for (index, tile) in tiles.into_iter().enumerate() {
                     let tile_stem = format!("{stem}-p{}", index + 1);
@@ -1106,6 +1238,19 @@ fn process_images(
                         Resource {
                             data: tile.data,
                             media_type: "image/jpeg".to_string(),
+                            media_overlay: if index == 0 {
+                                first_media_overlay.clone()
+                            } else {
+                                None
+                            },
+                            fallback: if index == 0 {
+                                first_fallback.clone()
+                            } else {
+                                None
+                            },
+                            // An image tile is never a SMIL item, so never
+                            // what a duration refinement targets.
+                            media_duration: None,
                         },
                     );
                     tile_paths.push(unique);
@@ -1234,12 +1379,19 @@ fn process_svgs(
             }
             SvgAction::Extract(bytes, ext, media_type) => {
                 let new_path = reserve_unique(&mut reserved, &dir, stem_of(&path), ext);
-                book.resources.shift_remove(&path);
+                // Same resource, new path: carry over whatever linkage the
+                // SVG wrapper had rather than dropping it on extraction.
+                let old = book.resources.shift_remove(&path);
                 book.resources.insert(
                     new_path.clone(),
                     Resource {
                         data: bytes,
                         media_type: media_type.to_string(),
+                        media_overlay: old.as_ref().and_then(|r| r.media_overlay.clone()),
+                        fallback: old.as_ref().and_then(|r| r.fallback.clone()),
+                        // An extracted raster is never a SMIL item, so never
+                        // what a duration refinement targets.
+                        media_duration: None,
                     },
                 );
                 if is_cover {
@@ -1297,12 +1449,19 @@ fn process_svgs(
                 );
                 let new_path =
                     reserve_unique(&mut reserved, &dir, stem_of(&path), enc.format.ext());
-                book.resources.shift_remove(&path);
+                // Same resource, new path: carry over whatever linkage the
+                // SVG had rather than dropping it on rasterization.
+                let old = book.resources.shift_remove(&path);
                 book.resources.insert(
                     new_path.clone(),
                     Resource {
                         data: enc.data,
                         media_type: enc.format.media_type().to_string(),
+                        media_overlay: old.as_ref().and_then(|r| r.media_overlay.clone()),
+                        fallback: old.as_ref().and_then(|r| r.fallback.clone()),
+                        // A rasterized SVG is never a SMIL item, so never
+                        // what a duration refinement targets.
+                        media_duration: None,
                     },
                 );
                 finalized.insert(new_path.clone());
@@ -1411,6 +1570,7 @@ fn rasterize_inline_svgs(
             Resource {
                 data: enc.data,
                 media_type: enc.format.media_type().to_string(),
+                ..Default::default()
             },
         ));
         transformations.push(Transformation {
@@ -1527,6 +1687,7 @@ fn rasterize_tables(
             Resource {
                 data: enc.data,
                 media_type: enc.format.media_type().to_string(),
+                ..Default::default()
             },
         ));
         transformations.push(Transformation {
@@ -1665,11 +1826,25 @@ fn store_filtered_css(
     warnings: &mut Vec<Warning>,
 ) {
     let chunks = caps::split_css(&filtered.css, opts.device.css_max_bytes);
+    // `path` is an existing CSS resource (the caller collected it from
+    // `book.resources`), so this is an in-place update: carry over any
+    // fallback linkage it already had rather than silently dropping it (see
+    // the same carry-forward in the chapter-serialization loop above).
+    let (media_overlay, fallback) = book
+        .resources
+        .get(path)
+        .map(|r| (r.media_overlay.clone(), r.fallback.clone()))
+        .unwrap_or_default();
     book.resources.insert(
         path.to_string(),
         Resource {
             data: chunks[0].clone().into_bytes(),
             media_type: "text/css".to_string(),
+            media_overlay,
+            fallback,
+            // A stylesheet is never a SMIL item, so never what a duration
+            // refinement targets.
+            media_duration: None,
         },
     );
     let mut next_part = 2usize;
@@ -1680,6 +1855,7 @@ fn store_filtered_css(
             Resource {
                 data: chunk.clone().into_bytes(),
                 media_type: "text/css".to_string(),
+                ..Default::default()
             },
         );
         next_part = used_part + 1;
@@ -2012,6 +2188,7 @@ mod tests {
             Resource {
                 data: data.to_vec(),
                 media_type: media_type.to_string(),
+                ..Default::default()
             },
         );
         Book {
@@ -2236,6 +2413,7 @@ mod tests {
             Resource {
                 data: Vec::new(),
                 media_type: "text/css".to_string(),
+                ..Default::default()
             },
         );
         resources.insert(
@@ -2243,6 +2421,7 @@ mod tests {
             Resource {
                 data: b"/* pre-existing, unrelated */".to_vec(),
                 media_type: "text/css".to_string(),
+                ..Default::default()
             },
         );
         let mut book = Book {

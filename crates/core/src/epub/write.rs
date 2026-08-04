@@ -17,6 +17,7 @@ use zip::{CompressionMethod, ZipWriter};
 use crate::epub::model::{Book, Creator, Metadata, TocEntry};
 use crate::error::ConvertError;
 use crate::html::escape::{escape_attr, escape_text};
+use crate::report::Warning;
 
 /// The `dcterms:modified` value the generic profile pins, so two copies of the
 /// same edition converge. EPUB 3 requires the field, so it cannot be omitted;
@@ -39,6 +40,14 @@ pub const GENERIC_MODIFIED: &str = "1970-01-01T00:00:00Z";
 /// `dcterms:modified` value with a caller-supplied string instead of the
 /// current wall-clock time; `None` stamps `now_utc_iso8601()` as before.
 ///
+/// Every manifest item's id is reassigned here (see [`IdAllocator`]), so a
+/// `media-overlay`/`fallback` linkage carried on a [`crate::epub::model::Resource`]
+/// (itself a resource path, already resolved from the source OPF's idref) is
+/// re-resolved against the *new* ids rather than copied verbatim. A linkage
+/// whose target is no longer a manifest path - pruned as unreferenced
+/// upstream, or one that never resolved when the book was read - is omitted
+/// (never emitted as a dangling reference) and reported to `warnings`.
+///
 /// # Errors
 /// Returns [`ConvertError::Io`] if a template fails to render or a ZIP entry
 /// cannot be written (neither is expected for well-formed model data).
@@ -47,12 +56,10 @@ pub fn write_epub(
     stamp: Option<&str>,
     stamp_profile: Option<&str>,
     fixed_modified: Option<&str>,
+    warnings: &mut Vec<Warning>,
 ) -> Result<Vec<u8>, ConvertError> {
     let opf_dir = parent_dir(&book.opf_path);
-    let nav_path = book
-        .nav_path
-        .clone()
-        .unwrap_or_else(|| join_dir(&opf_dir, "nav.xhtml"));
+    let nav_path = effective_nav_path(book);
     let ncx_path = book
         .ncx_path
         .clone()
@@ -78,16 +85,35 @@ pub fn write_epub(
         manifest_paths.push(ncx_path.clone());
     }
 
-    // Assign unique manifest ids and build the item list.
+    // Pass 1: assign every manifest path a fresh, unique id up front. This
+    // has to happen as its own pass, before any item is built, because a
+    // `media-overlay`/`fallback` target can be *any* other manifest path -
+    // including one that has not been reached yet in path order - and the
+    // new id it needs to remap to only exists once that path's own
+    // allocation has run.
     let mut allocator = IdAllocator::default();
+    let ids: Vec<String> = manifest_paths
+        .iter()
+        .map(|p| allocator.allocate(p))
+        .collect();
+    let path_ids: std::collections::HashMap<&str, &str> = manifest_paths
+        .iter()
+        .zip(ids.iter())
+        .map(|(p, id)| (p.as_str(), id.as_str()))
+        .collect();
+    let ncx_id = manifest_paths
+        .iter()
+        .position(|p| *p == ncx_path)
+        .map(|i| ids[i].clone())
+        .unwrap_or_default();
+
+    // Pass 2: build the item list, resolving each resource's carried-over
+    // media-overlay/fallback linkage (a resource path, already resolved from
+    // the source idref by the reader) through the id map pass 1 just built.
     let mut items: Vec<OpfItem> = Vec::new();
     let mut cover_id = String::new();
-    let mut ncx_id = String::new();
-    for path in &manifest_paths {
-        let id = allocator.allocate(path);
-        if *path == ncx_path {
-            ncx_id = id.clone();
-        }
+    let mut media_durations: Vec<OpfMediaDuration> = Vec::new();
+    for (path, id) in manifest_paths.iter().zip(ids.iter()) {
         let media_type = if *path == nav_path {
             "application/xhtml+xml".to_string()
         } else if *path == ncx_path {
@@ -106,20 +132,36 @@ pub fn write_epub(
             properties.push("cover-image");
             cover_id = id.clone();
         }
+        let resource = book.resources.get(path);
+        let media_overlay = resource
+            .and_then(|r| r.media_overlay.as_deref())
+            .map(|target| resolve_linkage(path, "media-overlay", target, &path_ids, warnings))
+            .unwrap_or_default();
+        let fallback = resource
+            .and_then(|r| r.fallback.as_deref())
+            .map(|target| resolve_linkage(path, "fallback", target, &path_ids, warnings))
+            .unwrap_or_default();
+        // This item's own duration refinement (it names itself via `id`, so
+        // - unlike media-overlay/fallback - there is no cross-reference to
+        // remap: the item either survived pass 1 and got `id`, or it isn't
+        // here to iterate over at all.
+        if let Some(value) = resource.and_then(|r| r.media_duration.clone()) {
+            media_durations.push(OpfMediaDuration {
+                id: id.clone(),
+                value,
+            });
+        }
         items.push(OpfItem {
-            id,
+            id: id.clone(),
             href: relative_href(&opf_dir, path),
             media_type,
             properties: properties.join(" "),
+            media_overlay,
+            fallback,
         });
     }
 
     // Spine idrefs, resolved from the item ids assigned above.
-    let path_ids: std::collections::HashMap<&str, &str> = manifest_paths
-        .iter()
-        .zip(items.iter())
-        .map(|(p, item)| (p.as_str(), item.id.as_str()))
-        .collect();
     let spine: Vec<String> = book
         .spine
         .iter()
@@ -133,7 +175,10 @@ pub fn write_epub(
     // Every real input path already defaults an absent/blank language to
     // "en" (with a warning); this is a last-resort guard so a hand-built
     // `Book` can never round-trip an empty `dc:language`, which epubcheck
-    // flags. `write_epub` has no warnings channel, so this stays silent.
+    // flags. Deliberately still silent even though `write_epub` now has a
+    // `warnings` channel: a hand-built `Book` bypassing the reader is the
+    // only way to hit this, and the reader's own warning already covers the
+    // real-input path.
     let opf_language = if book.metadata.language.trim().is_empty() {
         "en".to_string()
     } else {
@@ -190,6 +235,8 @@ pub fn write_epub(
         ncx_id,
         items,
         spine,
+        media_duration: meta.media_duration.clone().unwrap_or_default(),
+        media_durations,
     }
     .render()
     .map_err(render_err)?
@@ -298,6 +345,21 @@ struct OpfTemplate {
     ncx_id: String,
     items: Vec<OpfItem>,
     spine: Vec<String>,
+    /// The book-wide `<meta property="media:duration">`, empty when the
+    /// source had none. EPUB 3 requires it whenever any `items` entry
+    /// carries `media-overlay` (see [`OpfItem::media_overlay`]).
+    media_duration: String,
+    /// One `<meta refines="#id" property="media:duration">` per SMIL item
+    /// whose duration survived the rebuild - `id` already the item's
+    /// *regenerated* manifest id, not the source's.
+    media_durations: Vec<OpfMediaDuration>,
+}
+
+/// One SMIL item's read-aloud duration refinement: `id` is that item's own
+/// regenerated manifest id (the `refines` target), `value` the duration text.
+struct OpfMediaDuration {
+    id: String,
+    value: String,
 }
 
 /// A `dc:creator`/`dc:contributor` as the template needs it: an id to hang the
@@ -324,6 +386,12 @@ struct OpfItem {
     media_type: String,
     /// Space-separated `properties` value, empty when the item has none.
     properties: String,
+    /// The new id of this item's media-overlay SMIL document, empty when the
+    /// item has none (see [`resolve_linkage`]).
+    media_overlay: String,
+    /// The new id of this item's fallback target, empty when the item has
+    /// none (see [`resolve_linkage`]).
+    fallback: String,
 }
 
 #[derive(Template)]
@@ -480,6 +548,41 @@ fn fallback_title(title: &str) -> String {
 // Manifest id allocation
 // ---------------------------------------------------------------------
 
+/// Resolve `target` - a resource path, already resolved from a source OPF
+/// idref by the reader (see [`crate::epub::read`]) - to the *new* id
+/// `path_ids` assigned it, for the `media-overlay`/`fallback` linkage `path`
+/// (also a resource path, for the warning message) carries.
+///
+/// `target` no longer naming a manifest path is expected, not a bug: the
+/// resource it pointed at may have been pruned as unreferenced by an earlier
+/// pipeline stage, or (defensively, since a hand-built [`Book`] need not have
+/// gone through the reader at all) never named a real manifest item to begin
+/// with. Either way this returns `""` - the template's empty-string-means-
+/// absent convention, matching [`OpfItem::properties`] - rather than a
+/// dangling reference, which epubcheck rejects; the caller loses linkage
+/// info it cannot safely emit, so this also records why.
+fn resolve_linkage(
+    path: &str,
+    kind: &str,
+    target: &str,
+    path_ids: &std::collections::HashMap<&str, &str>,
+    warnings: &mut Vec<Warning>,
+) -> String {
+    match path_ids.get(target) {
+        Some(id) => (*id).to_string(),
+        None => {
+            warnings.push(Warning {
+                message: format!(
+                    "{path}: {kind} target '{target}' is not in the rebuilt manifest; \
+                     dropping the {kind} linkage"
+                ),
+                file: Some(path.to_string()),
+            });
+            String::new()
+        }
+    }
+}
+
 /// Allocates XML-safe, unique manifest ids derived from resource paths.
 #[derive(Default)]
 struct IdAllocator {
@@ -573,6 +676,22 @@ fn percent_encode(s: &str, keep_slash: bool) -> String {
 // ---------------------------------------------------------------------
 // Misc helpers
 // ---------------------------------------------------------------------
+
+/// The path [`write_epub`] will write the nav document to: `book.nav_path`
+/// when the book had one, otherwise `<opf_dir>/nav.xhtml`.
+///
+/// Shared rather than inlined because callers outside the writer need to know
+/// which resource the writer is going to overwrite. Guarding on `nav_path`
+/// alone misses the fallback: an EPUB 2 book has `nav_path: None` but may
+/// still carry a non-spine XHTML at exactly `<opf_dir>/nav.xhtml`, and that
+/// file's stored bytes never ship - the writer regenerates them from
+/// `book.metadata` and `book.toc`. Any work done on it is dead work that
+/// still reports a transformation.
+pub(crate) fn effective_nav_path(book: &Book) -> String {
+    book.nav_path
+        .clone()
+        .unwrap_or_else(|| join_dir(&parent_dir(&book.opf_path), "nav.xhtml"))
+}
 
 /// Parent directory of a zip-absolute path (`""` if it has no `/`).
 fn parent_dir(path: &str) -> String {
@@ -723,6 +842,7 @@ mod tests {
             crate::epub::model::Resource {
                 data: Vec::new(),
                 media_type: "application/oebps-package+xml".to_string(),
+                ..Default::default()
             },
         );
         let book = Book {
@@ -739,7 +859,8 @@ mod tests {
             nav_path: None,
             ncx_path: None,
         };
-        let bytes = write_epub(&book, stamp, stamp_profile, None).expect("write should succeed");
+        let bytes = write_epub(&book, stamp, stamp_profile, None, &mut Vec::new())
+            .expect("write should succeed");
 
         let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).expect("output is a valid zip");
         let mut opf = String::new();

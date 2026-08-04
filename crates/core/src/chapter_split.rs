@@ -102,7 +102,36 @@ pub(crate) fn split_oversize_chapters(
                 });
 
                 parts_of.insert(path.clone(), part_paths.clone());
-                book.resources.shift_remove(&path);
+                // A SMIL overlay (or a fallback declaration) names one
+                // specific document; once that document is cut into
+                // `part_paths.len()` numbered parts there is no single part
+                // left for the linkage to still mean, so it is dropped here
+                // rather than guessed onto one part - unlike a pruned or
+                // renamed target (see `write.rs::resolve_linkage`), this is
+                // the one loss path with nothing further downstream able to
+                // warn about it, so it has to happen here.
+                let removed = book.resources.shift_remove(&path);
+                for (kind, present) in [
+                    (
+                        "media-overlay",
+                        removed.as_ref().is_some_and(|r| r.media_overlay.is_some()),
+                    ),
+                    (
+                        "fallback",
+                        removed.as_ref().is_some_and(|r| r.fallback.is_some()),
+                    ),
+                ] {
+                    if present {
+                        warnings.push(Warning {
+                            message: format!(
+                                "{path} was split into {} part(s); its {kind} linkage does not \
+                                 apply to any single part and was dropped",
+                                part_paths.len()
+                            ),
+                            file: Some(path.clone()),
+                        });
+                    }
+                }
                 chapters_split += 1;
                 for part in parts {
                     source_of.insert(part.path.clone(), path.clone());
@@ -594,6 +623,7 @@ mod tests {
             Resource {
                 data: Vec::new(),
                 media_type: "application/xhtml+xml".to_string(),
+                ..Default::default()
             },
         );
         resources.insert(
@@ -601,6 +631,7 @@ mod tests {
             Resource {
                 data: Vec::new(),
                 media_type: "application/xhtml+xml".to_string(),
+                ..Default::default()
             },
         );
         let book = Book {
@@ -848,6 +879,65 @@ mod tests {
         assert!(
             sec3_part_out.contains(&format!("href=\"{}#sec1\"", basename(sec1_part))),
             "sec3's part must reference sec1's real part ({sec1_part}): {sec3_part_out}"
+        );
+    }
+
+    #[test]
+    fn splitting_a_narrated_chapter_warns_about_the_dropped_linkage() {
+        // Same split-forcing fixture as `split_retargets_spine_toc_and_every_
+        // chapter_href`, just with `text/a.xhtml` narrated (and, for good
+        // measure, carrying a fallback too) before it gets split - a SMIL
+        // overlay names one specific document, and once that document is cut
+        // into several numbered parts there is no single part left for it to
+        // still mean, so the linkage cannot follow any part. Unlike a pruned
+        // or renamed target, nothing downstream of this function ever sees
+        // the original path again to warn about it going missing - this is
+        // the one loss path that has to warn here or not at all.
+        let body_a = format!(
+            "<h1 id=\"sec1\">Section 1</h1><p>{pad}</p><p><a href=\"#sec3\">to 3</a></p>\
+             <h1 id=\"sec2\">Section 2</h1><p>{pad}</p>\
+             <h1 id=\"sec3\">Section 3</h1><p>{pad}</p><p><a href=\"#sec1\">back to 1</a></p>",
+            pad = "y".repeat(30),
+        );
+        let body_b = "<p>b intro</p>".to_string();
+        let (mut book, mut chapters) = book_with_two_chapters(&body_a, &body_b);
+        {
+            let a = book.resources.get_mut("text/a.xhtml").unwrap();
+            a.media_overlay = Some("text/a.smil".to_string());
+            a.fallback = Some("text/a-fallback.xhtml".to_string());
+        }
+
+        let doc_a = &chapters[0].1;
+        let body = find_body(doc_a).unwrap();
+        let blocks = child_elements(&body);
+        let sizes: Vec<usize> = blocks.iter().map(|b| serialize_fragment(b).len()).collect();
+        let shell = serialize_xhtml(doc_a).len() - sizes.iter().sum::<usize>();
+        let max_chapter_bytes = shell + sizes[0] + sizes[1] + sizes[2] + 5;
+        let opts = opts_with_limit(max_chapter_bytes);
+        let mut transformations = Vec::new();
+        let mut warnings = Vec::new();
+
+        let split = split_oversize_chapters(
+            &mut book,
+            &mut chapters,
+            &opts,
+            &mut transformations,
+            &mut warnings,
+        )
+        .chapters_split;
+        assert_eq!(split, 1, "the fixture must actually force a split");
+
+        let media_overlay_warning = warnings
+            .iter()
+            .find(|w| w.message.contains("media-overlay"));
+        assert!(
+            media_overlay_warning.is_some_and(|w| w.file.as_deref() == Some("text/a.xhtml")),
+            "expected a media-overlay warning naming text/a.xhtml, got: {warnings:?}"
+        );
+        let fallback_warning = warnings.iter().find(|w| w.message.contains("fallback"));
+        assert!(
+            fallback_warning.is_some_and(|w| w.file.as_deref() == Some("text/a.xhtml")),
+            "expected a fallback warning naming text/a.xhtml, got: {warnings:?}"
         );
     }
 
