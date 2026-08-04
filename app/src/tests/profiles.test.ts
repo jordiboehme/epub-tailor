@@ -15,6 +15,7 @@ import {
   baseName,
   addBuiltinLayer,
   addFileLayer,
+  describeDuplicateLayer,
   removeLayerAt,
   moveLayer,
   hasDeviceClash,
@@ -154,6 +155,32 @@ describe("addFileLayer", () => {
   it("refuses a path already in the stack, returning the same reference", () => {
     const stack: ProfileLayer[] = [{ kind: "file", path: "/home/reader/manga.json" }];
     expect(addFileLayer(stack, "/home/reader/manga.json")).toBe(stack);
+  });
+});
+
+describe("describeDuplicateLayer", () => {
+  it("reports that a file layer is already in the stack instead of silently ignoring it", () => {
+    const stack: ProfileLayer[] = [
+      { kind: "builtin", name: "epub" },
+      { kind: "file", path: "/tmp/manga.json" },
+    ];
+    expect(addFileLayer(stack, "/tmp/manga.json")).toBe(stack);
+    expect(describeDuplicateLayer(stack, "/tmp/manga.json")).toBe(
+      "manga.json is already in the stack",
+    );
+  });
+
+  it("says nothing about a path that is not in the stack", () => {
+    const stack: ProfileLayer[] = [{ kind: "file", path: "/tmp/manga.json" }];
+    expect(describeDuplicateLayer(stack, "/tmp/shonen.json")).toBeNull();
+  });
+
+  it("ignores a built-in layer that happens to share the name", () => {
+    // Only file layers are keyed by path: a built-in called `manga` must not
+    // make `/tmp/manga.json` look like a duplicate, or the picker would
+    // refuse a file it actually went on to add.
+    const stack: ProfileLayer[] = [{ kind: "builtin", name: "manga" }];
+    expect(describeDuplicateLayer(stack, "/tmp/manga.json")).toBeNull();
   });
 });
 
