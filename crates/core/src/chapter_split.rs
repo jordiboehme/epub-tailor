@@ -136,22 +136,34 @@ pub(crate) fn split_oversize_chapters(
                 // is still in the book, and every `<text src="...">` inside it
                 // names the document just removed. Shipping it is an invalid
                 // EPUB - epubcheck reports RSC-007, referenced resource not
-                // found - so the overlay goes too, unless some other item
-                // still points at it (one SMIL shared across documents; the
-                // parts that remain valid keep it).
-                if let Some(smil) = removed.as_ref().and_then(|r| r.media_overlay.as_deref())
-                    && !book
+                // found - so the overlay goes too.
+                //
+                // Unconditionally, even when another document still narrates
+                // through the same SMIL: sparing it there would keep exactly
+                // the dangling `<text src>` this exists to remove, only with
+                // the invalid file also still reachable. The other document
+                // loses its narration rather than its validity, and does not
+                // lose it silently - `write.rs::resolve_linkage` warns when it
+                // finds that linkage's target gone.
+                if let Some(smil) = removed.as_ref().and_then(|r| r.media_overlay.clone())
+                    && book.resources.shift_remove(&smil).is_some()
+                {
+                    let also = book
                         .resources
                         .values()
-                        .any(|r| r.media_overlay.as_deref() == Some(smil))
-                    && book.resources.shift_remove(smil).is_some()
-                {
+                        .filter(|r| r.media_overlay.as_deref() == Some(smil.as_str()))
+                        .count();
+                    let shared = if also > 0 {
+                        format!("; {also} other document(s) narrated through it and lose narration")
+                    } else {
+                        String::new()
+                    };
                     warnings.push(Warning {
                         message: format!(
                             "{smil} was dropped too: it narrated {path}, which no longer exists \
-                             as a single document"
+                             as a single document{shared}"
                         ),
-                        file: Some(smil.to_string()),
+                        file: Some(smil.clone()),
                     });
                 }
                 chapters_split += 1;
@@ -1023,9 +1035,12 @@ mod tests {
     }
 
     #[test]
-    fn an_overlay_another_document_still_uses_survives_the_split() {
-        // The same SMIL can cover more than one document. Splitting one of
-        // them must not take the overlay away from the others.
+    fn a_shared_overlay_goes_too_because_it_still_names_the_split_document() {
+        // The same SMIL can cover more than one document. Keeping it because
+        // another document still points at it would keep the exact dangling
+        // `<text src="text/a.xhtml#...">` that dropping it exists to remove -
+        // an invalid EPUB either way, just with the invalid file reachable.
+        // So it goes, and text/b.xhtml loses narration, not validity.
         let pad = "y".repeat(30);
         let body_a = format!(
             "<h1 id=\"sec1\">Section 1</h1><p>{pad}</p>\
@@ -1063,8 +1078,15 @@ mod tests {
             &mut warnings,
         );
         assert!(
-            book.resources.contains_key("text/shared.smil"),
-            "text/b.xhtml still narrates through it"
+            !book.resources.contains_key("text/shared.smil"),
+            "an overlay still naming the split document must not ship: {:?}",
+            book.resources.keys().collect::<Vec<_>>()
+        );
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.message.contains("lose narration")),
+            "the other document losing narration must be reported: {warnings:?}"
         );
     }
 

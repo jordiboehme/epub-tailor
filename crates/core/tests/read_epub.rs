@@ -531,6 +531,61 @@ fn duplicate_cipher_references_deobfuscate_only_once() {
     );
 }
 
+/// A `<dc:identifier>` written across lines - ordinary pretty-printed XML.
+/// Adobe's key derivation matches a literal `urn:uuid:` prefix, so the
+/// leading newline and indentation have to be gone before it looks; only the
+/// four characters OCF names as whitespace may be removed, or the NBSP case
+/// above breaks again.
+#[test]
+fn an_indented_identifier_still_yields_an_adobe_key() {
+    const UNIQUE_ID: &str = "urn:uuid:12345678-1234-1234-1234-123456789abc";
+    let original_font: Vec<u8> = (0..300u32).map(|i| (i % 250) as u8).collect();
+    let obfuscated_font = adobe_obfuscate(&original_font, UNIQUE_ID);
+
+    const ENCRYPTION_XML: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
+<encryption xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <EncryptedData xmlns="http://www.w3.org/2001/04/xmlenc#">
+    <EncryptionMethod Algorithm="http://ns.adobe.com/pdf/enc#RC"/>
+    <CipherData><CipherReference URI="OEBPS/fonts/embedded.ttf"/></CipherData>
+  </EncryptedData>
+</encryption>"#;
+
+    let opf = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="pub-id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:title>Fonted</dc:title>
+    <dc:language>en</dc:language>
+    <dc:identifier id="pub-id">
+      {UNIQUE_ID}
+    </dc:identifier>
+  </metadata>
+  <manifest>
+    <item id="ch1" href="text/chapter1.xhtml" media-type="application/xhtml+xml"/>
+    <item id="font" href="fonts/embedded.ttf" media-type="application/vnd.ms-opentype"/>
+  </manifest>
+  <spine>
+    <itemref idref="ch1"/>
+  </spine>
+</package>"#
+    );
+
+    let bytes = build_epub(&[
+        ("mimetype", b"application/epub+zip"),
+        ("META-INF/container.xml", CONTAINER_XML),
+        ("META-INF/encryption.xml", ENCRYPTION_XML),
+        ("OEBPS/content.opf", opf.as_bytes()),
+        ("OEBPS/text/chapter1.xhtml", CHAPTER1),
+        ("OEBPS/fonts/embedded.ttf", &obfuscated_font),
+    ]);
+
+    let result = epub_tailor_core::read_epub(&bytes).expect("reads");
+    assert_eq!(
+        result.book.resources["OEBPS/fonts/embedded.ttf"].data, original_font,
+        "indentation around the identifier must not cost the Adobe key"
+    );
+}
+
 /// The IDPF algorithm strips exactly space, tab, CR and LF from the unique
 /// identifier and hashes the rest. A NBSP is none of those, so it must reach
 /// the SHA-1 intact - but the parsed `metadata.identifier` has been through

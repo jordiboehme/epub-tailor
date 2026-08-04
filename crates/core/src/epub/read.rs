@@ -686,9 +686,12 @@ fn parse_opf(
         ncx_path = manifest.get(toc_id).map(|item| item.href.clone());
     }
 
+    // Stripped of the OCF four, and of nothing else. A plain `.trim()` would
+    // be wrong in both directions: it leaves interior whitespace the IDPF key
+    // must not hash, and it removes NBSP, which that key must hash.
     let identifier_for_font_key = unique_identifier_node(metadata_node, unique_identifier)
-        .map(|n| collect_text(n))
-        .filter(|s| !s.trim().is_empty());
+        .map(|n| super::fonts::strip_ocf_whitespace(&collect_text(n)))
+        .filter(|s| !s.is_empty());
 
     Ok(ParsedOpf {
         metadata,

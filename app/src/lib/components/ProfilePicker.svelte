@@ -201,8 +201,10 @@
   </div>
 
   <!-- role="status" because this is the only feedback the add action gives:
-       nothing else on screen changes when the picked file is already a layer,
-       so without it a screen-reader user gets silence. -->
+       nothing else on screen changes when the picked file is already a layer.
+       Note the region is mounted with its text already in place rather than
+       filled after mounting, which not every screen reader announces - this
+       raises the odds, it does not guarantee them. -->
   {#if duplicateNotice}
     <p
       role="status"
