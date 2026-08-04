@@ -767,39 +767,73 @@ fn is_xhtml(media_type: &str) -> bool {
 /// catches that in a release build (the post-convert self-check below is
 /// `#[cfg(debug_assertions)]`-gated).
 ///
-/// Resolution mirrors `validate::check_toc_target` exactly (same
-/// `normalize_href` call, same fragment split) so this and the lint always
-/// agree on what counts as "resolves to a spine document" - anything else
-/// would just trade one inconsistency for another.
+/// Resolution mirrors `validate::check_toc_target`'s notion of "resolves to a
+/// spine document": split the href on its first `#` and look the path part up
+/// in the spine set. Unlike the lint, this does *not* call `normalize_href`
+/// with the nav/NCX directory as base, and that is deliberate, not an
+/// oversight: `read_epub` (`parse_nav_list`, `parse_nav_points`) already runs
+/// every `TocEntry.href` through `normalize_href` at parse time, so by the
+/// time this runs `entry.href` is already a decoded, zip-absolute path with
+/// no base left to apply. Passing a real base here would double-resolve it.
+/// This invariant - `TocEntry.href` is always pre-resolved - is what makes a
+/// plain `#`-split correct; if it ever stops holding, this needs a base again
+/// too.
 ///
 /// `book.toc` is a flat, level-tagged list, not a tree: an entry's children
 /// are whatever immediately-following entries have a strictly greater level
-/// (see `write_epub`'s `build_toc_tree`). Dropping an entry here does not
-/// touch its children's levels, so a kept child of a dropped parent is not
-/// orphaned - it is promoted to sit where the dropped parent was, becoming a
-/// sibling of what used to be its parent's siblings, while its own deeper
-/// descendants stay correctly nested under it. That fold is an emergent
-/// property of `build_toc_tree`'s level comparison, not extra logic here.
+/// (see `write_epub`'s `build_toc_tree`). Dropping an entry here must not
+/// merely leave its children's levels untouched, because `build_toc_tree`'s
+/// fold has no notion of original parentage - it only compares levels. An
+/// untouched child would be re-parented onto whatever *survives* immediately
+/// before it (typically the dropped entry's preceding sibling), silently
+/// misrepresenting the book's structure. So every surviving entry is
+/// re-leveled by the number of dropped ancestors between it and the root:
+/// that is what actually promotes it to sit where its nearest surviving
+/// ancestor's siblings sit, per level, and it composes correctly for nested
+/// drops (a dropped entry whose own parent was also dropped) because each
+/// ancestor's shift is tracked independently on a stack and summed once, not
+/// reapplied.
 fn prune_dangling_toc_entries(book: &mut Book, warnings: &mut Vec<Warning>) {
     let spine: HashSet<&str> = book.spine.iter().map(String::as_str).collect();
-    let nav_path = book.nav_path.clone();
-    book.toc.retain(|entry| {
-        let resolved = crate::epub::model::normalize_href("", &entry.href);
-        let path = resolved
+    let toc_source = book.nav_path.clone().or_else(|| book.ncx_path.clone());
+
+    // Ancestor stack, one entry per currently-open level: (that ancestor's
+    // original level, the level-shift its descendants must apply). A kept
+    // ancestor pushes its own shift unchanged (nothing extra for its
+    // children); a dropped ancestor pushes `shift + 1`, promoting everything
+    // under it by one more level than it was itself promoted by.
+    let mut ancestors: Vec<(u8, u8)> = Vec::new();
+    let mut kept = Vec::with_capacity(book.toc.len());
+
+    for mut entry in std::mem::take(&mut book.toc) {
+        while ancestors
+            .last()
+            .is_some_and(|&(level, _)| level >= entry.level)
+        {
+            ancestors.pop();
+        }
+        let shift = ancestors.last().map_or(0, |&(_, shift)| shift);
+        let original_level = entry.level;
+        let path = entry
+            .href
             .split_once('#')
-            .map_or(resolved.as_str(), |(p, _)| p);
-        let keep = spine.contains(path);
-        if !keep {
+            .map_or(entry.href.as_str(), |(p, _)| p);
+        if spine.contains(path) {
+            entry.level = original_level.saturating_sub(shift).max(1);
+            ancestors.push((original_level, shift));
+            kept.push(entry);
+        } else {
             warnings.push(Warning {
                 message: format!(
                     "dropped navigation entry '{}' ({}): target is not a spine document",
                     entry.title, entry.href
                 ),
-                file: nav_path.clone(),
+                file: toc_source.clone(),
             });
+            ancestors.push((original_level, shift + 1));
         }
-        keep
-    });
+    }
+    book.toc = kept;
 }
 
 /// Refuse to ship a content document that is not well-formed XML.

@@ -1281,6 +1281,117 @@ fn a_nav_entry_pointing_outside_the_spine_is_dropped_not_shipped() {
 }
 
 // ---------------------------------------------------------------------
+// A dropped entry's surviving child must be promoted, not absorbed into a
+// preceding sibling's subtree.
+// ---------------------------------------------------------------------
+
+/// Two spine chapters plus a manifest-listed, non-spine `stray.xhtml`.
+const OPF_WITH_TWO_SPINE_CHAPTERS: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="pub-id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:title>Nested Stray Nav Target</dc:title>
+    <dc:creator>Author</dc:creator>
+    <dc:language>en</dc:language>
+    <dc:identifier id="pub-id">urn:uuid:22222222-2222-2222-2222-222222222222</dc:identifier>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="ch1" href="chapter1.xhtml" media-type="application/xhtml+xml"/>
+    <item id="ch2" href="chapter2.xhtml" media-type="application/xhtml+xml"/>
+    <item id="stray" href="stray.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine>
+    <itemref idref="ch1"/>
+    <itemref idref="ch2"/>
+  </spine>
+</package>"#;
+
+/// A nav whose dangling `stray.xhtml` entry has a surviving child that
+/// points at `chapter2.xhtml`, a valid spine document nested only under the
+/// dropped entry - not under "Chapter 1", its preceding sibling.
+const NAV_WITH_DROPPED_PARENT_AND_SURVIVING_CHILD: &[u8] =
+    br#"<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+<head><title>Nav</title></head>
+<body>
+<nav epub:type="toc">
+<ol>
+<li><a href="chapter1.xhtml">Chapter 1</a></li>
+<li><a href="stray.xhtml">Stray</a>
+<ol>
+<li><a href="chapter2.xhtml">Section under Stray</a></li>
+</ol>
+</li>
+</ol>
+</nav>
+</body>
+</html>"#;
+
+const CHAPTER1_DOC: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>Chapter 1</title></head>
+<body><h1>Chapter 1</h1><p>Text.</p></body></html>"#;
+
+const CHAPTER2_DOC: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>Chapter 2</title></head>
+<body><h1>Chapter 2</h1><p>Text.</p></body></html>"#;
+
+fn read_zip_entry(epub: &[u8], name: &str) -> String {
+    let mut archive =
+        zip::ZipArchive::new(std::io::Cursor::new(epub)).expect("output is a valid zip");
+    let mut file = archive.by_name(name).expect("entry exists in output");
+    let mut buf = String::new();
+    std::io::Read::read_to_string(&mut file, &mut buf).expect("entry is valid utf-8");
+    buf
+}
+
+#[test]
+fn a_dropped_entrys_surviving_child_is_promoted_not_absorbed_by_a_sibling() {
+    // "Stray" (dangling: not a spine document) has a child, "Section under
+    // Stray", that does point at a spine document. Dropping "Stray" must
+    // promote that child to sit where "Stray" was - a sibling of "Chapter
+    // 1" - not let it get folded into "Chapter 1"'s subtree by
+    // `build_toc_tree`'s level-only fold.
+    let epub = build_epub(&[
+        ("mimetype", b"application/epub+zip"),
+        ("META-INF/container.xml", common::CONTAINER_XML),
+        ("OEBPS/content.opf", OPF_WITH_TWO_SPINE_CHAPTERS),
+        (
+            "OEBPS/nav.xhtml",
+            NAV_WITH_DROPPED_PARENT_AND_SURVIVING_CHILD,
+        ),
+        ("OEBPS/chapter1.xhtml", CHAPTER1_DOC),
+        ("OEBPS/chapter2.xhtml", CHAPTER2_DOC),
+        ("OEBPS/stray.xhtml", STRAY_NOT_IN_SPINE),
+    ]);
+    let out = convert(Input::Epub(epub), &ConvertOptions::default()).expect("converts");
+
+    let nav = read_zip_entry(&out.epub, "OEBPS/nav.xhtml");
+    assert!(
+        nav.contains("chapter1.xhtml") && nav.contains("chapter2.xhtml"),
+        "both surviving targets must still be linked from the nav:\n{nav}"
+    );
+    // The nav document has exactly one TOC list (no landmarks nav in this
+    // fixture). With "Stray" dropped and its child promoted to top level,
+    // both survivors are top-level siblings, so there is no nested `<ol>`
+    // left anywhere in the document. Before the fix, the promoted child was
+    // folded into "Chapter 1"'s `<li>` as a nested `<ol>`, which this catches
+    // even though the output still passes `spine-toc-sync` (well-formed,
+    // just structurally wrong).
+    assert_eq!(
+        nav.matches("<ol>").count(),
+        1,
+        "the promoted child must be a top-level sibling, not nested under \
+         the preceding sibling's <li>:\n{nav}"
+    );
+    let ch1_idx = nav.find("chapter1.xhtml").unwrap();
+    let ch2_idx = nav.find("chapter2.xhtml").unwrap();
+    assert!(
+        ch1_idx < ch2_idx,
+        "document order must be preserved: chapter1 then the promoted chapter2:\n{nav}"
+    );
+}
+
+// ---------------------------------------------------------------------
 // epubcheck gate (skip-if-unavailable), mirroring the other test binaries.
 // ---------------------------------------------------------------------
 
