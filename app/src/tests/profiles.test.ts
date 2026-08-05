@@ -17,6 +17,7 @@ import {
   addFileLayer,
   describeDuplicateLayer,
   removeLayerAt,
+  replaceLayerAt,
   moveLayer,
   hasDeviceClash,
   hasScreen,
@@ -182,6 +183,17 @@ describe("describeDuplicateLayer", () => {
     const stack: ProfileLayer[] = [{ kind: "builtin", name: "manga" }];
     expect(describeDuplicateLayer(stack, "/tmp/manga.json")).toBeNull();
   });
+
+  it("says nothing about the very layer being replaced, which is a no-op and not a clash", () => {
+    const stack: ProfileLayer[] = [
+      { kind: "file", path: "/tmp/manga.json" },
+      { kind: "builtin", name: "x4" },
+    ];
+    expect(describeDuplicateLayer(stack, "/tmp/manga.json", 0)).toBeNull();
+    expect(describeDuplicateLayer(stack, "/tmp/manga.json", 1)).toBe(
+      "manga.json is already in the stack",
+    );
+  });
 });
 
 describe("removeLayerAt", () => {
@@ -196,6 +208,65 @@ describe("removeLayerAt", () => {
   it("refuses to empty the last remaining layer, returning the same reference", () => {
     const stack: ProfileLayer[] = [{ kind: "builtin", name: "epub" }];
     expect(removeLayerAt(stack, 0)).toBe(stack);
+  });
+});
+
+describe("replaceLayerAt", () => {
+  it("swaps a built-in layer for another one, in place", () => {
+    const stack: ProfileLayer[] = [
+      { kind: "builtin", name: "epub" },
+      { kind: "builtin", name: "x4" },
+    ];
+    expect(replaceLayerAt(stack, 1, { kind: "builtin", name: "kobo" })).toEqual([
+      { kind: "builtin", name: "epub" },
+      { kind: "builtin", name: "kobo" },
+    ]);
+  });
+
+  it("replaces the only layer, which is the whole point: a lone layer had no other way to change", () => {
+    const stack: ProfileLayer[] = [{ kind: "builtin", name: "epub" }];
+    expect(replaceLayerAt(stack, 0, { kind: "builtin", name: "x4" })).toEqual([
+      { kind: "builtin", name: "x4" },
+    ]);
+  });
+
+  it("swaps a built-in for a file layer and back", () => {
+    const stack: ProfileLayer[] = [{ kind: "builtin", name: "epub" }];
+    const withFile = replaceLayerAt(stack, 0, { kind: "file", path: "/tmp/manga.json" });
+    expect(withFile).toEqual([{ kind: "file", path: "/tmp/manga.json" }]);
+    expect(replaceLayerAt(withFile, 0, { kind: "builtin", name: "epub" })).toEqual([
+      { kind: "builtin", name: "epub" },
+    ]);
+  });
+
+  it("refuses a replacement that duplicates another layer, returning the same reference", () => {
+    // Two layers with the same key throw Svelte's each_key_duplicate at render
+    // in ProfilePicker, exactly as addBuiltinLayer/addFileLayer guard against.
+    const stack: ProfileLayer[] = [
+      { kind: "builtin", name: "epub" },
+      { kind: "builtin", name: "x4" },
+    ];
+    expect(replaceLayerAt(stack, 1, { kind: "builtin", name: "epub" })).toBe(stack);
+    expect(replaceLayerAt(stack, 0, { kind: "builtin", name: "x4" })).toBe(stack);
+  });
+
+  it("refuses a file replacement that duplicates another layer's path", () => {
+    const stack: ProfileLayer[] = [
+      { kind: "file", path: "/tmp/manga.json" },
+      { kind: "builtin", name: "x4" },
+    ];
+    expect(replaceLayerAt(stack, 1, { kind: "file", path: "/tmp/manga.json" })).toBe(stack);
+  });
+
+  it("treats replacing a layer with itself as a no-op, not as a duplicate clash", () => {
+    const stack: ProfileLayer[] = [{ kind: "builtin", name: "x4" }];
+    expect(replaceLayerAt(stack, 0, { kind: "builtin", name: "x4" })).toBe(stack);
+  });
+
+  it("refuses an out-of-range index, returning the same reference", () => {
+    const stack: ProfileLayer[] = [{ kind: "builtin", name: "epub" }];
+    expect(replaceLayerAt(stack, 1, { kind: "builtin", name: "x4" })).toBe(stack);
+    expect(replaceLayerAt(stack, -1, { kind: "builtin", name: "x4" })).toBe(stack);
   });
 });
 

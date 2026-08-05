@@ -40,16 +40,26 @@ export function addFileLayer(stack: ProfileLayer[], path: string): ProfileLayer[
 }
 
 /**
- * Why `addFileLayer` returned the stack unchanged, phrased for the user, or
- * `null` when the path is genuinely new. The built-in add panel can show this
- * state up front (it disables an already-present entry and relabels it), but
- * the file picker cannot: the app only learns the path after the OS dialog
- * closes, so a duplicate there reads as a click the app ignored unless it
- * says otherwise.
+ * Why `addFileLayer` or `replaceLayerAt` returned the stack unchanged, phrased
+ * for the user, or `null` when the path is genuinely new. The built-in panel
+ * can show this state up front (it disables an already-present entry and
+ * relabels it), but the file picker cannot: the app only learns the path after
+ * the OS dialog closes, so a duplicate there reads as a click the app ignored
+ * unless it says otherwise.
+ *
+ * `ignoreIndex` is the layer being replaced, which must not count as its own
+ * duplicate - re-picking the file a layer already holds is a no-op, not a
+ * clash, and saying otherwise would read as a refusal.
  */
-export function describeDuplicateLayer(stack: ProfileLayer[], path: string): string | null {
-  if (!stack.some((layer) => layer.kind === "file" && layer.path === path)) return null;
-  return `${baseName(path)} is already in the stack`;
+export function describeDuplicateLayer(
+  stack: ProfileLayer[],
+  path: string,
+  ignoreIndex?: number,
+): string | null {
+  const clash = stack.some(
+    (layer, i) => i !== ignoreIndex && layer.kind === "file" && layer.path === path,
+  );
+  return clash ? `${baseName(path)} is already in the stack` : null;
 }
 
 /**
@@ -61,6 +71,36 @@ export function describeDuplicateLayer(stack: ProfileLayer[], path: string): str
 export function removeLayerAt(stack: ProfileLayer[], index: number): ProfileLayer[] {
   if (stack.length <= 1) return stack;
   return stack.filter((_, i) => i !== index);
+}
+
+/**
+ * A layer's identity: what makes two layers the same layer. Exported so
+ * `ProfilePicker`'s keyed `{#each}` and the duplicate guards below agree on
+ * one definition instead of each carrying its own.
+ */
+export function layerKey(layer: ProfileLayer): string {
+  return layer.kind === "builtin" ? `builtin:${layer.name}` : `file:${layer.path}`;
+}
+
+/**
+ * Swap the layer at `index` for `next`, which is the only way to change a
+ * layer that cannot be moved or removed - a stack of one, where every other
+ * control is necessarily disabled. Refuses (returning the same array
+ * reference) when `index` is out of range, when `next` is already the layer
+ * there, or when it duplicates a layer elsewhere in the stack: two layers
+ * sharing a `layerKey` throw Svelte's `each_key_duplicate` at render, the same
+ * hazard `addBuiltinLayer` and `addFileLayer` guard against.
+ */
+export function replaceLayerAt(
+  stack: ProfileLayer[],
+  index: number,
+  next: ProfileLayer,
+): ProfileLayer[] {
+  if (index < 0 || index >= stack.length) return stack;
+  const key = layerKey(next);
+  if (stack.some((layer, i) => i !== index && layerKey(layer) === key)) return stack;
+  if (layerKey(stack[index]) === key) return stack;
+  return stack.map((layer, i) => (i === index ? next : layer));
 }
 
 /**
