@@ -691,9 +691,31 @@ pub(crate) fn prune(
     // fails to extract, which a check built from `refs_of` provably cannot.
     // Cheap false positives (a basename mentioned in prose) are the accepted
     // cost; a silent deletion is not.
+    //
+    // The three documents the writer regenerates are excluded, because their
+    // stored bytes never reach the output at all: `write_epub` substitutes
+    // freshly built bytes for the package document, the nav and the NCX and
+    // discards `resource.data` for each. A mention in bytes that are thrown
+    // away cannot dangle in the output, so scanning them can only produce
+    // false alarms.
+    //
+    // For the OPF that is not a rare edge case but a guarantee: a manifest
+    // declares every resource it owns, including the ones being dropped here,
+    // so scanning it warned on *every* unreferenced file this pass has ever
+    // removed. `prune` already applies exactly this reasoning to a
+    // synthesized nav above ("its stored bytes are discarded and regenerated,
+    // so its links must not keep anything else alive either"); this extends it
+    // to the two documents that reasoning always applied to as well.
+    let nav_path = crate::epub::write::effective_nav_path(book);
+    let regenerated: [Option<&str>; 3] = [
+        Some(book.opf_path.as_str()),
+        Some(nav_path.as_str()),
+        book.ncx_path.as_deref(),
+    ];
     let textual_docs: Vec<(&str, &[u8])> = book
         .resources
         .iter()
+        .filter(|(path, _)| !regenerated.contains(&Some(path.as_str())))
         .filter(|(_, resource)| {
             TEXTUAL_MEDIA_TYPES.contains(&normalize_media_type(&resource.media_type).as_str())
         })
