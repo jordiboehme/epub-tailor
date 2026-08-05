@@ -13,7 +13,16 @@
   import { edits } from "../stores/edits.svelte";
   import { saveFilesInPlace } from "../stores/inplace";
   import { countEdits } from "../api/edits";
-  import { chipsFor, failureOf, fileBadge, findingsOf, TONE_CLASS } from "../api/book-view";
+  import {
+    chipsFor,
+    failureOf,
+    fileBadge,
+    fileCondition,
+    findingsOf,
+    isFixable,
+    repairProfiles,
+    TONE_CLASS,
+  } from "../api/book-view";
   import type { Chip } from "../api/book-view";
   import CardDetails from "./CardDetails.svelte";
   import ConfirmDialog from "./ConfirmDialog.svelte";
@@ -71,15 +80,17 @@
     }
   }
 
-  // The "needs cleanup" chip doubles as the fix: click, confirm, and the
-  // file is repaired in place through the same Trash-backed flow the
-  // ActionBar's Clean up uses.
-  const canCleanup = $derived(file.kind === "epub" && !jobs.active);
+  // The verdict chip doubles as the fix: click, confirm, and the file is
+  // repaired in place through the same Trash-backed flow the ActionBar's
+  // Clean up uses. Only when a repair can actually do something - a
+  // copy-protected book gets a chip that says so and no button that lies.
+  const condition = $derived(fileCondition(file));
+  const canCleanup = $derived(file.kind === "epub" && !jobs.active && isFixable(file));
 
   async function runCleanup() {
     confirmCleanup = false;
     cleanupFailed = null;
-    const outcome = await saveFilesInPlace([file], false);
+    const outcome = await saveFilesInPlace([file], false, repairProfiles(condition.fixable));
     if (outcome.failures.length > 0) {
       cleanupFailed = `Nothing was written - a safety copy could not be made. ${outcome.failures[0]}`;
     }
@@ -146,10 +157,10 @@
 
     <div class="ml-auto flex shrink-0 items-center gap-1">
       {#each chips as c}
-        {#if c.id === "needs-cleanup" && canCleanup}
+        {#if c.id === "condition" && canCleanup}
           <button
             type="button"
-            title="Clean up this file in place - a safety copy goes to the Trash first"
+            title={`Repair this file in place under ${repairProfiles(condition.fixable).join(" + ")} - a safety copy goes to the Trash first`}
             onclick={(e) => {
               e.stopPropagation();
               confirmCleanup = true;
@@ -216,7 +227,10 @@
     </div>
   </div>
 
-  {#if file.ingest === "pending"}
+  <!-- One continuous "the verdict is not final yet" underline: the metadata
+       probe and the check are serialized, and a row must never say "clean"
+       and then flip to "defective". -->
+  {#if file.ingest === "pending" || file.check === "pending"}
     <div class="absolute inset-x-0 bottom-0 h-0.5 animate-pulse bg-teal-300/70"></div>
   {/if}
 
@@ -255,7 +269,13 @@
     onConfirm={runCleanup}
     onCancel={() => (confirmCleanup = false)}
   >
-    This repairs the file in place under the epub profile. The current version goes to the Trash
-    first, so nothing is lost.
+    This repairs the file's structure in place, under the {repairProfiles(condition.fixable).join(" + ")}
+    profile. The current version goes to the Trash first, so nothing is lost.
+    {#if condition.concerns.includes("watermark") || condition.concerns.includes("bloat")}
+      <br />
+      It does <strong>not</strong> remove the per-copy marks - that needs the separate Remove
+      watermarks action, because it rewrites the book's identifier and your reading position is
+      lost with it.
+    {/if}
   </ConfirmDialog>
 {/if}

@@ -10,7 +10,7 @@ import type { SidecarHandle, SidecarResult } from "../api/sidecar";
 import { isCliFailure, parseReport } from "../api/contract";
 import type { CheckReport, CliFailure, FitReport, MetadataShowReport } from "../api/contract";
 import { friendlyError } from "../api/errors";
-import { fitArgv, mdArgv, checkArgv, CLEANUP_PROFILE } from "../api/argv";
+import { fitArgv, mdArgv, checkArgv, AUTOCHECK_PROFILES, CLEANUP_PROFILE } from "../api/argv";
 import type { RunOptions } from "../api/argv";
 import { samePath } from "../api/copies";
 import { normalizeMeta } from "../api/meta";
@@ -252,9 +252,17 @@ class JobsStore {
           code: "cancelled",
           message: "Reading this book's metadata was cancelled.",
         });
-      } else if (job.kind !== "autocheck") {
-        // A cancelled background probe just goes away; only user-asked work
-        // leaves a "cancelled" mark on the row.
+      } else if (job.kind === "autocheck") {
+        // A cancelled probe leaves no mark on the row, but it must still reach
+        // a terminal lifecycle state - left "pending" it would pulse forever
+        // and `fileCondition` would never report a verdict.
+        file.check = "failed";
+        file.checkError = {
+          code: "cancelled",
+          friendly: "The automatic check was cancelled.",
+        };
+      } else {
+        // Only user-asked work leaves a "cancelled" mark on the row.
         file.result = { kind: "cancelled" };
       }
     }
@@ -427,7 +435,7 @@ class JobsStore {
       input.result = { kind: "fit", report };
       input.cleanup = undefined;
       if (input.kind === "epub") {
-        this.#enqueue(book, input, "autocheck", checkArgv(input.path, [CLEANUP_PROFILE]), "low");
+        this.#enqueue(book, input, "autocheck", checkArgv(input.path, AUTOCHECK_PROFILES), "low");
       }
       return;
     }
@@ -446,6 +454,7 @@ class JobsStore {
       existing.cleanup = undefined;
       existing.fitted = undefined;
       existing.ingest = "pending";
+      existing.check = "pending";
       file = existing;
     } else {
       book.files.push({
@@ -460,6 +469,7 @@ class JobsStore {
         size: 0,
         modifiedMs: 0,
         ingest: "pending",
+        check: "pending",
       });
       // Hand the callback the proxied element, not the literal, so the stat
       // and ingest write-backs reach the reactive graph.
@@ -510,27 +520,37 @@ class JobsStore {
   }
 
   /**
-   * The automatic check settles onto `file.cleanup` and nowhere else: it
-   * never touches `file.result`, and any failure - unreadable file, garbled
-   * output - marks only the job and leaves the row silent. The file's real
-   * problems surface from the paths the user actually runs.
+   * The automatic check settles onto `file.cleanup` and `file.check`, and
+   * nowhere else: it never touches `file.result`, so a probe the user did not
+   * ask for never paints a row red. A failure is still recorded on the file
+   * (`check = "failed"`), because a row must be able to say "not checked"
+   * rather than imply "nothing found" - but it stays a quiet, neutral note.
    */
   #settleAutoCheck(job: Job, res: SidecarResult): void {
+    const file = this.#refs.get(job.id)?.file;
     if (res.code !== CHECK_UNREADABLE) {
       try {
         const report = parseReport<CheckReport>(res.stdout, "check");
         if (!isCliFailure(report)) {
           job.result = report;
-          const file = this.#refs.get(job.id)?.file;
-          if (file) file.cleanup = report;
+          if (file) {
+            file.cleanup = report;
+            file.check = "done";
+            file.checkError = undefined;
+          }
           job.state = "done";
           return;
         }
       } catch {
-        // Fall through to the silent failure below.
+        // Fall through to the quiet failure below.
       }
     }
-    job.failure = this.#failureOf(job, res);
+    const failure = this.#failureOf(job, res);
+    if (file) {
+      file.check = "failed";
+      file.checkError = { code: failure.code, friendly: friendlyError(failure.code, failure.message) };
+    }
+    job.failure = failure;
     job.state = "failed";
   }
 
@@ -580,8 +600,12 @@ class JobsStore {
       if (job.kind === "show") {
         file.ingest = "failed";
         file.ingestError = this.#ingestError(job, failure);
-      } else if (job.kind !== "autocheck") {
-        // The automatic probe stays silent even here; see #settleAutoCheck.
+      } else if (job.kind === "autocheck") {
+        // The automatic probe still does not paint the row; see
+        // #settleAutoCheck. It does record that it never ran.
+        file.check = "failed";
+        file.checkError = { code: failure.code, friendly: friendlyError(failure.code, message) };
+      } else {
         file.result = {
           kind: "failed",
           failure,

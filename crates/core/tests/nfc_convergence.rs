@@ -120,7 +120,12 @@ fn cleanup_converges_on_decomposed_toc_titles() {
 
     // Fixture sanity: the raw book reproduces the bug - `check` flags the
     // OPF, nav doc and NCX as not NFC-normalized.
-    let raw_findings = lint_epub(&source, &DeviceCaps::permissive(), &Features::repair_only());
+    let raw_findings = lint_epub(
+        &source,
+        &DeviceCaps::permissive(),
+        &Features::repair_only(),
+        &[],
+    );
     for name in ["OEBPS/content.opf", "OEBPS/nav.xhtml", "OEBPS/toc.ncx"] {
         assert!(
             raw_findings
@@ -137,6 +142,7 @@ fn cleanup_converges_on_decomposed_toc_titles() {
         &converted.epub,
         &DeviceCaps::permissive(),
         &Features::repair_only(),
+        &[],
     );
     assert!(
         out_findings.is_empty(),

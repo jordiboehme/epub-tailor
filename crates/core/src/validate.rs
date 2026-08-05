@@ -18,6 +18,7 @@
 use std::collections::{HashMap, HashSet};
 use std::io::{Cursor, Read, Seek};
 
+use aho_corasick::AhoCorasick;
 use indexmap::IndexMap;
 use roxmltree::{Document, Node, ParsingOptions};
 use serde::Serialize;
@@ -27,8 +28,13 @@ use zip::{CompressionMethod, ZipArchive};
 use crate::epub::model::normalize_href;
 use crate::epub::read::{
     ArchiveEntries, EncryptionClass, EntryCollision, TEXT_MEDIA_TYPES, classify_encryption_xml,
-    parse_container, read_all_entries, zip64_reason,
+    identifier_scheme_of, parse_container, read_all_entries, unique_identifier_node, zip64_reason,
 };
+use crate::filter::{FilterAction, FilterRule};
+use crate::generic::identity::{PerCopyKind, classify};
+use crate::generic::invisible::count_dom;
+use crate::generic::media::{strip_jpeg, strip_png};
+use crate::generic::reachable::{refs_of, scan_for_dangling_basenames};
 use crate::html::dom::get_attr;
 use crate::html::parse_xhtml;
 use crate::html::serialize::is_ncname;
@@ -47,6 +53,44 @@ pub enum Severity {
     Error,
 }
 
+/// What kind of concern a [`LintFinding`] is about, so a consumer can group
+/// findings without keeping its own copy of the code list. Severity says how
+/// loud a finding is; this says what it is *about*, and the two are
+/// independent - a watermark is a `Warning` at most, never an `Error`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Category {
+    /// The book is malformed, or unreadable as EPUB.
+    Structure,
+    /// The book is fine, but exceeds what the named device profile can render.
+    Device,
+    /// A per-copy trace that identifies the buyer rather than the edition.
+    Watermark,
+    /// Dead weight: bytes nothing in the book references.
+    Waste,
+}
+
+impl Category {
+    /// The category a finding code belongs to. Deriving this from the code
+    /// (rather than passing it at every construction site) keeps one mapping
+    /// in one place; `every_finding_code_has_an_explicit_category` pins that
+    /// no code reaches the fallback by accident.
+    fn of(code: &str) -> Category {
+        match code {
+            "image-format" | "css-caps" | "fonts" => Category::Device,
+            "watermark-identifier"
+            | "watermark-invisible"
+            | "watermark-file"
+            | "media-metadata" => Category::Watermark,
+            "unreferenced" => Category::Waste,
+            // Everything else is a statement about the archive itself. New
+            // codes land here, which is the safe direction: a consumer shows
+            // an unmapped finding as a defect rather than hiding it.
+            _ => Category::Structure,
+        }
+    }
+}
+
 /// One structural problem (or note) [`lint_epub`] found.
 #[derive(Debug, Clone, Serialize)]
 pub struct LintFinding {
@@ -54,10 +98,16 @@ pub struct LintFinding {
     /// A stable, machine-matchable identifier for the kind of check that
     /// produced this finding (e.g. `"image-format"`), never the message text.
     pub code: &'static str,
+    /// What the finding is about, derived from `code` (see [`Category::of`]).
+    pub category: Category,
     pub message: String,
     /// The zip-absolute path the finding is about, when it is about one
     /// specific resource.
     pub path: Option<String>,
+    /// Bytes at stake, where the finding is about a quantity of them - the
+    /// size of an unreferenced resource, the metadata a strip would remove.
+    /// `None` for findings that are not about bytes at all.
+    pub bytes: Option<u64>,
 }
 
 impl LintFinding {
@@ -65,8 +115,10 @@ impl LintFinding {
         LintFinding {
             severity,
             code,
+            category: Category::of(code),
             message,
             path,
+            bytes: None,
         }
     }
 
@@ -77,16 +129,38 @@ impl LintFinding {
     fn warning(code: &'static str, message: String, path: Option<String>) -> Self {
         Self::new(Severity::Warning, code, message, path)
     }
+
+    /// Attach the byte quantity this finding is about.
+    fn with_bytes(mut self, bytes: u64) -> Self {
+        self.bytes = Some(bytes);
+        self
+    }
 }
 
 /// Lint an `.epub` archive's raw `bytes`, returning every finding (possibly
 /// empty). Structural checks (archive shape, OPF/manifest sync, encoding,
 /// DRM) always run; device checks (fonts, CSS caps, image formats/budgets)
-/// run only for the transforms `features` enables, so a repair-only profile
-/// gets a pure structural check. Never panics: a bad enough archive (not a
-/// zip, missing `META-INF/container.xml`, unparsable OPF) simply stops early
-/// with the findings collected so far, always including at least one `Error`.
-pub fn lint_epub(bytes: &[u8], caps: &DeviceCaps, features: &Features) -> Vec<LintFinding> {
+/// and per-copy checks (identifiers, invisible characters, image metadata,
+/// unreferenced resources) run only for the transforms `features` enables, so
+/// a repair-only profile gets a pure structural check. Never panics: a bad
+/// enough archive (not a zip, missing `META-INF/container.xml`, unparsable
+/// OPF) simply stops early with the findings collected so far, always
+/// including at least one `Error`.
+///
+/// `filters` are the composed profile's content filter rules; a `remove` rule
+/// targeting whole files is how a profile names vendor marker files, so the
+/// lint has to see them to report what such a profile would strip.
+///
+/// Every gated check reports something the *named profile would change*. That
+/// framing is load-bearing for the per-copy ones: they reuse screens tuned for
+/// an opt-in destructive pass, and it is only honest to surface them as "this
+/// profile would drop that" rather than as a verdict about the book.
+pub fn lint_epub(
+    bytes: &[u8],
+    caps: &DeviceCaps,
+    features: &Features,
+    filters: &[FilterRule],
+) -> Vec<LintFinding> {
     let mut findings = Vec::new();
 
     let mut archive = match ZipArchive::new(Cursor::new(bytes)) {
@@ -173,8 +247,49 @@ pub fn lint_epub(bytes: &[u8], caps: &DeviceCaps, features: &Features) -> Vec<Li
     if features.strip_fonts {
         check_fonts(&entries, &opf, &mut findings);
     }
+    if features.normalize_identity {
+        check_watermark_identifiers(&opf, &opf_path, &mut findings);
+    }
+    if features.strip_invisible_chars {
+        check_invisible(&entries, &opf, &mut findings);
+    }
+    if features.strip_media_metadata {
+        check_media_metadata(&entries, &opf, &mut findings);
+    }
+    if !filters.is_empty() {
+        check_filter_targets(&entries, &opf, &opf_path, filters, &mut findings);
+    }
+    if features.drop_unreferenced {
+        check_unreferenced(&entries, &opf, &opf_path, &opf_dir, &mut findings);
+        suppress_findings_about_doomed_files(&mut findings);
+    }
 
     findings
+}
+
+/// Drop per-copy findings about a file that is itself reported as
+/// unreferenced. The file is going away whole, and everything in it goes with
+/// it - so "this image carries 4 KB of EXIF" alongside "nothing references
+/// this image" is the same removal counted twice, and lands in the app as two
+/// concerns (a watermark and dead weight) where the book has one.
+///
+/// Only the `watermark` category is suppressed: a structural error about a
+/// doomed file is still worth saying, because it describes the book as it is
+/// now rather than a change a profile would make.
+fn suppress_findings_about_doomed_files(findings: &mut Vec<LintFinding>) {
+    let doomed: HashSet<String> = findings
+        .iter()
+        .filter(|f| f.code == "unreferenced")
+        .filter_map(|f| f.path.clone())
+        .collect();
+    if doomed.is_empty() {
+        return;
+    }
+    findings.retain(|f| {
+        f.code == "unreferenced"
+            || f.category != Category::Watermark
+            || !f.path.as_deref().is_some_and(|p| doomed.contains(p))
+    });
 }
 
 // ---------------------------------------------------------------------
@@ -479,6 +594,18 @@ struct OpfLint {
     nav_href: Option<String>,
     ncx_href: Option<String>,
     cover_href: Option<String>,
+    /// Every `dc:identifier`, in document order. See [`OpfIdentifier`].
+    identifiers: Vec<OpfIdentifier>,
+}
+
+/// A `dc:identifier` as the lint sees it. `is_unique` marks the one the
+/// package's `unique-identifier` points at, which is scored more leniently:
+/// it is the value a reading system keys off, so an opaque-but-innocent one
+/// is the norm rather than a signal.
+struct OpfIdentifier {
+    value: String,
+    scheme: Option<String>,
+    is_unique: bool,
 }
 
 fn find_opf_path(
@@ -597,6 +724,30 @@ fn parse_opf_lint(doc: &Document, opf_dir: &str) -> OpfLint {
         cover_href = manifest.get(id).map(|item| item.href.clone());
     }
 
+    // Read through `read.rs`'s own helpers so the lint resolves the unique
+    // identifier and each scheme exactly as the reader does - a lint that
+    // disagreed with the converter about which element is *the* identifier
+    // would report a watermark on a value `generic` never touches.
+    let mut identifiers = Vec::new();
+    if let Some(metadata_node) = child_named(package, "metadata") {
+        let unique = package.attribute("unique-identifier");
+        let unique_node = unique_identifier_node(metadata_node, unique);
+        for node in metadata_node
+            .descendants()
+            .filter(|n| n.is_element() && n.tag_name().name() == "identifier")
+        {
+            let value = node.text().unwrap_or("").trim().to_string();
+            if value.is_empty() {
+                continue;
+            }
+            identifiers.push(OpfIdentifier {
+                value,
+                scheme: identifier_scheme_of(metadata_node, node),
+                is_unique: unique_node.is_some_and(|u| u.id() == node.id()),
+            });
+        }
+    }
+
     OpfLint {
         manifest,
         spine_idrefs,
@@ -604,6 +755,7 @@ fn parse_opf_lint(doc: &Document, opf_dir: &str) -> OpfLint {
         nav_href,
         ncx_href,
         cover_href,
+        identifiers,
     }
 }
 
@@ -1233,6 +1385,380 @@ fn check_fonts(
 }
 
 // ---------------------------------------------------------------------
+// watermark-identifier
+// ---------------------------------------------------------------------
+
+/// Report the `dc:identifier`s `--profile generic` would drop.
+///
+/// The classification is [`crate::generic::identity::classify`] itself, not a
+/// second opinion about it, so this can never disagree with what the pass
+/// actually removes. What is local to the lint is how loudly each kind is
+/// reported, and that tiering is the whole difference between a useful signal
+/// and noise:
+///
+/// - a bare UUID as the *unique* identifier is the EPUB 3 norm and is not
+///   reported at all - it would otherwise fire on nearly every book;
+/// - an opaque value as the unique identifier is `Info`: plenty of publishers
+///   use one legitimately, and it is the shape the writer's own synthesized
+///   identifier would take were it not exempt;
+/// - a *secondary* identifier is scored a step louder throughout, because a
+///   book has no innocent reason to carry a spare opaque or UUID identifier
+///   beside its real one.
+fn check_watermark_identifiers(opf: &OpfLint, opf_path: &str, findings: &mut Vec<LintFinding>) {
+    for id in &opf.identifiers {
+        let kind = classify(&id.value, id.scheme.as_deref());
+        let severity = match (kind, id.is_unique) {
+            (PerCopyKind::Shared, _) | (PerCopyKind::Uuid, true) => continue,
+            (PerCopyKind::Distinctive, _) | (PerCopyKind::Opaque, false) => Severity::Warning,
+            (PerCopyKind::Opaque, true) | (PerCopyKind::Uuid, false) => Severity::Info,
+        };
+        let what = match kind {
+            PerCopyKind::Distinctive => "names a single buyer",
+            PerCopyKind::Opaque => "looks minted per copy rather than per edition",
+            PerCopyKind::Uuid => "is a bare UUID carried beside the book's own identifier",
+            PerCopyKind::Shared => unreachable!("skipped above"),
+        };
+        let which = if id.is_unique {
+            "the book's unique identifier"
+        } else {
+            "a secondary dc:identifier"
+        };
+        findings.push(LintFinding::new(
+            severity,
+            "watermark-identifier",
+            format!(
+                "{which} '{}' {what}; --profile generic would drop it",
+                id.value
+            ),
+            Some(opf_path.to_string()),
+        ));
+    }
+}
+
+// ---------------------------------------------------------------------
+// watermark-invisible
+// ---------------------------------------------------------------------
+
+/// The UTF-8 encodings of every character [`invisible`] always strips, plus
+/// the `&#` that starts a numeric entity. Used as a cheap prefilter: a book
+/// with none of these byte sequences cannot be carrying an invisible
+/// fingerprint, and that is the overwhelming majority of books.
+///
+/// `&#` is in the list because the real decision runs on a parsed DOM, where
+/// `&#8203;` has already become a zero-width space - a raw byte scan for the
+/// encoded form alone would miss exactly the entity-encoded fingerprints the
+/// destructive pass catches. It is rare enough in real XHTML that the
+/// occasional wasted parse costs nothing.
+const INVISIBLE_PREFILTER: &[&str] = &[
+    "\u{200B}", "\u{200C}", "\u{200D}", "\u{2060}", "\u{180E}", "\u{FEFF}", "&#",
+];
+
+/// Report documents carrying invisible fingerprint characters.
+///
+/// Two stages on purpose: an Aho-Corasick scan of the raw bytes rules out the
+/// common case without allocating, and only a document that hits gets parsed
+/// and counted. The count itself comes from [`invisible::count_dom`], which
+/// shares its keep/drop mask with the destructive `scrub_dom` - so the number
+/// reported here is exactly the number `--profile generic` would remove,
+/// including the joiner-protection rule that keeps a ZWJ inside an emoji
+/// sequence.
+fn check_invisible(
+    entries: &IndexMap<String, Vec<u8>>,
+    opf: &OpfLint,
+    findings: &mut Vec<LintFinding>,
+) {
+    let Ok(prefilter) = AhoCorasick::new(INVISIBLE_PREFILTER) else {
+        return;
+    };
+    for (name, data) in entries {
+        let media_type = opf
+            .manifest
+            .values()
+            .find(|item| item.href == *name)
+            .map(|item| item.media_type.as_str())
+            .unwrap_or("");
+        if media_type != "application/xhtml+xml" && media_type != "image/svg+xml" {
+            continue;
+        }
+        if prefilter.find(data).is_none() {
+            continue;
+        }
+        let Ok(doc) = parse_xhtml(data) else {
+            continue;
+        };
+        let count = count_dom(&doc);
+        if count > 0 {
+            findings.push(LintFinding::warning(
+                "watermark-invisible",
+                format!(
+                    "{name} carries {count} invisible character(s) of the kind used to \
+                     fingerprint a copy; --profile generic would remove them"
+                ),
+                Some(name.clone()),
+            ));
+        }
+    }
+}
+
+// ---------------------------------------------------------------------
+// media-metadata
+// ---------------------------------------------------------------------
+
+/// Report images carrying EXIF/XMP/IPTC or PNG text chunks.
+///
+/// `Info`, not `Warning`: metadata in a book image is usually a camera or
+/// export tool's leftovers rather than a per-copy trace, and calling every
+/// one of them a watermark would be dishonest. It is still in the
+/// `watermark` category because it is the same channel a marker would use.
+///
+/// The byte figure comes from running the real strip and measuring the
+/// difference, then dropping the result. That allocates a transient copy of
+/// one image at a time, which buys the guarantee that the number reported is
+/// exactly what `--profile generic` saves rather than an estimate from a
+/// second, drift-prone size walk.
+fn check_media_metadata(
+    entries: &IndexMap<String, Vec<u8>>,
+    opf: &OpfLint,
+    findings: &mut Vec<LintFinding>,
+) {
+    for (name, data) in entries {
+        let media_type = opf
+            .manifest
+            .values()
+            .find(|item| item.href == *name)
+            .map(|item| item.media_type.as_str())
+            .unwrap_or("");
+        let stripped = match media_type {
+            "image/jpeg" => strip_jpeg(data),
+            "image/png" => strip_png(data),
+            _ => None,
+        };
+        let Some(stripped) = stripped else {
+            continue;
+        };
+        let saved = data.len().saturating_sub(stripped.len());
+        if saved == 0 {
+            continue;
+        }
+        findings.push(
+            LintFinding::new(
+                Severity::Info,
+                "media-metadata",
+                format!(
+                    "{name} carries {} of embedded image metadata; --profile generic \
+                     would strip it",
+                    size_label(saved)
+                ),
+                Some(name.clone()),
+            )
+            .with_bytes(saved as u64),
+        );
+    }
+}
+
+// ---------------------------------------------------------------------
+// watermark-file
+// ---------------------------------------------------------------------
+
+/// Report resources a profile's own `remove` filter rules would delete
+/// wholesale - the channel a profile uses to name vendor marker files and
+/// watermark images.
+///
+/// Spine documents, the package document and the nav/NCX are exempt, mirroring
+/// `filter::apply_resource_filters` exactly: a rule matching one of those would
+/// gut the book, so the filter declines to remove it and the lint must not
+/// claim otherwise. `mimetype` and `META-INF/` are skipped too - they are raw
+/// zip entries the reader never turns into resources, so no filter ever sees
+/// them, and a loose pattern would otherwise "match" `META-INF/container.xml`.
+fn check_filter_targets(
+    entries: &IndexMap<String, Vec<u8>>,
+    opf: &OpfLint,
+    opf_path: &str,
+    filters: &[FilterRule],
+    findings: &mut Vec<LintFinding>,
+) {
+    let rules: Vec<&FilterRule> = filters
+        .iter()
+        .filter(|rule| rule.action == FilterAction::Remove && rule.targets_file())
+        .collect();
+    if rules.is_empty() {
+        return;
+    }
+    let protected: HashSet<&str> = spine_hrefs(opf)
+        .into_iter()
+        .chain(opf.nav_href.as_deref())
+        .chain(opf.ncx_href.as_deref())
+        .chain(std::iter::once(opf_path))
+        .collect();
+    for (name, data) in entries {
+        if name == "mimetype" || name.starts_with("META-INF/") || protected.contains(name.as_str())
+        {
+            continue;
+        }
+        if rules.iter().any(|rule| name.contains(&rule.pattern)) {
+            findings.push(
+                LintFinding::warning(
+                    "watermark-file",
+                    format!(
+                        "{name} matches a filter rule in the selected profile; it would be \
+                         removed as a vendor marker"
+                    ),
+                    Some(name.clone()),
+                )
+                .with_bytes(data.len() as u64),
+            );
+        }
+    }
+}
+
+// ---------------------------------------------------------------------
+// unreferenced
+// ---------------------------------------------------------------------
+
+/// Report manifested resources nothing in the book reaches.
+///
+/// This walks the *freshly-read* archive, which is why it can share
+/// [`reachable::refs_of`] with the destructive pass and still be correct
+/// without the `srcset_by_document` side-channel that pass needs: those edges
+/// only go missing because `image::rewrite_refs` strips `<img srcset>` before
+/// `prune` runs. On raw bytes the attributes are still there, nothing has been
+/// renamed, and no chapter has been split, so the graph is self-consistent.
+///
+/// Two exclusions matter:
+///
+/// - anything not in the manifest is skipped, because `check_manifest_sync`
+///   already reports those as `Error`s and one file must not be both a defect
+///   and a note about wasted space;
+/// - a candidate whose basename still appears in some surviving document is
+///   suppressed via [`reachable::scan_for_dangling_basenames`]. In the
+///   destructive pass that scan warns *after* a deletion; here it is a
+///   false-positive filter, and it is what decides whether this reads as a
+///   useful signal or as noise.
+fn check_unreferenced(
+    entries: &IndexMap<String, Vec<u8>>,
+    opf: &OpfLint,
+    opf_path: &str,
+    opf_dir: &str,
+    findings: &mut Vec<LintFinding>,
+) {
+    let mut reachable: HashSet<String> = HashSet::new();
+    let mut queue: Vec<String> = vec![opf_path.to_string()];
+    queue.extend(opf.nav_href.clone());
+    queue.extend(opf.ncx_href.clone());
+    queue.extend(opf.cover_href.clone());
+    queue.extend(spine_hrefs(opf).into_iter().map(String::from));
+    // The writer synthesizes a nav document at this path for a book that has
+    // none, so a file already sitting there is about to be overwritten rather
+    // than orphaned. `prune` protects the same path for the same reason.
+    if opf.nav_href.is_none() {
+        let synthesized = if opf_dir.is_empty() {
+            "nav.xhtml".to_string()
+        } else {
+            format!("{opf_dir}/nav.xhtml")
+        };
+        reachable.insert(synthesized);
+    }
+
+    while let Some(path) = queue.pop() {
+        if !reachable.insert(path.clone()) {
+            continue;
+        }
+        let Some(data) = entries.get(&path) else {
+            continue;
+        };
+        let Some(media_type) = declared_media_type(opf, opf_path, &path) else {
+            continue;
+        };
+        queue.extend(refs_of(media_type, data, &parent_dir(&path)));
+    }
+
+    // Manifested, unreachable, and not already owned by another check.
+    let manifested: HashSet<&str> = opf.manifest.values().map(|i| i.href.as_str()).collect();
+    let candidates: Vec<String> = entries
+        .keys()
+        .filter(|name| {
+            *name != "mimetype"
+                && !name.starts_with("META-INF/")
+                && name.as_str() != opf_path
+                && manifested.contains(name.as_str())
+                && !reachable.contains(name.as_str())
+        })
+        .cloned()
+        .collect();
+    if candidates.is_empty() {
+        return;
+    }
+
+    // The package document is deliberately NOT scanned, though `prune` scans
+    // every textual survivor. `prune` runs on the `Book` model, whose
+    // `resources` never contain the OPF at all - the writer regenerates it -
+    // so the exclusion is free there and has to be explicit here. It is not
+    // optional: a manifest names every resource it declares, including the
+    // unreferenced ones, so scanning it would suppress every candidate that
+    // ever existed and this check would silently report nothing.
+    let surviving: Vec<(&str, &[u8])> = entries
+        .iter()
+        .filter(|(name, _)| name.as_str() != opf_path && reachable.contains(name.as_str()))
+        .filter(|(name, _)| {
+            declared_media_type(opf, opf_path, name).is_some_and(is_textual_media_type)
+        })
+        .map(|(name, data)| (name.as_str(), data.as_slice()))
+        .collect();
+    let mentioned: HashSet<String> = scan_for_dangling_basenames(&candidates, &surviving)
+        .into_iter()
+        .map(|(_, dropped)| dropped)
+        .collect();
+
+    for path in candidates {
+        if mentioned.contains(&path) {
+            continue;
+        }
+        let size = entries[&path].len();
+        findings.push(
+            LintFinding::new(
+                Severity::Info,
+                "unreferenced",
+                // Uncompressed, said so plainly: it is the size the lint
+                // already has for free, and for images - which are the bulk of
+                // real dead weight - it is close to the stored size anyway.
+                // Opens with the path, like every other per-file message, so
+                // the human printer does not have to prefix it and repeat it.
+                format!(
+                    "{path} is referenced by nothing in the book ({} uncompressed); \
+                     --profile generic would drop it",
+                    size_label(size)
+                ),
+                Some(path.clone()),
+            )
+            .with_bytes(size as u64),
+        );
+    }
+}
+
+/// Every spine document's href, in spine order.
+fn spine_hrefs(opf: &OpfLint) -> Vec<&str> {
+    opf.spine_idrefs
+        .iter()
+        .filter_map(|idref| opf.manifest.get(idref))
+        .map(|item| item.href.as_str())
+        .collect()
+}
+
+/// Whether a media type is one whose bytes can mention another file's name,
+/// and so is worth scanning in the dangling-basename safety net.
+fn is_textual_media_type(media_type: &str) -> bool {
+    matches!(
+        media_type,
+        "application/xhtml+xml"
+            | "image/svg+xml"
+            | "text/css"
+            | "application/x-dtbncx+xml"
+            | "application/oebps-package+xml"
+            | "application/smil+xml"
+    )
+}
+
+// ---------------------------------------------------------------------
 // Small shared helpers
 // ---------------------------------------------------------------------
 
@@ -1247,6 +1773,19 @@ fn parent_dir(path: &str) -> String {
 /// Bytes rounded to the nearest kibibyte, for finding messages.
 fn kb(bytes: usize) -> usize {
     (bytes + 512) / 1024
+}
+
+/// A byte count for a finding message, in whichever unit does not read as
+/// nothing. `kb` alone renders anything under half a kibibyte as "0 KB",
+/// which for the per-copy checks is the common case - a marker file or an
+/// EXIF block is routinely a few hundred bytes, and a finding that says it
+/// would save "0 KB" invites the reader to ignore it.
+fn size_label(bytes: usize) -> String {
+    if bytes < 1024 {
+        format!("{bytes} bytes")
+    } else {
+        format!("{} KB", kb(bytes))
+    }
 }
 
 #[cfg(test)]
@@ -1333,6 +1872,66 @@ mod tests {
             .collect()
     }
 
+    /// Every code this module can emit. Kept by hand precisely so that adding
+    /// a check forces a decision here about what the finding is *about*.
+    const ALL_CODES: &[&str] = &[
+        "unreadable",
+        "entry-collision",
+        "manifest-sync",
+        "content-wellformed",
+        "mimetype-first",
+        "drm",
+        "zip64",
+        "spine-empty",
+        "spine-toc-sync",
+        "duplicate-id",
+        "encoding",
+        "image-format",
+        "css-caps",
+        "fonts",
+        "watermark-identifier",
+        "watermark-invisible",
+        "media-metadata",
+        "watermark-file",
+        "unreferenced",
+    ];
+
+    #[test]
+    fn every_finding_code_has_a_deliberate_category() {
+        // `Category::of` falls back to `Structure` for an unknown code, which
+        // is the right failure mode at runtime (a consumer shows the finding
+        // rather than hiding it) but would silently mis-file a new device or
+        // watermark check. This is the pin that makes that a test failure
+        // instead: every code below is asserted against the category its own
+        // check intends.
+        for code in ALL_CODES {
+            let expected = match *code {
+                "image-format" | "css-caps" | "fonts" => Category::Device,
+                "watermark-identifier"
+                | "watermark-invisible"
+                | "watermark-file"
+                | "media-metadata" => Category::Watermark,
+                "unreferenced" => Category::Waste,
+                _ => Category::Structure,
+            };
+            assert_eq!(
+                Category::of(code),
+                expected,
+                "{code} is filed under the wrong category"
+            );
+        }
+    }
+
+    #[test]
+    fn a_size_label_never_reads_as_nothing() {
+        // A marker file or an EXIF block is routinely a few hundred bytes, and
+        // "would save 0 KB" invites the reader to ignore a real finding.
+        assert_eq!(size_label(51), "51 bytes");
+        assert_eq!(size_label(1023), "1023 bytes");
+        assert_eq!(size_label(1024), "1 KB");
+        assert_eq!(size_label(421_888), "412 KB");
+    }
+
     #[test]
     fn qname_scan_finds_corrupt_colon_xmlns_with_its_line() {
         let text = "<html xmlns=\"http://www.w3.org/1999/xhtml\">\n<body>\n<svg :xmlns=\"http://www.w3.org/2000/svg\"></svg>\n</body></html>";
@@ -1383,7 +1982,7 @@ mod tests {
             ("OEBPS/styles/main.css", MAIN_CSS),
         ];
         let bytes = build_zip(&entries);
-        let findings = lint_epub(&bytes, &DeviceCaps::x4(), &Features::all_on());
+        let findings = lint_epub(&bytes, &DeviceCaps::x4(), &Features::all_on(), &[]);
         let finding = findings
             .iter()
             .find(|f| f.code == "content-wellformed")
@@ -1400,7 +1999,7 @@ mod tests {
     #[test]
     fn clean_book_has_zero_error_findings() {
         let bytes = clean_book(&[]);
-        let findings = lint_epub(&bytes, &DeviceCaps::x4(), &Features::all_on());
+        let findings = lint_epub(&bytes, &DeviceCaps::x4(), &Features::all_on(), &[]);
         assert!(
             errors(&findings).is_empty(),
             "expected zero errors, got {:#?}",
@@ -1419,7 +2018,7 @@ mod tests {
             ("OEBPS/text/chapter1.xhtml", CHAPTER1),
             ("OEBPS/styles/main.css", MAIN_CSS),
         ]);
-        let findings = lint_epub(&bytes, &DeviceCaps::x4(), &Features::all_on());
+        let findings = lint_epub(&bytes, &DeviceCaps::x4(), &Features::all_on(), &[]);
         assert!(
             findings
                 .iter()
@@ -1437,7 +2036,7 @@ mod tests {
 </EncryptedData>
 </encryption>"#;
         let bytes = clean_book(&[("META-INF/encryption.xml", ENC)]);
-        let findings = lint_epub(&bytes, &DeviceCaps::x4(), &Features::all_on());
+        let findings = lint_epub(&bytes, &DeviceCaps::x4(), &Features::all_on(), &[]);
         assert!(
             findings
                 .iter()
@@ -1455,7 +2054,7 @@ mod tests {
 </EncryptedData>
 </encryption>"#;
         let bytes = clean_book(&[("META-INF/encryption.xml", ENC)]);
-        let findings = lint_epub(&bytes, &DeviceCaps::x4(), &Features::all_on());
+        let findings = lint_epub(&bytes, &DeviceCaps::x4(), &Features::all_on(), &[]);
         assert!(
             findings
                 .iter()
@@ -1483,7 +2082,7 @@ mod tests {
             ("OEBPS/text/chapter1.xhtml", CHAPTER1),
             ("OEBPS/styles/main.css", MAIN_CSS),
         ]);
-        let findings = lint_epub(&bytes, &DeviceCaps::x4(), &Features::all_on());
+        let findings = lint_epub(&bytes, &DeviceCaps::x4(), &Features::all_on(), &[]);
         assert!(
             findings
                 .iter()
@@ -1495,7 +2094,7 @@ mod tests {
     #[test]
     fn file_not_in_manifest_is_an_error() {
         let bytes = clean_book(&[("OEBPS/text/orphan.xhtml", b"<html/>")]);
-        let findings = lint_epub(&bytes, &DeviceCaps::x4(), &Features::all_on());
+        let findings = lint_epub(&bytes, &DeviceCaps::x4(), &Features::all_on(), &[]);
         assert!(
             findings
                 .iter()
@@ -1521,7 +2120,7 @@ mod tests {
             ("OEBPS/text/chapter1.xhtml", CHAPTER1),
             ("OEBPS/styles/main.css", MAIN_CSS),
         ]);
-        let findings = lint_epub(&bytes, &DeviceCaps::x4(), &Features::all_on());
+        let findings = lint_epub(&bytes, &DeviceCaps::x4(), &Features::all_on(), &[]);
         assert!(
             findings
                 .iter()
@@ -1552,7 +2151,7 @@ mod tests {
             ("OEBPS/text/chapter1.xhtml", CHAPTER1),
             ("OEBPS/styles/main.css", MAIN_CSS),
         ]);
-        let findings = lint_epub(&bytes, &DeviceCaps::x4(), &Features::all_on());
+        let findings = lint_epub(&bytes, &DeviceCaps::x4(), &Features::all_on(), &[]);
         let sync_findings: Vec<&LintFinding> = findings
             .iter()
             .filter(|f| f.code == "spine-toc-sync")
@@ -1586,7 +2185,7 @@ mod tests {
             ("OEBPS/text/not-in-spine.xhtml", CHAPTER1),
             ("OEBPS/styles/main.css", MAIN_CSS),
         ]);
-        let findings = lint_epub(&bytes, &DeviceCaps::x4(), &Features::all_on());
+        let findings = lint_epub(&bytes, &DeviceCaps::x4(), &Features::all_on(), &[]);
         assert!(
             findings
                 .iter()
@@ -1615,7 +2214,7 @@ mod tests {
             ("OEBPS/text/chapter1.xhtml", CHAPTER_DUP),
             ("OEBPS/styles/main.css", MAIN_CSS),
         ]);
-        let findings = lint_epub(&bytes, &DeviceCaps::x4(), &Features::all_on());
+        let findings = lint_epub(&bytes, &DeviceCaps::x4(), &Features::all_on(), &[]);
         assert!(
             findings.iter().any(|f| f.code == "duplicate-id"
                 && f.severity == Severity::Error
@@ -1630,7 +2229,7 @@ mod tests {
         // The existing clean_book fixture has two distinct ids ("top", "s2");
         // regression guard so the new check does not false-positive on it.
         let bytes = clean_book(&[]);
-        let findings = lint_epub(&bytes, &DeviceCaps::x4(), &Features::all_on());
+        let findings = lint_epub(&bytes, &DeviceCaps::x4(), &Features::all_on(), &[]);
         assert!(
             !findings.iter().any(|f| f.code == "duplicate-id"),
             "got {findings:#?}"
@@ -1654,7 +2253,7 @@ mod tests {
             ("OEBPS/styles/main.css", MAIN_CSS),
             ("OEBPS/images/pic.svg", SVG),
         ]);
-        let findings = lint_epub(&bytes, &DeviceCaps::x4(), &Features::all_on());
+        let findings = lint_epub(&bytes, &DeviceCaps::x4(), &Features::all_on(), &[]);
         assert!(
             findings.iter().any(|f| f.code == "image-format"
                 && f.severity == Severity::Error
@@ -1672,7 +2271,7 @@ mod tests {
 <html xmlns="http://www.w3.org/1999/xhtml"><head><title>Chart</title></head>
 <body><p><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><rect width="10" height="10"/></svg></p></body></html>"#;
         let bytes = clean_book(&[("OEBPS/text/chapter2.xhtml", CHAPTER_WITH_INLINE_SVG)]);
-        let findings = lint_epub(&bytes, &DeviceCaps::x4(), &Features::all_on());
+        let findings = lint_epub(&bytes, &DeviceCaps::x4(), &Features::all_on(), &[]);
         assert!(
             !findings
                 .iter()
@@ -1698,7 +2297,7 @@ mod tests {
             ("OEBPS/styles/main.css", MAIN_CSS),
             ("OEBPS/images/pic.gif", GIF),
         ]);
-        let findings = lint_epub(&bytes, &DeviceCaps::x4(), &Features::all_on());
+        let findings = lint_epub(&bytes, &DeviceCaps::x4(), &Features::all_on(), &[]);
         assert!(
             findings.iter().any(|f| f.code == "image-format"
                 && f.severity == Severity::Error
@@ -1747,7 +2346,7 @@ mod tests {
             ("OEBPS/styles/main.css", MAIN_CSS),
             ("OEBPS/images/pic.jpg", &jpeg),
         ]);
-        let findings = lint_epub(&bytes, &DeviceCaps::x4(), &Features::all_on());
+        let findings = lint_epub(&bytes, &DeviceCaps::x4(), &Features::all_on(), &[]);
         assert!(
             findings.iter().any(|f| f.code == "image-format"
                 && f.severity == Severity::Error
@@ -1768,7 +2367,7 @@ mod tests {
             ("OEBPS/text/chapter1.xhtml", CHAPTER1),
             ("OEBPS/styles/main.css", big_css.as_bytes()),
         ]);
-        let findings = lint_epub(&bytes, &DeviceCaps::x4(), &Features::all_on());
+        let findings = lint_epub(&bytes, &DeviceCaps::x4(), &Features::all_on(), &[]);
         assert!(
             findings
                 .iter()
@@ -1792,7 +2391,7 @@ mod tests {
             ("OEBPS/text/chapter1.xhtml", CHAPTER1),
             ("OEBPS/styles/main.css", css.as_bytes()),
         ]);
-        let findings = lint_epub(&bytes, &DeviceCaps::x4(), &Features::all_on());
+        let findings = lint_epub(&bytes, &DeviceCaps::x4(), &Features::all_on(), &[]);
         assert!(
             findings
                 .iter()
@@ -1816,7 +2415,7 @@ mod tests {
             ("OEBPS/styles/main.css", MAIN_CSS),
             ("OEBPS/fonts/a.ttf", b"not a real font"),
         ]);
-        let findings = lint_epub(&bytes, &DeviceCaps::x4(), &Features::all_on());
+        let findings = lint_epub(&bytes, &DeviceCaps::x4(), &Features::all_on(), &[]);
         assert!(
             findings
                 .iter()
@@ -1838,7 +2437,7 @@ mod tests {
             ("OEBPS/text/chapter1.xhtml", &bad),
             ("OEBPS/styles/main.css", MAIN_CSS),
         ]);
-        let findings = lint_epub(&bytes, &DeviceCaps::x4(), &Features::all_on());
+        let findings = lint_epub(&bytes, &DeviceCaps::x4(), &Features::all_on(), &[]);
         assert!(
             findings
                 .iter()
@@ -1865,7 +2464,7 @@ mod tests {
             ("OEBPS/text/chapter1.xhtml", chapter.as_bytes()),
             ("OEBPS/styles/main.css", MAIN_CSS),
         ]);
-        let findings = lint_epub(&bytes, &DeviceCaps::x4(), &Features::all_on());
+        let findings = lint_epub(&bytes, &DeviceCaps::x4(), &Features::all_on(), &[]);
         assert!(
             findings
                 .iter()
@@ -1920,7 +2519,7 @@ mod tests {
             ("OEBPS/styles/main.css", MAIN_CSS),
             ("OEBPS/images/pic.jpg", &jpeg),
         ]);
-        let findings = lint_epub(&bytes, &DeviceCaps::x4(), &Features::all_on());
+        let findings = lint_epub(&bytes, &DeviceCaps::x4(), &Features::all_on(), &[]);
         assert!(
             !findings
                 .iter()
@@ -1964,7 +2563,7 @@ mod tests {
             ("OEBPS/text/chapter1.xhtml", CHAPTER1),
             ("OEBPS/styles/main.css", MAIN_CSS),
         ]);
-        let findings = lint_epub(&bytes, &DeviceCaps::x4(), &Features::all_on());
+        let findings = lint_epub(&bytes, &DeviceCaps::x4(), &Features::all_on(), &[]);
         let spine_empty: Vec<&LintFinding> = findings
             .iter()
             .filter(|f| f.code == "spine-empty")
@@ -1997,7 +2596,7 @@ mod tests {
             ("OEBPS/text/chapter1.xhtml", CHAPTER1),
             ("OEBPS/styles/main.css", MAIN_CSS),
         ]);
-        let findings = lint_epub(&bytes, &DeviceCaps::x4(), &Features::all_on());
+        let findings = lint_epub(&bytes, &DeviceCaps::x4(), &Features::all_on(), &[]);
         assert!(
             findings.iter().any(|f| f.code == "spine-empty"
                 && f.severity == Severity::Error
@@ -2012,6 +2611,7 @@ mod tests {
             b"not a zip file at all",
             &DeviceCaps::x4(),
             &Features::all_on(),
+            &[],
         );
         assert_eq!(errors(&findings).len(), 1);
         assert_eq!(errors(&findings)[0].code, "unreadable");

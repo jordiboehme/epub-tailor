@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   checkArgv,
+  AUTOCHECK_PROFILES,
+  CLEANUP_PROFILE,
+  WATERMARK_PROFILE,
   fetchArgv,
   fitArgv,
   mdArgv,
@@ -164,6 +167,32 @@ describe("checkArgv", () => {
       "--profile",
       "manga",
     ]);
+  });
+
+  it("makes the automatic check-on-add speak generic as well as epub", () => {
+    // The pin that keeps the feature alive. Narrow this back to
+    // [CLEANUP_PROFILE] and `lint_epub` stops seeing generic's features
+    // entirely: no watermark and no dead-weight findings, ever again - with
+    // no test failure and nothing visibly different to notice.
+    expect(AUTOCHECK_PROFILES).toEqual([CLEANUP_PROFILE, WATERMARK_PROFILE]);
+    expect(checkArgv("/in.epub", AUTOCHECK_PROFILES)).toEqual([
+      "check",
+      "/in.epub",
+      "--report",
+      "json",
+      "--profile",
+      "epub",
+      "--profile",
+      "generic",
+    ]);
+  });
+
+  it("keeps generic out of the in-place repair profile", () => {
+    // The other half of the same decision: checking against generic is free,
+    // running it rewrites the book's identifier and costs the reader their
+    // bookmarks. The auto-check may name it; CLEANUP_PROFILE may not.
+    expect(CLEANUP_PROFILE).toBe("epub");
+    expect(CLEANUP_PROFILE).not.toBe(WATERMARK_PROFILE);
   });
 });
 

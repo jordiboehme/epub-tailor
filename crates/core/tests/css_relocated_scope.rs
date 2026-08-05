@@ -85,7 +85,7 @@ fn relocated_head_styles_are_scoped_per_chapter() {
     );
 
     // The converted book still lints clean.
-    let findings = lint_epub(&converted.epub, &DeviceCaps::x4(), &Features::all_on());
+    let findings = lint_epub(&converted.epub, &DeviceCaps::x4(), &Features::all_on(), &[]);
     let errors: Vec<_> = findings
         .iter()
         .filter(|f| f.severity == epub_tailor_core::Severity::Error)

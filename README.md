@@ -36,7 +36,9 @@ Open EPUB Tailor, drop the book in, pick your device, press Fit. Out comes `my-b
 
 Drop books in - one or a whole library. You get covers and a proper list, and every book shows its files: the original plus every fitted copy it already has, each one a row you can act on.
 
-**Edit** works like a tag editor: fix a wrong title, a missing author or a bare series field, or look the whole record up online and take what is right. Saving writes into the original file itself, and a safety copy goes to the Trash first - undo, as designed by your operating system. A book with structural problems wears a small "needs cleanup" chip; click it and the problem is gone.
+Every book is checked the moment you add it, so you know where you stand before you do anything. A book that needs nothing looks like a book; one that does gets a quiet amber edge and a single word for the worst of it - `watermarked`, `needs cleanup`, `defective`, `copy protected` - with the details a click away and a running count at the bottom of the window. A clean library says "all clear" once, and nothing else.
+
+**Edit** works like a tag editor: fix a wrong title, a missing author or a bare series field, or look the whole record up online and take what is right. Saving writes into the original file itself, and a safety copy goes to the Trash first - undo, as designed by your operating system. **Clean up** repairs structure in place. **Remove watermarks** is deliberately a separate button, because stripping a per-copy identifier means replacing the book's identity, and your reading position goes with it - the app says so before it does it.
 
 **Fit** is the conversion: pick a device profile, queue a pile of books, watch them come out fitted, with live per-file progress and a cancel button that works. Fitting always writes a copy and never touches the original, then remembers which profile made it so a rerun skips what is already done.
 
@@ -136,11 +138,14 @@ Convert a Markdown file (with its local images) into a fresh EPUB:
 epub-tailor md book.md --profile x4
 ```
 
-Diagnose a book without converting it (structural checks by default, device checks with a profile):
+Diagnose a book without converting it. Structural checks run by default; a device profile adds its own limits, and `generic` reports the per-copy marks it would strip - watermark identifiers, invisible fingerprint characters, image metadata and files nothing references - without changing a byte:
 
 ```sh
 epub-tailor check book.epub --profile x4
+epub-tailor check book.epub --profile epub --profile generic
 ```
+
+Each finding says which category it belongs to (`structure`, `device`, `watermark`, `waste`) and, where it is about a quantity of bytes, how many. A watermark is never reported as an error, so `check` still exits 0 on a book that is merely marked.
 
 Or point any of them at a folder - your whole library, with `-r`:
 

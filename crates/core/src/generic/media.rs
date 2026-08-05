@@ -16,7 +16,7 @@ const PNG_DROP: &[&[u8; 4]] = &[b"tEXt", b"iTXt", b"zTXt", b"tIME", b"eXIf"];
 /// is not a parseable JPEG - including a truncated or otherwise malformed one
 /// that never reaches a terminal marker - so the caller leaves it untouched
 /// rather than writing back a shortened, no-longer-decodable file.
-fn strip_jpeg(data: &[u8]) -> Option<Vec<u8>> {
+pub(crate) fn strip_jpeg(data: &[u8]) -> Option<Vec<u8>> {
     if data.len() < 4 || data[0] != 0xFF || data[1] != 0xD8 {
         return None;
     }
@@ -103,7 +103,7 @@ fn crc32(bytes: &[u8]) -> u32 {
 /// input is not a parseable PNG - including a truncated one that never
 /// reaches `IEND` - so the caller leaves it untouched rather than writing
 /// back a shortened, no-longer-decodable file.
-fn strip_png(data: &[u8]) -> Option<Vec<u8>> {
+pub(crate) fn strip_png(data: &[u8]) -> Option<Vec<u8>> {
     const SIG: &[u8] = &[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
     if !data.starts_with(SIG) {
         return None;

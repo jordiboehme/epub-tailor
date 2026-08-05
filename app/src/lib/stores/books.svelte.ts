@@ -10,7 +10,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { CheckReport, CliFailure, FitReport, FittedStamp } from "../api/contract";
 import { coverCacheKey, coverCachePath } from "../api/covers";
-import { checkArgv, showArgv, CLEANUP_PROFILE } from "../api/argv";
+import { checkArgv, showArgv, AUTOCHECK_PROFILES } from "../api/argv";
 import { knownAppendixes, planRegroup, profileForAppendix, samePath } from "../api/copies";
 import type { TemplateBook } from "../api/templates";
 import type { BookMeta } from "../api/meta";
@@ -71,6 +71,17 @@ export interface BookFile {
    * "could not read" has to be able to say *why* for as long as it says it.
    */
   ingestError?: { friendly: string; code: string; stderr: string[] };
+  /**
+   * The automatic check's lifecycle, mirroring `ingest`. Exists so that
+   * "checked, found nothing" and "we never managed to check" are different
+   * states: `cleanup` alone cannot tell them apart, and a feature whose whole
+   * promise is "you will be told if you need to act" must not answer "all
+   * clear" when it simply has not looked yet.
+   */
+  check: "pending" | "done" | "failed";
+  /** Why the automatic check failed, kept on the file for the same reason
+   * `ingestError` is: the job behind it is pruned at the next batch. */
+  checkError?: { friendly: string; code: string };
   /** The provenance stamp ingest found: set when this file is a fitted one. */
   fitted?: FittedStamp;
   result?: PerFileResult;
@@ -194,6 +205,8 @@ class BooksStore {
             size: entry.size,
             modifiedMs: entry.modified_ms,
             ingest: entry.kind === "epub" ? "pending" : "done",
+            // Markdown is never probed: `check` reads EPUBs.
+            check: entry.kind === "epub" ? "pending" : "done",
           },
         ],
       };
@@ -219,7 +232,7 @@ class BooksStore {
     // Enqueued after the ingests so rows fill their titles and covers before
     // the low-priority lane spends time on lint probes.
     for (const t of fresh) {
-      jobs.enqueueAutoCheck(t.book, t.file, checkArgv(t.file.path, [CLEANUP_PROFILE]));
+      jobs.enqueueAutoCheck(t.book, t.file, checkArgv(t.file.path, AUTOCHECK_PROFILES));
     }
   }
 
@@ -248,7 +261,7 @@ class BooksStore {
       // Tolerated: the key falls back to path|0|0.
     }
     await this.#ingestFile(book, file);
-    jobs.enqueueAutoCheck(book, file, checkArgv(file.path, [CLEANUP_PROFILE]));
+    jobs.enqueueAutoCheck(book, file, checkArgv(file.path, AUTOCHECK_PROFILES));
   }
 
   /**

@@ -299,6 +299,25 @@ should tailor to byte-identical output. What each switch removes:
   `<text>` and similar `src` targets) and the OPF's own `media-overlay` and
   `fallback` manifest links.
 
+### Seeing what it would do, without doing it
+
+`check --profile generic` reports each of the four passes above as a finding
+rather than performing it: which identifiers would be dropped and why, how many
+invisible characters each chapter carries, how much image metadata a strip would
+save, and which files nothing references (with their uncompressed size). Every
+one of them says "`--profile generic` would ..." because that is exactly what it
+means - the finding is about the profile you named, not a verdict on the book.
+
+The classification is shared code, not a second opinion: the identifier tiering
+comes from the same `classify` the destructive pass decides on, and the
+invisible-character count from the same keep/drop mask, so a `check` can never
+report a mark `generic` leaves alone or stay silent about one it removes.
+
+Two consequences worth knowing. The book's own unique identifier is scored more
+leniently than a spare one, and a bare `urn:uuid:` unique identifier is not
+reported at all - it is the EPUB 3 default and says nothing on its own.
+Nothing is ever reported as an error, so a marked book still exits 0.
+
 **Limits, stated honestly - `generic` is not a complete anonymization tool:**
 
 - **Content-embedded watermarks** - a visible "this copy belongs to..." line,

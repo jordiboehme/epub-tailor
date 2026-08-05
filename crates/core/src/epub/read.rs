@@ -755,7 +755,7 @@ fn refinement(metadata_node: Node, id: &str, property: &str) -> Option<String> {
 /// font-obfuscation key are always read off the same element - a key derived
 /// from a different identifier than the one the book declares would silently
 /// scramble every embedded font.
-fn unique_identifier_node<'a, 'd>(
+pub(crate) fn unique_identifier_node<'a, 'd>(
     metadata_node: Node<'a, 'd>,
     unique_identifier: Option<&str>,
 ) -> Option<Node<'a, 'd>> {
@@ -774,7 +774,7 @@ fn unique_identifier_node<'a, 'd>(
 /// identifier and every secondary one, so both read the scheme the same way
 /// and a scheme-typed unique identifier is never treated differently from
 /// the same value typed as a secondary one.
-fn identifier_scheme_of(metadata_node: Node, id_node: Node) -> Option<String> {
+pub(crate) fn identifier_scheme_of(metadata_node: Node, id_node: Node) -> Option<String> {
     ["scheme", "opf:scheme"]
         .iter()
         .find_map(|a| id_node.attribute(*a))
