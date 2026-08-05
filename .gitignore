@@ -19,6 +19,8 @@ AGENTS.md
 # desktop app (app/)
 app/node_modules/
 app/dist/
+# scratch dir svelte-check drops when run with --tsgo (the TS 7 backend)
+app/.svelte-check/
 app/src-tauri/binaries/*
 !app/src-tauri/binaries/.gitkeep
 app/src-tauri/gen/

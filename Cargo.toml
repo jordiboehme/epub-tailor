@@ -31,7 +31,7 @@ jpeg-encoder = "0.7"
 # `text` renders `<text>` with the bundled font; `raster-images` lets an SVG's
 # embedded `<image>` rasters render. `system-fonts`/`memmap-fonts` are off so
 # rendering is deterministic and offline (only the bundled DejaVu Sans is used).
-resvg = { version = "0.47", default-features = false, features = [
+resvg = { version = "0.48", default-features = false, features = [
     "text",
     "raster-images",
 ] }
