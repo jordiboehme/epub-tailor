@@ -224,6 +224,59 @@ describe("JobsStore / automatic check", () => {
     expect(file.result).toBeUndefined();
     expect(file.ingest).toBe("done");
   });
+
+  // -- the `check` lifecycle -------------------------------------------------
+  //
+  // Four sites write it, and every one of them has to reach a terminal state:
+  // a file left on "pending" pulses forever and never reports a verdict, which
+  // is precisely the "we never looked" case this field exists to make visible.
+
+  it("marks the check done when the probe settles", async () => {
+    const file = makeFile({ check: "pending" });
+    const book = makeBook(file);
+    jobs.enqueueAutoCheck(book, file, ["check", file.path, "--report", "json"]);
+    fireClose(JSON.stringify(checkReport([A_FINDING])), 1);
+    await waitForJob(file.id, "autocheck", "done");
+
+    expect(file.check).toBe("done");
+    expect(file.checkError).toBeUndefined();
+  });
+
+  it("records that it never checked, without painting the row", async () => {
+    const file = makeFile({ check: "pending" });
+    const book = makeBook(file);
+    jobs.enqueueAutoCheck(book, file, ["check", file.path, "--report", "json"]);
+    fireClose("", 2);
+    await waitForJob(file.id, "autocheck", "failed");
+
+    expect(file.check).toBe("failed");
+    expect(file.checkError?.friendly).toBeTruthy();
+    // The contract that must survive: an unasked-for probe never turns a row
+    // red. It may only admit, quietly, that it did not run.
+    expect(file.result).toBeUndefined();
+  });
+
+  it("does not strand a cancelled probe on pending", async () => {
+    // A cancelled probe leaves no mark on the row, which is right - but it
+    // still has to reach a terminal lifecycle state. Left on "pending" the
+    // row pulses indefinitely and never reports a verdict at all.
+    const file = makeFile({ check: "pending" });
+    const book = makeBook(file);
+    jobs.enqueueAutoCheck(book, file, ["check", file.path, "--report", "json"]);
+    // By file id, not just by kind: earlier tests in this file leave their own
+    // terminal autocheck jobs around, and `cancel` no-ops on a terminal job -
+    // so a kind-only lookup would silently cancel nothing and pass vacuously.
+    const job = await vi.waitFor(() => {
+      const j = jobs.jobs.find((j) => j.kind === "autocheck" && j.fileId === file.id);
+      expect(j).toBeDefined();
+      return j!;
+    });
+    jobs.cancel(job.id);
+
+    expect(file.check).toBe("failed");
+    expect(file.checkError?.code).toBe("cancelled");
+    expect(file.result).toBeUndefined();
+  });
 });
 
 describe("JobsStore / copy tracking", () => {

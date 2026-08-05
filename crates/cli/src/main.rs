@@ -1049,7 +1049,7 @@ fn run_check_single(input: &Path, profiles: &[String], report_format: ReportArg)
         .count();
 
     match report_format {
-        ReportArg::Human => print_check_report(&findings, errors, warnings),
+        ReportArg::Human => print_check_report(&findings, errors, warnings, infos),
         ReportArg::Json => {
             let payload = serde_json::json!({
                 "schema": SCHEMA_VERSION,
@@ -1077,7 +1077,7 @@ fn run_check_single(input: &Path, profiles: &[String], report_format: ReportArg)
 
 /// Human `check` output: findings grouped by severity (errors first, then
 /// warnings, then info), each with its code, then a one-line summary.
-fn print_check_report(findings: &[LintFinding], errors: usize, warnings: usize) {
+fn print_check_report(findings: &[LintFinding], errors: usize, warnings: usize, infos: usize) {
     for severity in [Severity::Error, Severity::Warning, Severity::Info] {
         let group: Vec<&LintFinding> = findings.iter().filter(|f| f.severity == severity).collect();
         if group.is_empty() {
@@ -1085,13 +1085,28 @@ fn print_check_report(findings: &[LintFinding], errors: usize, warnings: usize) 
         }
         println!("{}:", severity_label(severity));
         for finding in group {
+            // The path prefix is skipped when the message already opens with
+            // it, which most of them do ("OEBPS/f.ttf is an embedded font").
+            // Printing both read as a stutter - "[fonts] OEBPS/f.ttf:
+            // OEBPS/f.ttf is an embedded font" - on every finding that names
+            // its own file. Done here rather than by rewording forty message
+            // strings, so the two can never drift apart again.
             match &finding.path {
-                Some(path) => println!("  [{}] {path}: {}", finding.code, finding.message),
-                None => println!("  [{}] {}", finding.code, finding.message),
+                Some(path) if !finding.message.starts_with(path.as_str()) => {
+                    println!("  [{}] {path}: {}", finding.code, finding.message)
+                }
+                _ => println!("  [{}] {}", finding.code, finding.message),
             }
         }
     }
-    println!("{errors} error(s), {warnings} warning(s)");
+    // Infos are counted too now that a profile can produce a pile of them
+    // (`generic` reports every unreferenced file as one), and a summary that
+    // said "0 error(s), 0 warning(s)" under a screen of Info lines read as a
+    // contradiction.
+    match infos {
+        0 => println!("{errors} error(s), {warnings} warning(s)"),
+        _ => println!("{errors} error(s), {warnings} warning(s), {infos} info"),
+    }
 }
 
 fn severity_label(severity: Severity) -> &'static str {

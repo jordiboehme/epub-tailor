@@ -182,78 +182,56 @@ fn a_generic_conversions_own_output_is_no_longer_watermarked() {
 }
 
 #[test]
-fn an_img_srcset_with_no_src_leaves_dead_weight_the_converter_keeps_on_purpose() {
-    // The one place `waste` does NOT converge, pinned rather than hidden.
-    //
+fn an_img_srcset_with_no_src_leaves_nothing_unreferenced_behind() {
     // `image::rewrite_refs` strips `<img srcset>` from every conversion. Where
-    // that was the image's only reference, the converter faces a choice
-    // between deleting a raster it cannot prove is unused and keeping bytes
-    // nothing points at; it deliberately keeps them (see the `rewrite_refs`
-    // docs - the alternative once made images "go permanently missing with
-    // zero warnings"). So the output genuinely does carry an unreferenced
-    // image, and `check` saying so is correct, not a false positive.
+    // that was the image's only reference the element would render nothing and
+    // the raster would survive only because `prune` is handed it through a
+    // side channel - so the output carried an image no document pointed at,
+    // and `check` correctly went on reporting dead weight however many times
+    // the user cleaned the book.
     //
-    // Worth knowing because it means a user can clean such a book twice and
-    // still be told it has dead weight. That is honest; silently suppressing
-    // it would not be.
+    // The conversion now adopts the first srcset candidate as `src`, so the
+    // output references its own image and converges. This is the pin: clean it
+    // once, and it is clean.
     let epub = common::book_with_srcset_only_image();
     let out = convert(Input::Epub(epub), &opts_for(&["epub", "generic"])).expect("converts");
     assert!(
-        !unreferenced_paths(&out.epub).is_empty(),
-        "the srcset target the converter deliberately keeps is genuinely unreferenced \
-         in the output, and check should not pretend otherwise"
+        unreferenced_paths(&out.epub).is_empty(),
+        "a cleaned book must not still carry dead weight: {:?}",
+        unreferenced_paths(&out.epub)
+    );
+
+    // And the picture is actually still in the book, referenced - the failure
+    // mode this replaces was an image that "goes permanently missing with zero
+    // warnings", which a check for emptiness alone would not notice.
+    let chapters = String::from_utf8_lossy(
+        &common::entry(&out.epub, "OEBPS/chapter.xhtml")
+            .or_else(|| common::entry(&out.epub, "OEBPS/text/chapter.xhtml"))
+            .expect("the chapter survives"),
+    )
+    .to_string();
+    assert!(
+        chapters.contains("src="),
+        "the adopted srcset candidate must appear as a real src: {chapters}"
     );
 }
 
 #[test]
-fn a_per_copy_identifier_is_reported_but_never_as_an_error() {
-    // A watermark is a fact about provenance, not a defect: reporting it as an
-    // `Error` would make `check` exit non-zero on a legitimately purchased
-    // book and break anyone gating CI on it.
-    let epub = common::book_with_refined_identifier("arthur.dent@example.com", "URN");
+fn a_doomed_file_is_reported_once_not_twice() {
+    // An unreferenced image that also carries EXIF used to produce both
+    // `media-metadata` and `unreferenced` for the same path - the same removal
+    // counted twice, which the app then renders as two separate concerns
+    // (watermarked AND extra files) for one piece of dead weight.
+    let epub = common::book_with_exif_orphan();
     let findings = lint(&epub, &["epub", "generic"]);
-    let watermarks: Vec<_> = findings
+    let about_orphan: Vec<&str> = findings
         .iter()
-        .filter(|f| f.code == "watermark-identifier")
+        .filter(|f| f.path.as_deref() == Some("OEBPS/orphan.jpg"))
+        .map(|f| f.code)
         .collect();
-    assert!(
-        !watermarks.is_empty(),
-        "an email-shaped identifier must be reported: {findings:?}"
-    );
-    assert!(
-        findings.iter().all(|f| f.severity != Severity::Error),
-        "no per-copy finding may be an Error: {findings:?}"
-    );
-}
-
-#[test]
-fn the_reported_metadata_size_is_what_a_strip_would_actually_save() {
-    // The byte figure comes from running the real strip and measuring, so it
-    // must equal what the conversion reports saving - not an estimate from a
-    // second size walk that could drift.
-    let epub = common::book_with_image("OEBPS/photo.jpg", &common::jpeg_with_exif());
-    let finding = lint(&epub, &["epub", "generic"])
-        .into_iter()
-        .find(|f| f.code == "media-metadata")
-        .expect("EXIF must be reported");
-    let bytes = finding
-        .bytes
-        .expect("a media-metadata finding carries bytes");
-    assert!(
-        bytes > 0,
-        "a zero saving must not be reported at all: {finding:?}"
-    );
-
-    let out = convert(Input::Epub(epub), &opts_for(&["epub", "generic"])).expect("converts");
-    let detail = out
-        .report
-        .transformations
-        .iter()
-        .find(|t| t.kind == "generic-media")
-        .map(|t| t.detail.clone())
-        .expect("generic strips the EXIF");
-    assert!(
-        detail.contains(&bytes.to_string()),
-        "check reported {bytes} bytes but the conversion said {detail:?}"
+    assert_eq!(
+        about_orphan,
+        vec!["unreferenced"],
+        "a file that is going away whole is reported once: {findings:?}"
     );
 }

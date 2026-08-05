@@ -653,6 +653,26 @@ pub(crate) fn rewrite_refs(
         remove_attr(&img, "width");
         remove_attr(&img, "height");
         if let Some(srcset) = get_attr(&img, "srcset") {
+            // An `<img srcset="...">` with no `src` at all names its only
+            // image through an attribute this function is about to remove.
+            // Adopt the first candidate as the `src` so the output still
+            // points at the picture: without it the element renders nothing
+            // and the resource survives only because `prune` is handed it
+            // through the side channel below - leaving the book carrying an
+            // image no document references, forever, which `check` then
+            // reports as dead weight on every subsequent pass.
+            //
+            // Set before the remapping branch below runs, so the adopted path
+            // goes through exactly the same rename/split handling a
+            // hand-written `src` would.
+            if get_attr(&img, "src").is_none()
+                && let Some(first) = srcset
+                    .split(',')
+                    .filter_map(|entry| entry.split_whitespace().next())
+                    .find(|url| !split_href_suffix(url).0.is_empty())
+            {
+                set_attr(&img, "src", first);
+            }
             for entry in srcset.split(',') {
                 let Some(url) = entry.split_whitespace().next() else {
                     continue;

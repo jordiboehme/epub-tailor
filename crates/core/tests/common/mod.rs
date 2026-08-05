@@ -1704,3 +1704,33 @@ pub fn book_with_orphan_named_in_prose() -> Vec<u8> {
         ("OEBPS/orphan.png", &real_png()),
     ])
 }
+
+/// A minimal EPUB3 whose manifested, unreferenced image also carries EXIF -
+/// so two per-copy checks have something to say about the same doomed file.
+pub fn book_with_exif_orphan() -> Vec<u8> {
+    const CONTENT_OPF: &[u8] = br##"<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="pub-id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="pub-id">urn:uuid:9d6a4e40-5555-4777-bbbb-1234567890ab</dc:identifier>
+    <dc:title>Book</dc:title>
+    <dc:language>en</dc:language>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="ch" href="chapter.xhtml" media-type="application/xhtml+xml"/>
+    <item id="orphan" href="orphan.jpg" media-type="image/jpeg"/>
+  </manifest>
+  <spine><itemref idref="ch"/></spine>
+</package>"##;
+    const CHAPTER: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>C</title></head>
+<body><p>Nothing here points at the image.</p></body></html>"#;
+    build_epub(&[
+        ("mimetype", b"application/epub+zip"),
+        ("META-INF/container.xml", CONTAINER_XML),
+        ("OEBPS/content.opf", CONTENT_OPF),
+        ("OEBPS/nav.xhtml", NAV_XHTML),
+        ("OEBPS/chapter.xhtml", CHAPTER),
+        ("OEBPS/orphan.jpg", &jpeg_with_exif()),
+    ])
+}

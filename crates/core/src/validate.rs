@@ -261,9 +261,35 @@ pub fn lint_epub(
     }
     if features.drop_unreferenced {
         check_unreferenced(&entries, &opf, &opf_path, &opf_dir, &mut findings);
+        suppress_findings_about_doomed_files(&mut findings);
     }
 
     findings
+}
+
+/// Drop per-copy findings about a file that is itself reported as
+/// unreferenced. The file is going away whole, and everything in it goes with
+/// it - so "this image carries 4 KB of EXIF" alongside "nothing references
+/// this image" is the same removal counted twice, and lands in the app as two
+/// concerns (a watermark and dead weight) where the book has one.
+///
+/// Only the `watermark` category is suppressed: a structural error about a
+/// doomed file is still worth saying, because it describes the book as it is
+/// now rather than a change a profile would make.
+fn suppress_findings_about_doomed_files(findings: &mut Vec<LintFinding>) {
+    let doomed: HashSet<String> = findings
+        .iter()
+        .filter(|f| f.code == "unreferenced")
+        .filter_map(|f| f.path.clone())
+        .collect();
+    if doomed.is_empty() {
+        return;
+    }
+    findings.retain(|f| {
+        f.code == "unreferenced"
+            || f.category != Category::Watermark
+            || !f.path.as_deref().is_some_and(|p| doomed.contains(p))
+    });
 }
 
 // ---------------------------------------------------------------------
@@ -1695,8 +1721,10 @@ fn check_unreferenced(
                 // Uncompressed, said so plainly: it is the size the lint
                 // already has for free, and for images - which are the bulk of
                 // real dead weight - it is close to the stored size anyway.
+                // Opens with the path, like every other per-file message, so
+                // the human printer does not have to prefix it and repeat it.
                 format!(
-                    "nothing in the book references {path} ({} uncompressed); \
+                    "{path} is referenced by nothing in the book ({} uncompressed); \
                      --profile generic would drop it",
                     size_label(size)
                 ),

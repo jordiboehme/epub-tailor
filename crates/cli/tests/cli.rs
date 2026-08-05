@@ -1108,3 +1108,103 @@ fn clear_refuses_protected_fields() {
 
     std::fs::remove_dir_all(&dir).ok();
 }
+
+#[test]
+fn check_reports_per_copy_findings_with_the_full_contract_under_generic() {
+    // The app parses this payload, so the contract is the interface: every
+    // finding carries a `category`, a size-bearing one carries `bytes`, the
+    // envelope counts `infos`, and none of it is an error - a watermark is a
+    // fact about provenance, not a defect, and `check` must still exit 0 so a
+    // CI gate does not start failing on legitimately purchased books.
+    let dir = temp_dir("check-generic");
+    let epub = common::marked_book_in(&dir, "marked");
+
+    let output = bin()
+        .args([
+            "check",
+            epub.to_str().unwrap(),
+            "--profile",
+            "epub",
+            "--profile",
+            "generic",
+            "--report",
+            "json",
+        ])
+        .output()
+        .expect("failed to run binary");
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "a watermark must not fail the exit code\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let json: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&output.stdout)).expect("valid JSON report");
+    assert_eq!(json["errors"].as_u64().unwrap(), 0, "got: {json}");
+    assert!(
+        json["infos"].as_u64().is_some(),
+        "the envelope must count infos: {json}"
+    );
+
+    let findings = json["findings"].as_array().expect("findings array");
+    let codes: Vec<&str> = findings
+        .iter()
+        .map(|f| f["code"].as_str().unwrap())
+        .collect();
+    for expected in [
+        "watermark-identifier",
+        "watermark-invisible",
+        "unreferenced",
+    ] {
+        assert!(codes.contains(&expected), "missing {expected} in {codes:?}");
+    }
+
+    for finding in findings {
+        assert!(
+            finding["category"].is_string(),
+            "every finding carries a category: {finding}"
+        );
+        assert_ne!(finding["severity"], "error", "no per-copy error: {finding}");
+    }
+    let unreferenced = findings
+        .iter()
+        .find(|f| f["code"] == "unreferenced")
+        .expect("the orphan");
+    assert!(
+        unreferenced["bytes"].as_u64().is_some_and(|b| b > 0),
+        "dead weight reports its size: {unreferenced}"
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn check_without_generic_stays_purely_structural() {
+    // The no-regression pin at the CLI boundary: every per-copy check is gated
+    // on a `generic` feature, so the default profile must report none of them
+    // and behave exactly as it did before they existed.
+    let dir = temp_dir("check-structural");
+    let epub = common::marked_book_in(&dir, "marked");
+
+    let output = bin()
+        .args(["check", epub.to_str().unwrap(), "--report", "json"])
+        .output()
+        .expect("failed to run binary");
+
+    let json: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&output.stdout)).expect("valid JSON report");
+    let categories: Vec<&str> = json["findings"]
+        .as_array()
+        .expect("findings array")
+        .iter()
+        .map(|f| f["category"].as_str().unwrap())
+        .collect();
+    assert!(
+        !categories.contains(&"watermark") && !categories.contains(&"waste"),
+        "the default profile must stay structural, got: {categories:?}"
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+}
