@@ -158,7 +158,7 @@ A profile is a JSON file bundling device capabilities, feature switches, tunable
 
 | Name   | Screen  | Panel | What it is |
 |--------|---------|-------|------------|
-| `epub` | -       | -      | The default: repair and cleanup only, everything the EPUB standard allows stays. |
+| `epub` | -       | -      | The default: repair and cleanup, everything the EPUB standard allows stays. |
 | `generic` | -    | -      | Modifier, not a device: strips per-copy watermark channels so two copies of the same shop edition converge to the same file. Composes with any device profile. |
 | `x4`   | 480x800 | gray4  | Xteink X4 running CrossPoint firmware, the full conversion. |
 | `x3`   | 528x792 | gray4  | Xteink X3, same treatment with its own geometry. |

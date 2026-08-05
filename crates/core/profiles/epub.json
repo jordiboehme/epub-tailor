@@ -1,6 +1,6 @@
 {
   "name": "epub",
-  "description": "Repair and cleanup only - everything the EPUB standard allows stays",
+  "description": "Repair and cleanup - everything the EPUB standard allows stays",
   "features": {
     "strip_fonts": false,
     "filter_css": false,

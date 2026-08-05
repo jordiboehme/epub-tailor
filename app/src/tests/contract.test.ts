@@ -151,7 +151,7 @@ const PROFILES_JSON = `{
         "screen_h": 4294967295,
         "screen_w": 4294967295
       },
-      "description": "Repair and cleanup only - everything the EPUB standard allows stays",
+      "description": "Repair and cleanup - everything the EPUB standard allows stays",
       "features": {
         "bake_ordered_lists": false,
         "chapter_split": false,
