@@ -28,14 +28,21 @@ export interface InPlaceOutcome {
 }
 
 /**
- * Rewrite `files` in place under the repair profile, with staged edits
+ * Rewrite `files` in place under `profileSpecs`, with staged edits
  * (`withEdits`) or without (a pure cleanup). Before any file is touched, a
  * copy of it goes to the OS Trash; a file whose backup cannot be made is
  * dropped from the batch - no backup, no overwrite.
+ *
+ * `profileSpecs` defaults to the bare repair profile, and the metadata-save
+ * path MUST keep that default. Composing `generic` in here would strip
+ * content and rewrite the book's identifier off a button labelled "Save
+ * changes" - the widening only ever belongs to an action the user picked by
+ * name (see `WATERMARK_PROFILE`).
  */
 export async function saveFilesInPlace(
   files: BookFile[],
   withEdits: boolean,
+  profileSpecs: string[] = [CLEANUP_PROFILE],
 ): Promise<InPlaceOutcome> {
   edits.flushPending();
   const outcome: InPlaceOutcome = { failures: [], keptAsFile: 0, ran: 0 };
@@ -54,7 +61,7 @@ export async function saveFilesInPlace(
   if (kept.length === 0) return outcome;
 
   const opts: RunOptions = {
-    profiles: [CLEANUP_PROFILE],
+    profiles: profileSpecs,
     quality: null,
     tables: null,
     dryRun: false,

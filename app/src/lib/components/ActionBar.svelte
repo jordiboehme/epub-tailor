@@ -1,7 +1,9 @@
 <script lang="ts">
   import { resolvePlans } from "../api/plan";
   import type { RunOptions } from "../api/argv";
-  import { needsCleanup } from "../api/book-view";
+  import { conditionSummary, fileCondition, isFixable } from "../api/book-view";
+  import ConfirmDialog from "./ConfirmDialog.svelte";
+  import { CLEANUP_PROFILE, WATERMARK_PROFILE } from "../api/argv";
   import { books, toTemplateFile } from "../stores/books.svelte";
   import type { BookFile } from "../stores/books.svelte";
   import { jobs } from "../stores/jobs.svelte";
@@ -44,15 +46,32 @@
 
   // In-place work is epub-only: Markdown files have no archive to rewrite.
   const saveTargets = $derived(targetFiles.filter((f) => f.kind === "epub" && edits.hasEdits(f.id)));
-  const cleanupTargets = $derived(targetFiles.filter((f) => f.kind === "epub" && needsCleanup(f)));
+  const cleanupTargets = $derived(targetFiles.filter((f) => f.kind === "epub" && isFixable(f)));
   const canSave = $derived(saveTargets.length > 0 && !busy);
   const canCleanup = $derived(cleanupTargets.length > 0 && !busy);
+  const summary = $derived(conditionSummary(books.allFiles));
+  /** No "all clear" while a probe is still running - it would be a lie for
+   *  another second, and then flip. */
+  const anyChecking = $derived(books.allFiles.some((f) => f.check === "pending"));
   const saveLabel = $derived(
     saveTargets.length > 0 ? `Save changes (${saveTargets.length})` : "Save changes",
   );
   const cleanupLabel = $derived(
     cleanupTargets.length > 0 ? `Clean up (${cleanupTargets.length})` : "Clean up",
   );
+
+  // A separate action, never folded into Clean up. `generic` replaces the
+  // book's unique identifier, and a reading system keys the reader's position
+  // off that value - so this costs the user their bookmarks, and it has to be
+  // a thing they chose rather than a side effect of a button called "Clean up".
+  const watermarkTargets = $derived(
+    targetFiles.filter((f) => {
+      const { concerns } = fileCondition(f);
+      return f.kind === "epub" && (concerns.includes("watermark") || concerns.includes("bloat"));
+    }),
+  );
+  const canRemoveWatermarks = $derived(watermarkTargets.length > 0 && !busy);
+  let confirmWatermark = $state(false);
 
   function check() {
     // A copy of the derived list, so a selection change mid-run cannot reshape
@@ -105,13 +124,18 @@
    * repair-profile rewrite - see stores/inplace.ts), with this bar's error
    * and notice lines wrapped around it.
    */
-  async function saveInPlace(items: BookFile[], withEdits: boolean) {
+  async function saveInPlace(
+    items: BookFile[],
+    withEdits: boolean,
+    profileSpecs: string[] = [CLEANUP_PROFILE],
+  ) {
     if (items.length === 0) return;
     starting = true;
     planError = null;
     notice = null;
+    confirmWatermark = false;
     try {
-      const outcome = await saveFilesInPlace(items, withEdits);
+      const outcome = await saveFilesInPlace(items, withEdits, profileSpecs);
       if (outcome.failures.length > 0) {
         const scope = outcome.ran === 0 ? "Nothing was written" : "Some files were skipped";
         planError = `${scope} - a safety copy could not be made. ${outcome.failures[0]}`;
@@ -137,6 +161,18 @@
         · {books.selectedFiles.length}
         {books.selectedFiles.length === 1 ? "file" : "files"} selected
       </span>
+    {/if}
+    <!-- The positive is stated once, here, and never as a green tick per row:
+         twenty of those train the eye to skip the status column, which is the
+         one place the amber pill has to be noticed. -->
+    {#if summary.broken > 0 || summary.attention > 0}
+      <span class="text-amber-700 dark:text-amber-400">
+        · {summary.broken + summary.attention} need{summary.broken + summary.attention === 1
+          ? "s"
+          : ""} attention
+      </span>
+    {:else if books.books.length > 0 && !anyChecking}
+      <span>· all clear</span>
     {/if}
   </div>
 
@@ -165,6 +201,15 @@
       >
         {cleanupLabel}
       </Button>
+      {#if canRemoveWatermarks}
+        <Button
+          variant="secondary"
+          title="Strip per-copy marks from the selected files, under epub + generic"
+          onclick={() => (confirmWatermark = true)}
+        >
+          Remove watermarks ({watermarkTargets.length})
+        </Button>
+      {/if}
       <div class="flex flex-col items-end gap-0.5">
         <Button variant="primary" disabled={!canSave} onclick={() => saveInPlace([...saveTargets], true)}>
           {saveLabel}
@@ -196,3 +241,21 @@
     </div>
   {/if}
 </div>
+
+{#if confirmWatermark}
+  <ConfirmDialog
+    title="Remove watermarks from {watermarkTargets.length} {watermarkTargets.length === 1
+      ? 'file'
+      : 'files'}?"
+    confirmLabel="Remove watermarks"
+    cancelLabel="Not now"
+    onConfirm={() => saveInPlace([...watermarkTargets], false, [CLEANUP_PROFILE, WATERMARK_PROFILE])}
+    onCancel={() => (confirmWatermark = false)}
+  >
+    This strips per-copy identifiers, invisible fingerprint characters, image metadata and files
+    nothing references. The current version goes to the Trash first, so nothing is lost.
+    <br />
+    It also replaces the book's unique identifier, so your reading position and bookmarks in this
+    book are lost.
+  </ConfirmDialog>
+{/if}

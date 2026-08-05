@@ -62,6 +62,9 @@ function makeFile(overrides: Partial<BookFile> = {}): BookFile {
     size: 100,
     modifiedMs: 0,
     ingest: "done",
+    // Explicit rather than defaulted: every test then states whether the
+    // automatic check has run, which is what `fileCondition` keys off.
+    check: "done",
     ...overrides,
   };
 }

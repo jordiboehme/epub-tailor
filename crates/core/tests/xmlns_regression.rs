@@ -134,6 +134,7 @@ fn corrupted_titlepage_heals_under_a_filters_only_profile() {
         &converted.epub,
         &epub_tailor_core::DeviceCaps::x4(),
         &Features::repair_only(),
+        &[],
     );
     assert!(
         !findings.iter().any(|f| f.code == "content-wellformed"),

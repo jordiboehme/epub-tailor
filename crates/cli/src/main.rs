@@ -1043,6 +1043,10 @@ fn run_check_single(input: &Path, profiles: &[String], report_format: ReportArg)
         .iter()
         .filter(|f| f.severity == Severity::Warning)
         .count();
+    let infos = findings
+        .iter()
+        .filter(|f| f.severity == Severity::Info)
+        .count();
 
     match report_format {
         ReportArg::Human => print_check_report(&findings, errors, warnings),
@@ -1052,6 +1056,7 @@ fn run_check_single(input: &Path, profiles: &[String], report_format: ReportArg)
                 "findings": findings,
                 "errors": errors,
                 "warnings": warnings,
+                "infos": infos,
             });
             match serde_json::to_string_pretty(&payload) {
                 Ok(json) => println!("{json}"),

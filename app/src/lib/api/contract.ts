@@ -67,12 +67,24 @@ export interface ErrorReport {
 // check: LintFinding (crates/core/src/validate.rs)
 // ---------------------------------------------------------------------------
 
+/**
+ * What a finding is about, as the CLI classifies it (`validate::Category`).
+ * Optional on the way in: an older sidecar predates the field, and the app
+ * must keep working against one rather than throw - `concernOf` falls back to
+ * the code. `severity` says how loud a finding is, this says what it is about,
+ * and the two are independent: a watermark is never an `error`.
+ */
+export type FindingCategory = "structure" | "device" | "watermark" | "waste";
+
 export interface Finding {
   severity: "info" | "warning" | "error";
   code: string;
+  category?: FindingCategory;
   message: string;
   /** No `skip_serializing_if` on `LintFinding.path` either: `null`, not absent. */
   path: string | null;
+  /** Bytes at stake, where the finding is about a quantity of them. */
+  bytes?: number | null;
 }
 
 export interface CheckReport {
@@ -80,6 +92,8 @@ export interface CheckReport {
   findings: Finding[];
   errors: number;
   warnings: number;
+  /** Absent from a sidecar older than the per-copy checks. */
+  infos?: number;
 }
 
 // ---------------------------------------------------------------------------

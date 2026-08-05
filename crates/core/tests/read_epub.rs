@@ -1324,6 +1324,7 @@ fn linting_messy_entry_names_has_no_false_manifest_sync_findings() {
         &messy_entry_names_fixture(),
         &DeviceCaps::x4(),
         &Features::all_on(),
+        &[],
     );
     let manifest_sync: Vec<&_> = findings
         .iter()
@@ -1429,6 +1430,7 @@ fn colliding_entry_names_produce_an_entry_collision_lint_finding() {
         &colliding_entry_names_fixture(),
         &DeviceCaps::x4(),
         &Features::all_on(),
+        &[],
     );
     assert!(
         findings
@@ -1504,6 +1506,7 @@ fn a_nav_entry_pointing_outside_the_spine_is_dropped_not_shipped() {
         &out.epub,
         &DeviceCaps::permissive(),
         &Features::repair_only(),
+        &[],
     );
     let sync: Vec<_> = findings
         .iter()

@@ -20,6 +20,7 @@
     fileTitle,
     fileYear,
     TONE_CLASS,
+    bookCondition,
   } from "../api/book-view";
   import FileList from "./FileList.svelte";
 
@@ -45,6 +46,8 @@
   const running = $derived(job?.state === "running");
   const queued = $derived(job?.state === "queued");
   const unreadable = $derived(original.ingest === "failed");
+  /** The worst verdict across the book's files, for the row tint. */
+  const condition = $derived(bookCondition(book));
   const anyBusy = $derived(
     book.files.some((f) => {
       const state = jobs.conversionJobFor(f.id)?.state;
@@ -111,13 +114,23 @@
   onkeydown={onKey}
   class="group relative cursor-default text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-teal-500 dark:focus-visible:ring-teal-400 {selected
     ? 'bg-teal-50 ring-2 ring-inset ring-teal-500/60 dark:bg-teal-500/10 dark:ring-teal-400/50 dark:shadow-glow-inset'
-    : unreadable
+    : unreadable || condition.verdict === 'broken'
       ? 'bg-rose-50/70 ring-1 ring-inset ring-rose-200 hover:bg-rose-50 dark:bg-rose-950/20 dark:ring-rose-500/30 dark:hover:bg-rose-950/40'
       : running
         ? 'bg-teal-50/60 dark:bg-teal-500/5'
         : 'hover:bg-white dark:hover:bg-ink-900'}"
 >
   <div class="relative px-4 py-2">
+    <!-- Severity only, no words: across a twenty-book drop the eye needs one
+         sweep, and a full amber wash on most rows is noise. A broken book
+         gets the rose wash above (the vocabulary `unreadable` already used);
+         one that merely needs attention gets a 3px edge and nothing else. -->
+    {#if !selected && !unreadable && condition.verdict === "attention"}
+      <span
+        aria-hidden="true"
+        class="pointer-events-none absolute inset-y-0 left-0 w-[3px] bg-amber-400/80 dark:bg-amber-500/70"
+      ></span>
+    {/if}
     <!-- Two rows: metadata line, then the file lines - both right of the
          cover, which spans the full height. The 1fr second row absorbs the
          slack of the 96px cover, so the metadata line keeps its natural
@@ -237,7 +250,7 @@
       <div class="absolute inset-x-0 bottom-0 h-0.5 overflow-hidden bg-teal-500/15">
         <div class="h-full w-1/3 animate-[shimmer_1.1s_ease-in-out_infinite] bg-teal-500 dark:bg-teal-400 dark:shadow-glow-sm"></div>
       </div>
-    {:else if original.ingest === "pending"}
+    {:else if original.ingest === "pending" || original.check === "pending"}
       <div class="absolute inset-x-0 bottom-0 h-0.5 animate-pulse bg-teal-300/70"></div>
     {/if}
   </div>

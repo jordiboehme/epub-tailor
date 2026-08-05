@@ -60,7 +60,12 @@ pub fn convert_file(
 pub fn lint_file(input: &Path, resolved: &Profile) -> Result<Vec<LintFinding>, String> {
     let bytes =
         std::fs::read(input).map_err(|e| format!("cannot read {}: {e}", input.display()))?;
-    Ok(lint_epub(&bytes, &resolved.caps, &resolved.features))
+    Ok(lint_epub(
+        &bytes,
+        &resolved.caps,
+        &resolved.features,
+        &resolved.filters,
+    ))
 }
 
 fn read_failure(input: &Path, e: &std::io::Error) -> FileFailure {
@@ -691,6 +696,7 @@ fn check_json_report(outcomes: &[CheckOutcome]) -> serde_json::Value {
                 "findings": findings,
                 "errors": severity_count(findings, Severity::Error),
                 "warnings": severity_count(findings, Severity::Warning),
+                "infos": severity_count(findings, Severity::Info),
             }),
             CheckOutcome::Skipped { input, reason } => serde_json::json!({
                 "input": input.display().to_string(),
@@ -722,6 +728,7 @@ fn check_json_report(outcomes: &[CheckOutcome]) -> serde_json::Value {
             "unreadable": outcomes.len() - checked - skipped,
             "errors": count_findings(outcomes, Severity::Error),
             "warnings": count_findings(outcomes, Severity::Warning),
+            "infos": count_findings(outcomes, Severity::Info),
         },
     })
 }

@@ -1622,3 +1622,52 @@ h1 { color: #b22222; text-align: center; }
         ("OEBPS/images/diagram.svg", DIAGRAM_SVG),
     ])
 }
+
+/// A JPEG carrying an EXIF APP1 segment with an identifying payload, and a
+/// minimal but structurally valid scan. Shared by `generic.rs` (which asserts
+/// the strip keeps the pixels) and `check_generic.rs` (which asserts the size
+/// `check` reports is the size the strip actually saves), so both measure the
+/// same bytes.
+pub fn jpeg_with_exif() -> Vec<u8> {
+    let mut out = vec![0xFF, 0xD8]; // SOI
+    let payload = b"Exif\0\0BUYER-635962014";
+    out.extend_from_slice(&[0xFF, 0xE1]);
+    out.extend_from_slice(&((payload.len() + 2) as u16).to_be_bytes());
+    out.extend_from_slice(payload);
+    out.extend_from_slice(&[0xFF, 0xDA, 0x00, 0x02, 0xFF, 0xD9]);
+    out
+}
+
+/// A minimal EPUB3 book with a properly manifested image that no document
+/// references. Distinct from [`book_with_extra_file`], whose stray file is
+/// absent from the manifest and so is a *structural* defect
+/// (`check_manifest_sync` reports it as an Error): this one is well-formed in
+/// every way and merely carries dead weight, which is the only case
+/// `check`'s `unreferenced` finding claims.
+pub fn book_with_manifested_orphan() -> Vec<u8> {
+    const CONTENT_OPF: &[u8] = br##"<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="pub-id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="pub-id">urn:uuid:7b4e2c20-3333-4555-9999-fedcbafedcba</dc:identifier>
+    <dc:title>Book</dc:title>
+    <dc:language>en</dc:language>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="ch" href="chapter.xhtml" media-type="application/xhtml+xml"/>
+    <item id="orphan" href="orphan.png" media-type="image/png"/>
+  </manifest>
+  <spine><itemref idref="ch"/></spine>
+</package>"##;
+    const CHAPTER: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>C</title></head>
+<body><p>Nothing here points at the image.</p></body></html>"#;
+    build_epub(&[
+        ("mimetype", b"application/epub+zip"),
+        ("META-INF/container.xml", CONTAINER_XML),
+        ("OEBPS/content.opf", CONTENT_OPF),
+        ("OEBPS/nav.xhtml", NAV_XHTML),
+        ("OEBPS/chapter.xhtml", CHAPTER),
+        ("OEBPS/orphan.png", &real_png()),
+    ])
+}

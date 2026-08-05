@@ -36,6 +36,29 @@ const DEFAULT_SPLIT_LEVEL = 1;
 export const CLEANUP_PROFILE = "epub";
 
 /**
+ * The profile that strips per-copy marks: vendor identifiers, invisible
+ * fingerprint characters, image metadata and unreferenced files.
+ *
+ * Never composed into a run implicitly. It replaces the book's unique
+ * identifier, and a reading system keys its library and reading position off
+ * that value - so a `generic` run orphans the reader's bookmarks. The core
+ * documents that as the intended trade for an *opt-in* profile
+ * (`generic/identity.rs`), and the app honours the opt-in: this only ever
+ * reaches the CLI through an action the user chose by name.
+ */
+export const WATERMARK_PROFILE = "generic";
+
+/**
+ * The profiles the automatic check-on-add speaks. `generic` composes on top of
+ * `epub` so the check can *see* watermarks and dead weight - it declares no
+ * device caps and enables no device transform, so this adds the per-copy
+ * findings and no device noise at all.
+ *
+ * Checking against it does not run it. Nothing here writes to the book.
+ */
+export const AUTOCHECK_PROFILES = [CLEANUP_PROFILE, WATERMARK_PROFILE];
+
+/**
  * The clearable fields and their `--clear` names, in emission order. Typed
  * against the clearable keys, so a protected field cannot creep in without
  * the compiler objecting.

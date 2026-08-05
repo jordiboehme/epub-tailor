@@ -72,6 +72,14 @@
                 <span class="font-mono text-ink-500 dark:text-ink-500">{finding.code}</span>
               {/if}
               <span class="text-ink-600 dark:text-ink-300"> {finding.message}</span>
+              <!-- The path, when the message does not already name it. For an
+                   `unreferenced` finding the path IS the information - which
+                   file to expect to lose - and it used to be thrown away. -->
+              {#if finding.path && !finding.message.includes(finding.path)}
+                <span class="ml-1 font-mono text-[10px] text-ink-400 dark:text-ink-500"
+                  >{finding.path}</span
+                >
+              {/if}
             </span>
           </li>
         {/each}

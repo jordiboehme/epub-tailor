@@ -81,6 +81,7 @@ fn lint_flags_the_raw_fixture_and_is_clean_after_convert() {
         &raw,
         &epub_tailor_core::DeviceCaps::x4(),
         &epub_tailor_core::Features::all_on(),
+        &[],
     );
     assert!(
         raw_findings
@@ -95,6 +96,7 @@ fn lint_flags_the_raw_fixture_and_is_clean_after_convert() {
         &converted.epub,
         &epub_tailor_core::DeviceCaps::x4(),
         &epub_tailor_core::Features::all_on(),
+        &[],
     );
     assert!(
         !out_findings.iter().any(|f| f.code == "duplicate-id"),

@@ -346,7 +346,48 @@ fn matches_declared_scheme_shape(value: &str, scheme: &str) -> bool {
     }
 }
 
-/// Whether an identifier is kept.
+/// The prefix of the identifier the writer synthesizes for a book that has
+/// none (`synth_identifier`, in `epub::write`). Exempt from per-copy screening
+/// for a reason stronger than convenience: the value is an FNV-1a hash of
+/// title and authors, so two copies of the same edition derive the *same*
+/// string by construction - it is the one identifier shape that provably
+/// carries no per-copy information.
+///
+/// Without the exemption the shape trips the digit-run screen below: the hash
+/// is 16 hex characters, ~10 of which are digits on average, so a clear
+/// majority of these clear `digit_count >= 8` and read as per-copy. Measured
+/// over ten real titles, 8 of 10 did. `normalize` dropping one is invisible
+/// (the writer re-derives the identical value), but a *diagnostic* built on
+/// the same screen would tell the user that a book epub-tailor itself just
+/// cleaned is watermarked.
+const SYNTHESIZED_IDENTIFIER_PREFIX: &str = "urn:epub-tailor:";
+
+/// What kind of identifier a value is, for both the drop decision and the
+/// diagnostic that explains it.
+///
+/// [`is_shared`] is defined in terms of this, so the destructive pass and
+/// `check`'s reporting cannot disagree about what counts as a watermark - the
+/// failure mode being a `check` that stays silent about an identifier
+/// `--profile generic` then drops, or shouts about one it keeps.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PerCopyKind {
+    /// Kept: an edition identifier, or one that provably converges.
+    Shared,
+    /// A bare UUID. The EPUB 3 default unique identifier, minted per *build*
+    /// far more often than per copy - so ubiquitous that reporting it as a
+    /// watermark would fire on nearly every book and drown every real signal.
+    Uuid,
+    /// A shape that exists only to name one buyer: an email address, or a DOI
+    /// whose own registrant/suffix betray it.
+    Distinctive,
+    /// A long digit run that is not a checksum-valid ISBN/ISSN - a vendor
+    /// transaction id, a millisecond timestamp, a build hash. Suggestive of a
+    /// watermark, never proof of one.
+    Opaque,
+}
+
+/// Classify an identifier: the single judgment [`is_shared`] and `check`'s
+/// `watermark-identifier` finding are both derived from.
 ///
 /// An explicitly declared shared scheme wins over the *heuristic* part of the
 /// judgment, so an ISBN whose value happens not to checksum (a typo, an
@@ -364,19 +405,46 @@ fn matches_declared_scheme_shape(value: &str, scheme: &str) -> bool {
 /// Anything the shortcut declines falls through to the normal per-copy
 /// screening, exactly as if no scheme had been declared. Both gates are the
 /// strict direction - they can only drop more, never keep more.
-fn is_shared(value: &str, scheme: Option<&str>) -> bool {
-    if looks_per_copy_regardless_of_scheme(value) {
-        return false;
+pub(crate) fn classify(value: &str, scheme: Option<&str>) -> PerCopyKind {
+    let v = value.trim();
+    if v.to_ascii_lowercase()
+        .starts_with(SYNTHESIZED_IDENTIFIER_PREFIX)
+    {
+        return PerCopyKind::Shared;
     }
+    // Split `looks_per_copy_regardless_of_scheme`'s verdict into its reasons.
+    // The order mirrors that function exactly - an email is decided before the
+    // UUID shapes, which are decided before the DOI screen - so the two agree
+    // on every value by construction rather than by inspection.
+    if v.contains('@') {
+        return PerCopyKind::Distinctive;
+    }
+    if v.to_ascii_lowercase().contains("urn:uuid:") || looks_like_uuid(v) {
+        return PerCopyKind::Uuid;
+    }
+    let core = strip_scheme_prefix(v);
+    if matches!(doi_parts(core), Some((r, s)) if doi_looks_per_copy(r, s)) {
+        return PerCopyKind::Distinctive;
+    }
+
     if let Some(s) = scheme {
         let declared = s.to_ascii_lowercase();
         if SHARED_SCHEMES.contains(&declared.as_str())
-            && matches_declared_scheme_shape(value, &declared)
+            && matches_declared_scheme_shape(v, &declared)
         {
-            return true;
+            return PerCopyKind::Shared;
         }
     }
-    !is_per_copy(value)
+    if is_per_copy(v) {
+        PerCopyKind::Opaque
+    } else {
+        PerCopyKind::Shared
+    }
+}
+
+/// Whether an identifier is kept. See [`classify`] for the judgment itself.
+fn is_shared(value: &str, scheme: Option<&str>) -> bool {
+    matches!(classify(value, scheme), PerCopyKind::Shared)
 }
 
 /// Drop per-copy identifiers and, when the book's own unique identifier is one,
@@ -1037,5 +1105,88 @@ mod tests {
             1,
             "a genuine ISBN behind a genuine refinement must be kept: {transformations:?}"
         );
+    }
+
+    // -- classify: the judgment `check` reports and `normalize` acts on ----
+
+    /// Every value the rest of this module pins a verdict for, so the drift
+    /// check below covers the same ground the drop decision is tested on
+    /// rather than a fresh, friendlier sample.
+    fn classification_corpus() -> Vec<(&'static str, Option<&'static str>)> {
+        let mut cases: Vec<(&str, Option<&str>)> = vec![
+            ("978-3-407-86821-3", None),
+            ("080442957X", None),
+            ("9783407868213", Some("ISBN")),
+            ("urn:isbn:9783407868213", Some("ISBN")),
+            ("2049-3630", Some("ISSN")),
+            ("9783407868214", Some("ISBN")),
+            ("9783407868214", None),
+            ("not-a-real-isbn-shape", Some("ISBN")),
+            ("not-a-real-isbn-shape", None),
+            ("SHTX001.635962014", None),
+            ("urn:uuid:0d2b2f1e-3c4a-4b5c-8d9e-0f1a2b3c4d5e", None),
+            ("buyer@example.com", None),
+            ("10.0000/TXN-A", Some("DOI")),
+            ("urn:epub-tailor:47838272f6d0c223", None),
+        ];
+        for doi in REAL_DOIS {
+            cases.push((doi, Some("DOI")));
+            cases.push((doi, None));
+        }
+        cases
+    }
+
+    #[test]
+    fn classify_and_is_shared_never_disagree() {
+        // The pin that lets `check` reuse this judgment: a value classified
+        // `Shared` is exactly a value `normalize` keeps. If these two ever
+        // drift, `check` starts either hiding a watermark `generic` removes or
+        // inventing one it does not.
+        for (value, scheme) in classification_corpus() {
+            assert_eq!(
+                matches!(classify(value, scheme), PerCopyKind::Shared),
+                is_shared(value, scheme),
+                "classify and is_shared disagree about {value:?} (scheme {scheme:?})"
+            );
+        }
+    }
+
+    #[test]
+    fn the_synthesized_identifier_is_shared_however_many_digits_its_hash_has() {
+        // `urn:epub-tailor:<16 hex>` is derived from title and authors, so it
+        // converges across copies and must never read as a watermark. The
+        // digit count of the hash is the whole hazard: these two differ only
+        // in that (13 digits vs 6), and without the prefix exemption the first
+        // would be reported as per-copy and the second would not.
+        for hash in ["47838272f6d0c223", "ada9f43a24de0cba"] {
+            let value = format!("urn:epub-tailor:{hash}");
+            assert_eq!(
+                classify(&value, None),
+                PerCopyKind::Shared,
+                "the writer's own synthesized identifier must be kept: {value}"
+            );
+        }
+    }
+
+    #[test]
+    fn classify_separates_a_bare_uuid_from_a_genuinely_distinctive_value() {
+        // A bare UUID is the EPUB 3 default and says nothing on its own; an
+        // email address or a placeholder-registrant DOI names a buyer. Both
+        // are dropped, but only the second is worth telling the user about,
+        // which is the whole reason this returns a kind and not a bool.
+        assert_eq!(
+            classify("urn:uuid:0d2b2f1e-3c4a-4b5c-8d9e-0f1a2b3c4d5e", None),
+            PerCopyKind::Uuid
+        );
+        assert_eq!(
+            classify("buyer@example.com", None),
+            PerCopyKind::Distinctive
+        );
+        assert_eq!(
+            classify("10.0000/TXN-A", Some("DOI")),
+            PerCopyKind::Distinctive
+        );
+        assert_eq!(classify("SHTX001.635962014", None), PerCopyKind::Opaque);
+        assert_eq!(classify("978-3-407-86821-3", None), PerCopyKind::Shared);
     }
 }

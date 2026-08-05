@@ -108,15 +108,29 @@ pub fn scrub(text: &str) -> (String, usize) {
     (out, removed)
 }
 
-/// Scrub invisible fingerprint characters from every text node in `doc`, with
-/// the joiner-protection decision made against the concatenation of the whole
-/// document's text in document order - not each text node in isolation - so a
-/// joiner whose true neighbours live in a sibling node is still protected.
-/// Returns the number of characters removed.
-pub(crate) fn scrub_dom(doc: &NodeRef) -> usize {
-    // Each text node, paired with its `[start, end)` character range in the
-    // concatenated document text.
-    let mut nodes: Vec<(NodeRef, usize, usize)> = Vec::new();
+/// A text node with its `[start, end)` character range in the concatenated
+/// document text.
+type TextSpan = (NodeRef, usize, usize);
+
+/// Every text span in a document, the concatenated text, and the keep/drop
+/// decision per character. See [`mask_dom`].
+type DomMask = (Vec<TextSpan>, Vec<char>, Vec<bool>);
+
+/// Every text node in `doc` with its `[start, end)` character range in the
+/// concatenated document text, the concatenated text itself, and the keep/drop
+/// decision for each character.
+///
+/// The concatenation is the point: the joiner-protection decision in
+/// [`keep_mask`] is made against the whole document's text in document order,
+/// not each text node in isolation, so a joiner whose true neighbours live in
+/// a sibling node is still protected.
+///
+/// Shared by [`scrub_dom`] and [`count_dom`] so the number `check` reports is
+/// exactly the number `generic` would remove. That protection rule is subtle
+/// enough that a second, count-only implementation would drift apart from this
+/// one the first time either was touched.
+fn mask_dom(doc: &NodeRef) -> DomMask {
+    let mut nodes: Vec<TextSpan> = Vec::new();
     let mut chars: Vec<char> = Vec::new();
     for node in doc.inclusive_descendants() {
         let Some(cell) = node.as_text() else {
@@ -127,10 +141,29 @@ pub(crate) fn scrub_dom(doc: &NodeRef) -> usize {
         let end = chars.len();
         nodes.push((node, start, end));
     }
+    let keep = if chars.is_empty() {
+        Vec::new()
+    } else {
+        keep_mask(&chars)
+    };
+    (nodes, chars, keep)
+}
+
+/// How many invisible fingerprint characters `doc` carries, without touching
+/// it. The read-only half of [`scrub_dom`], for `check`'s `watermark-invisible`
+/// finding.
+pub(crate) fn count_dom(doc: &NodeRef) -> usize {
+    let (_, _, keep) = mask_dom(doc);
+    keep.iter().filter(|k| !**k).count()
+}
+
+/// Scrub invisible fingerprint characters from every text node in `doc`.
+/// Returns the number of characters removed.
+pub(crate) fn scrub_dom(doc: &NodeRef) -> usize {
+    let (nodes, chars, keep) = mask_dom(doc);
     if chars.is_empty() {
         return 0;
     }
-    let keep = keep_mask(&chars);
     let mut removed = 0usize;
     for (node, start, end) in nodes {
         let dropped = keep[start..end].iter().filter(|k| !**k).count();

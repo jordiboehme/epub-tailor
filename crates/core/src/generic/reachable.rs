@@ -37,7 +37,7 @@ use aho_corasick::AhoCorasick;
 
 use super::normalize_media_type;
 use crate::epub::Book;
-use crate::epub::model::{Resource, normalize_href};
+use crate::epub::model::normalize_href;
 use crate::html::dom::{collect_by_name, get_attr_local, local_name};
 use crate::html::parse::parse_xhtml;
 use crate::report::{Transformation, Warning};
@@ -390,7 +390,7 @@ fn basename_of(path: &str) -> Option<&str> {
 /// literal bytes - a reference spelled with percent-encoding (`my%20pic.png`)
 /// will not match a dropped file named `my pic.png`. That is an existing,
 /// accepted limitation of a raw byte scan, not something this change alters.
-fn scan_for_dangling_basenames(
+pub(crate) fn scan_for_dangling_basenames(
     dropped: &[String],
     docs: &[(&str, &[u8])],
 ) -> Vec<(String, String)> {
@@ -526,34 +526,39 @@ fn opf_refs(opf: &str, base_dir: &str) -> Vec<String> {
     out
 }
 
-/// Every path `resource` (whose directory is `dir`) names, dispatched by its
-/// (normalized) media type. The graph walk's only extraction logic -
-/// deliberately NOT reused by [`prune`]'s post-removal safety net, which
-/// exists specifically to catch what this function fails to extract (see the
-/// module docs).
-fn refs_of(resource: &Resource, dir: &str) -> Vec<String> {
-    match normalize_media_type(&resource.media_type).as_str() {
-        "text/css" => match std::str::from_utf8(&resource.data) {
+/// Every path a resource of `media_type` (whose directory is `dir`) names.
+/// The graph walk's only extraction logic - deliberately NOT reused by
+/// [`prune`]'s post-removal safety net, which exists specifically to catch
+/// what this function fails to extract (see the module docs).
+///
+/// Takes the media type and bytes rather than a `&Resource` so `validate`'s
+/// standalone reachability lint can walk a freshly-read archive with the same
+/// extraction the destructive pass uses. One implementation, two callers: the
+/// module docs record what a second one cost last time (a dead `xlink:href`
+/// lookup that silently deleted real cover art).
+pub(crate) fn refs_of(media_type: &str, data: &[u8], dir: &str) -> Vec<String> {
+    match normalize_media_type(media_type).as_str() {
+        "text/css" => match std::str::from_utf8(data) {
             Ok(text) => css_refs(text, dir),
             Err(_) => Vec::new(),
         },
         // XML formats, parsed separately rather than through the HTML5 tree
         // builder below, whose tag set/self-closing handling doesn't match
         // arbitrary XML.
-        "application/x-dtbncx+xml" => match std::str::from_utf8(&resource.data) {
+        "application/x-dtbncx+xml" => match std::str::from_utf8(data) {
             Ok(text) => ncx_refs(text, dir),
             Err(_) => Vec::new(),
         },
-        "application/smil+xml" => match std::str::from_utf8(&resource.data) {
+        "application/smil+xml" => match std::str::from_utf8(data) {
             Ok(text) => smil_refs(text, dir),
             Err(_) => Vec::new(),
         },
-        "application/oebps-package+xml" => match std::str::from_utf8(&resource.data) {
+        "application/oebps-package+xml" => match std::str::from_utf8(data) {
             Ok(text) => opf_refs(text, dir),
             Err(_) => Vec::new(),
         },
         "application/xhtml+xml" | "image/svg+xml" => {
-            let Ok(doc) = parse_xhtml(&resource.data) else {
+            let Ok(doc) = parse_xhtml(data) else {
                 return Vec::new();
             };
             let mut refs = Vec::new();
@@ -648,7 +653,7 @@ pub(crate) fn prune(
         }
         if let Some(resource) = book.resources.get(&path) {
             let dir = parent_dir(&path);
-            queue.extend(refs_of(resource, &dir));
+            queue.extend(refs_of(&resource.media_type, &resource.data, &dir));
         }
         if let Some(targets) = srcset_by_document.get(&path) {
             queue.extend(targets.iter().cloned());

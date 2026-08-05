@@ -742,7 +742,7 @@ pub fn convert(input: Input, opts: &ConvertOptions) -> Result<Converted, Convert
                 );
             }
         }
-        let findings = validate::lint_epub(&epub, &opts.device, &opts.features);
+        let findings = validate::lint_epub(&epub, &opts.device, &opts.features, &opts.filters);
         let warned_paths: HashSet<&str> =
             warnings.iter().filter_map(|w| w.file.as_deref()).collect();
         let unexplained_errors: Vec<&validate::LintFinding> = findings

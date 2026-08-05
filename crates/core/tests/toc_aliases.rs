@@ -65,7 +65,7 @@ fn toc_fragment_follows_anchor_alias_through_convert() {
     )
     .expect("conversion should succeed");
 
-    let findings = lint_epub(&converted.epub, &DeviceCaps::x4(), &Features::all_on());
+    let findings = lint_epub(&converted.epub, &DeviceCaps::x4(), &Features::all_on(), &[]);
     assert!(
         !findings.iter().any(|f| f.code == "spine-toc-sync"),
         "TOC fragment must follow the anchor alias, got {findings:#?}"

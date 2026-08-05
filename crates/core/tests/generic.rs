@@ -208,21 +208,9 @@ fn a_media_overlay_and_fallback_survive_the_rebuild() {
 }
 
 /// A one-pixel JPEG carrying an APP1 (EXIF) segment.
-fn jpeg_with_exif() -> Vec<u8> {
-    let mut out = vec![0xFF, 0xD8]; // SOI
-    // APP1 with an EXIF header and an identifying payload.
-    let payload = b"Exif\0\0BUYER-635962014";
-    out.extend_from_slice(&[0xFF, 0xE1]);
-    out.extend_from_slice(&((payload.len() + 2) as u16).to_be_bytes());
-    out.extend_from_slice(payload);
-    // A minimal but structurally valid scan: SOS then EOI.
-    out.extend_from_slice(&[0xFF, 0xDA, 0x00, 0x02, 0xFF, 0xD9]);
-    out
-}
-
 #[test]
 fn generic_strips_exif_but_keeps_the_pixels() {
-    let jpeg = jpeg_with_exif();
+    let jpeg = common::jpeg_with_exif();
     let mut book = common::book_with_image("OEBPS/pic.jpg", &jpeg);
     let out = convert(
         Input::Epub(std::mem::take(&mut book)),

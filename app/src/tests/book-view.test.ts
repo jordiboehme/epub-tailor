@@ -16,7 +16,10 @@ import {
   effectiveMeta,
   failureOf,
   findingsOf,
-  needsCleanup,
+  isFixable,
+  concernOf,
+  repairProfiles,
+  conditionSummary,
   TONE_CLASS,
 } from "../lib/api/book-view";
 import type { BookFile, BookMeta } from "../lib/stores/books.svelte";
@@ -35,6 +38,9 @@ function makeFile(overrides: Partial<BookFile> = {}): BookFile {
     size: 100,
     modifiedMs: 0,
     ingest: "done",
+    // Explicit rather than defaulted: every test then states whether the
+    // automatic check has run, which is what `fileCondition` keys off.
+    check: "done",
     ...overrides,
   };
 }
@@ -267,15 +273,105 @@ describe("findingsOf", () => {
   });
 });
 
-describe("needsCleanup", () => {
+describe("concernOf", () => {
+  const f = (code: string, category?: string, severity = "warning") =>
+    ({ severity, code, category, message: "m", path: null }) as never;
+
+  it("maps every real category to the concern the UI acts on", () => {
+    expect(concernOf(f("manifest-sync", "structure"))).toBe("defect");
+    expect(concernOf(f("watermark-identifier", "watermark"))).toBe("watermark");
+    expect(concernOf(f("unreferenced", "waste"))).toBe("bloat");
+    expect(concernOf(f("image-format", "device"))).toBe("device");
+  });
+
+  it("singles out DRM, the one concern no profile can repair", () => {
+    // The CLI files DRM under `structure` because that is what it is. The app
+    // has to treat it differently anyway: every other structural finding gets
+    // a repair button, and this one must not.
+    expect(concernOf(f("drm", "structure", "error"))).toBe("blocked");
+    // ...but the Info "font obfuscation only, safe to process" is not a wall.
+    expect(concernOf(f("drm", "structure", "info"))).toBe("defect");
+  });
+
+  it("still classifies a finding from a sidecar that predates the category field", () => {
+    expect(concernOf(f("watermark-invisible", undefined))).toBe("watermark");
+    expect(concernOf(f("unreferenced", undefined))).toBe("bloat");
+    expect(concernOf(f("fonts", undefined))).toBe("device");
+  });
+
+  it("files an unknown future code as a defect rather than dropping it", () => {
+    // The graceful-degradation guard. A code this app has never heard of must
+    // still reach the user; the row tint is driven by severity, so an unknown
+    // info stays quiet regardless.
+    expect(concernOf(f("some-check-invented-next-year", undefined))).toBe("defect");
+    expect(concernOf(f("another-new-one", "structure"))).toBe("defect");
+  });
+});
+
+describe("repairProfiles", () => {
+  it("never composes generic implicitly, whatever the concerns", () => {
+    // Running `generic` replaces the book's unique identifier, which orphans
+    // the reader's bookmarks. That is a decision the user makes by name, via
+    // the separate action - never a side effect of a button called "Clean up".
+    expect(repairProfiles(["defect"])).toEqual(["epub"]);
+    expect(repairProfiles(["watermark"])).toEqual(["epub"]);
+    expect(repairProfiles(["bloat"])).toEqual(["epub"]);
+    expect(repairProfiles(["watermark", "bloat", "defect"])).not.toContain("generic");
+  });
+});
+
+describe("conditionSummary", () => {
+  it("counts broken and needs-attention files separately", () => {
+    const warn = { severity: "warning" as const, code: "W", message: "m", path: null };
+    const err = { severity: "error" as const, code: "E", message: "m", path: null };
+    const files = [
+      makeFile({ id: "a" }),
+      makeFile({ id: "b", cleanup: checkReport({ findings: [warn], warnings: 1 }) }),
+      makeFile({ id: "c", cleanup: checkReport({ findings: [err], errors: 1 }) }),
+    ];
+    expect(conditionSummary(files)).toEqual({ attention: 1, broken: 1 });
+  });
+
+  it("does not count an info-only book as needing attention", () => {
+    // Every font-obfuscated EPUB carries a `drm` Info saying it is safe to
+    // process. Before severity mattered, all of them shouted.
+    const info = { severity: "info" as const, code: "drm", message: "safe", path: null };
+    const files = [makeFile({ cleanup: checkReport({ findings: [info] }) })];
+    expect(conditionSummary(files)).toEqual({ attention: 0, broken: 0 });
+  });
+});
+
+describe("isFixable", () => {
   const finding = { severity: "warning" as const, code: "W1", message: "m", path: null };
 
-  it("is true only when the automatic check found something", () => {
-    expect(needsCleanup(makeFile())).toBe(false);
-    expect(needsCleanup(makeFile({ cleanup: checkReport() }))).toBe(false);
+  it("is true only when the automatic check found something a repair can fix", () => {
+    expect(isFixable(makeFile())).toBe(false);
+    expect(isFixable(makeFile({ cleanup: checkReport() }))).toBe(false);
     expect(
-      needsCleanup(makeFile({ cleanup: checkReport({ findings: [finding], warnings: 1 }) })),
+      isFixable(makeFile({ cleanup: checkReport({ findings: [finding], warnings: 1 }) })),
     ).toBe(true);
+  });
+
+  it("is false for DRM, which no profile can repair", () => {
+    // The bug this replaces: `needsCleanup` was severity- and code-blind, so a
+    // copy-protected book was offered a Clean up button that could only fail
+    // after parking a junk copy in the Trash.
+    const drm = {
+      severity: "error" as const,
+      code: "drm",
+      category: "structure" as const,
+      message: "encrypted",
+      path: null,
+    };
+    expect(isFixable(makeFile({ cleanup: checkReport({ findings: [drm], errors: 1 }) }))).toBe(
+      false,
+    );
+  });
+
+  it("is false while the check is still running or never ran", () => {
+    const cleanup = checkReport({ findings: [finding], warnings: 1 });
+    expect(isFixable(makeFile({ cleanup, check: "pending" }))).toBe(false);
+    expect(isFixable(makeFile({ cleanup, check: "failed" }))).toBe(false);
   });
 });
 
@@ -457,12 +553,54 @@ describe("chipsFor", () => {
     const book = makeFile({ cleanup: checkReport({ findings: [finding], warnings: 1 }) });
     expect(chipsFor(book)).toEqual([
       {
-        id: "needs-cleanup",
+        id: "condition",
         label: "needs cleanup",
         tone: "warn",
-        title: "1 finding from the automatic check",
+        title: "needs cleanup - 1 finding from the automatic check",
       },
     ]);
+  });
+
+  it("names the worst concern and admits to the rest with a +N", () => {
+    // One pill, not three: a chip per concern is a wall of noise across a
+    // twenty-book drop, and the eye stops reading the column entirely.
+    const cleanup = checkReport({
+      findings: [
+        { severity: "warning", code: "watermark-identifier", category: "watermark", message: "m", path: null },
+        { severity: "info", code: "unreferenced", category: "waste", message: "m", path: null },
+        { severity: "error", code: "manifest-sync", category: "structure", message: "m", path: null },
+      ],
+      errors: 1,
+      warnings: 1,
+    });
+    const [chip] = chipsFor(makeFile({ cleanup }));
+    expect(chip.label).toBe("defective +2");
+    expect(chip.tone).toBe("bad");
+    expect(chip.title).toContain("watermarked");
+    expect(chip.title).toContain("extra files");
+  });
+
+  it("says a copy-protected book is copy protected, not that it needs cleaning", () => {
+    const cleanup = checkReport({
+      findings: [
+        { severity: "error", code: "drm", category: "structure", message: "encrypted", path: null },
+      ],
+      errors: 1,
+    });
+    expect(chipsFor(makeFile({ cleanup }))[0]).toMatchObject({
+      label: "copy protected",
+      tone: "bad",
+    });
+  });
+
+  it("says nothing at all while the check is still running", () => {
+    // A row must never read "clean" and then flip to "defective".
+    expect(chipsFor(makeFile({ check: "pending" }))).toEqual([]);
+  });
+
+  it("admits it never checked rather than implying nothing was found", () => {
+    const chip = chipsFor(makeFile({ check: "failed", checkError: { code: "io-error", friendly: "boom" } }))[0];
+    expect(chip).toMatchObject({ label: "not checked", tone: "neutral", title: "boom" });
   });
 
   it("keeps the cleanup flag next to a fit result but not over a check or failure", () => {
