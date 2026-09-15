@@ -4,6 +4,10 @@ members = ["crates/core", "crates/cli", "crates/testfixtures", "xtask", "app/src
 
 [workspace.package]
 edition = "2024"
+# The floor the dependency tree needs (askama 0.16, encoding_rs 0.8.40). With
+# `resolver = "3"` this also makes `cargo update` resolve against a fixed
+# version instead of whatever toolchain happens to run it.
+rust-version = "1.88"
 license = "MIT"
 repository = "https://github.com/jordiboehme/epub-tailor"
 version = "0.9.0"
@@ -43,13 +47,13 @@ unicode-normalization = "0.1"
 # every dropped file's basename in every surviving document, which as a needle
 # loop is O(dropped x bytes). Already in the tree via `regex`.
 aho-corasick = "1"
-sha1 = "0.10"
+sha1 = "0.11"
 # Default features pull in the standalone `comrak` CLI binary (clap, bon,
 # shell-words, xdg) and syntax highlighting (syntect-onig) - none of which we
 # use (M3 already owns code-block handling); dropping them also drops
 # `fmt2io` (MITNFA, not on the license allow-list) and syntect's `bincode`/
 # `yaml-rust` transitive deps (both unmaintained per `cargo deny`).
-comrak = { version = "0.54", default-features = false }
+comrak = { version = "0.55", default-features = false }
 serde_yaml_ng = "0.10"
 askama = "0.16"
 # Blocking HTTP for the optional Open Library lookup. Deliberately ureq: it is
