@@ -113,7 +113,10 @@ const BUILTINS: &[Builtin] = &[
     // modern-reader base.
     Builtin {
         name: "x4",
-        aliases: &[],
+        // The X4 Pro (firmware 1.6.0) and X4 Classic (1.6.5rc) share the
+        // X4's 800x480 panel and its CrossPoint engine; nothing about them
+        // needs a profile of its own.
+        aliases: &["x4-pro", "x4-classic"],
         layers: &[X4_JSON],
     },
     Builtin {
@@ -352,6 +355,7 @@ struct RawScreen {
 #[serde(deny_unknown_fields)]
 struct RawImages {
     max_source_px: Option<(u32, u32)>,
+    max_source_area_px: Option<u64>,
     inline_max: Option<(u32, u32)>,
     cover_max: Option<(u32, u32)>,
     inline_budget_kb: Option<usize>,
@@ -493,6 +497,9 @@ fn apply_layer(profile: &mut Profile, raw: RawProfile) {
         if let Some(images) = device.images {
             if let Some(max_source_px) = images.max_source_px {
                 profile.caps.max_src_px = max_source_px;
+            }
+            if let Some(area) = images.max_source_area_px {
+                profile.caps.max_src_area = area;
             }
             if let Some(inline_max) = images.inline_max {
                 profile.caps.inline_max = inline_max;

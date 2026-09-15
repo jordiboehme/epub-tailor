@@ -39,7 +39,8 @@ fn x4_caps_pin_the_documented_firmware_limits() {
     assert_eq!(caps.screen_h, 800);
     assert_eq!(caps.ppi, 220);
     assert_eq!(caps.panel, Panel::Gray4);
-    assert_eq!(caps.max_src_px, (2048, 1536));
+    assert_eq!(caps.max_src_px, (32_767, 32_767));
+    assert_eq!(caps.max_src_area, 8_388_608);
     assert_eq!(caps.inline_max, (480, 730));
     assert_eq!(caps.cover_max, (480, 800));
     assert_eq!(caps.inline_budget_bytes, 100 * 1024);
@@ -493,4 +494,29 @@ fn generic_composes_with_a_device_profile_in_either_order() {
     );
     assert!(a.features.transcode_images, "the device layer survives");
     assert!(a.features.normalize_identity, "the generic layer survives");
+}
+
+#[test]
+fn a_profile_layer_can_set_the_decode_area_cap() {
+    let path = temp_profile(
+        "area.json",
+        r#"{ "device": { "images": { "max_source_area_px": 1000000 } } }"#,
+    );
+    let p = resolve_specs(&["x4", path.to_str().unwrap()]).expect("composition resolves");
+    assert_eq!(p.caps.max_src_area, 1_000_000);
+    // Untouched by the layer: the per-side cap stays the x4 value.
+    assert_eq!(p.caps.max_src_px, (32_767, 32_767));
+}
+
+#[test]
+fn the_x4_pro_and_classic_resolve_to_the_x4_profile() {
+    // Same 800x480 panel and the same CrossPoint engine (firmware 1.6.0 and
+    // 1.6.5rc device docs), so the same caps and switches apply.
+    let x4 = resolve_specs(&["x4"]).expect("x4 resolves");
+    for alias in ["x4-pro", "x4-classic", "X4-Pro"] {
+        let p = resolve_specs(&[alias]).expect("alias resolves");
+        assert_eq!(p.name, "x4", "{alias}");
+        assert_eq!(p.features, x4.features, "{alias}");
+        assert_eq!(p.caps, x4.caps, "{alias}");
+    }
 }

@@ -1,11 +1,16 @@
-//! Decide each table's fate and linearize the ones that stay text.
+//! Decide each table's fate: keep it, linearize it, or rasterize it.
 //!
-//! The firmware has no table layout at all and drops nested tables outright.
-//! Under [`TableMode::Text`] every table is flattened to a sequence of
+//! CrossPoint 1.5.0+ lays a simple table out as a real grid (at most four
+//! columns, no spans, no links, short cells) and "stacks" anything else into
+//! unlabeled paragraphs. [`native_grid_blocker`] mirrors those rules: a table
+//! that passes is kept as markup under [`TableMode::Text`] and
+//! [`TableMode::Image`]; [`TableMode::ImageAll`] photographs it anyway.
+//!
+//! Under [`TableMode::Text`] every other table is flattened to a sequence of
 //! paragraphs; with a header row each body cell becomes a "Header: value"
-//! paragraph, without one each row becomes a single em-dash-separated paragraph.
-//! Innermost tables are processed first so a nested table's content survives as
-//! paragraphs inside its parent's cell.
+//! paragraph, without one each row becomes a single em-dash-separated
+//! paragraph. Innermost tables are processed first so a nested table's
+//! content survives as paragraphs inside its parent's cell.
 //!
 //! Under [`TableMode::Image`]/[`TableMode::ImageAll`], [`table_decision`] picks
 //! per top-level table between rasterization (the table is left intact and
@@ -81,6 +86,22 @@ pub(crate) fn linearize_tables(
 ) {
     let mode = opts.tables;
     for table in top_level_tables(doc) {
+        // A table the device lays out as a real grid is better left alone
+        // than flattened or photographed. Only `ImageAll` overrides that: the
+        // user asked for pictures by name.
+        if mode != TableMode::ImageAll {
+            match native_grid_blocker(&table) {
+                None => {
+                    keep_table(&table, report, chapter_path);
+                    continue;
+                }
+                Some(reason) if mode == TableMode::Text => {
+                    linearize_table_node(&table, report, chapter_path, Some(reason));
+                    continue;
+                }
+                Some(_) => {}
+            }
+        }
         match mode {
             TableMode::Text => linearize_table_node(&table, report, chapter_path, None),
             TableMode::Image | TableMode::ImageAll => match table_decision(&table, mode) {
@@ -113,6 +134,96 @@ fn has_table_ancestor(table: &NodeRef) -> bool {
         current = node.parent();
     }
     false
+}
+
+/// The firmware's own limits for laying a table out as a grid (CrossPoint
+/// 1.5.0+, `ChapterHtmlSlimParser.h:92-103`): at most this many columns, and
+/// per cell at most this many words and bytes. A table past any of them is
+/// "stacked" on the device, each cell an unlabeled paragraph, which reads
+/// worse than our own linearization.
+const NATIVE_GRID_MAX_COLUMNS: usize = 4;
+const NATIVE_GRID_MAX_CELL_WORDS: usize = 32;
+const NATIVE_GRID_MAX_CELL_BYTES: usize = 512;
+
+/// Why `table` cannot be left for the device to render as a grid, or `None`
+/// when it can. Mirrors the firmware's simple-row rules, plus the things it
+/// would silently degrade: a nested table flattens into the cell, an `hr` is
+/// dropped, an image becomes its alt text, a link or an anchor inside a grid
+/// cell is lost or forces the stacked layout, block content collapses to a
+/// word boundary, a caption has no home. A single-column table is not a grid
+/// worth keeping either; it unwraps to paragraphs better.
+pub(crate) fn native_grid_blocker(table: &NodeRef) -> Option<&'static str> {
+    if has_descendant_named(table, &["table"]) {
+        return Some("nested table");
+    }
+    if table.inclusive_descendants().any(|n| has_id(&n)) {
+        return Some("anchor targets");
+    }
+    if table
+        .descendants()
+        .any(|n| is_named(&n, "a") && get_attr(&n, "href").is_some())
+    {
+        return Some("links");
+    }
+    if has_descendant_named(table, &["img", "svg", "image"]) {
+        return Some("images");
+    }
+    if has_descendant_named(table, &["hr"]) {
+        return Some("rules");
+    }
+    if has_descendant_named(table, &["caption"]) {
+        return Some("caption");
+    }
+    let mut columns = 0usize;
+    for row in collect_rows(table) {
+        let cells = cells_of(&row);
+        columns = columns.max(cells.len());
+        for cell in cells {
+            if spans_more_than_one(&cell) {
+                return Some("spanning cells");
+            }
+            if cell.descendants().any(|n| is_cell_block(&n)) {
+                return Some("block content in cells");
+            }
+            let text = text_content(&cell);
+            if text.split_whitespace().count() > NATIVE_GRID_MAX_CELL_WORDS
+                || text.len() > NATIVE_GRID_MAX_CELL_BYTES
+            {
+                return Some("long cells");
+            }
+        }
+    }
+    if columns < 2 {
+        return Some("single column");
+    }
+    if columns > NATIVE_GRID_MAX_COLUMNS {
+        return Some("more than 4 columns");
+    }
+    None
+}
+
+/// Whether a cell carries a `colspan` or `rowspan` above one (a missing or
+/// unparsable attribute counts as one, as the firmware treats it).
+fn spans_more_than_one(cell: &NodeRef) -> bool {
+    ["colspan", "rowspan"].iter().any(|attr| {
+        get_attr(cell, attr)
+            .and_then(|v| v.trim().parse::<u32>().ok())
+            .is_some_and(|n| n > 1)
+    })
+}
+
+/// Record that `table` stays as markup for the device's native grid layout.
+fn keep_table(table: &NodeRef, report: &mut Vec<Transformation>, chapter_path: &str) {
+    let columns = collect_rows(table)
+        .iter()
+        .map(|row| cells_of(row).len())
+        .max()
+        .unwrap_or(0);
+    report.push(Transformation {
+        kind: "table-kept".to_string(),
+        detail: format!("kept a table of {columns} columns for the device's native grid layout"),
+        file: Some(chapter_path.to_string()),
+    });
 }
 
 /// Decide whether a top-level `table` should be rasterized or linearized under
@@ -603,17 +714,32 @@ mod tests {
 
     #[test]
     fn implicit_header_first_row_all_th_snapshot() {
-        let (out, _) =
-            run("<table><tr><th>A</th><th>B</th></tr><tr><td>1</td><td>2</td></tr></table>");
+        // Five columns: past the device's grid limit, so it is linearized
+        // rather than kept, and the implicit-header path gets exercised.
+        let (out, _) = run(
+            "<table><tr><th>A</th><th>B</th><th>C</th><th>D</th><th>E</th></tr>\
+             <tr><td>1</td><td>2</td><td>3</td><td>4</td><td>5</td></tr></table>",
+        );
         insta::assert_snapshot!(out);
+        assert!(
+            !out.contains("<table"),
+            "five columns must be linearized: {out}"
+        );
     }
 
     #[test]
     fn headerless_row_snapshot() {
+        // Five columns: past the device's grid limit, so the headerless-row
+        // path is what gets exercised, not the pass-through.
         let (out, _) = run(
-            "<table><tr><td>a</td><td>b</td><td>c</td></tr><tr><td>d</td><td></td><td>f</td></tr></table>",
+            "<table><tr><td>a</td><td>b</td><td>c</td><td>d</td><td>e</td></tr>\
+             <tr><td>f</td><td></td><td>h</td><td>i</td><td>j</td></tr></table>",
         );
         insta::assert_snapshot!(out);
+        assert!(
+            !out.contains("<table"),
+            "five columns must be linearized: {out}"
+        );
     }
 
     #[test]
@@ -960,5 +1086,140 @@ mod tests {
             TableMode::ImageAll,
         );
         assert_eq!(d, Decision::Rasterize);
+    }
+
+    // --- Native grid pass-through (CrossPoint >= 1.5.0) ---------------------
+
+    #[test]
+    fn simple_table_is_kept_for_the_native_grid_snapshot() {
+        let (out, report) = run("<table><thead><tr><th>Item</th><th>Cost</th></tr></thead>\
+             <tbody><tr><td>Pen</td><td>1</td></tr><tr><td>Ink</td><td>2</td></tr></tbody></table>");
+        insta::assert_snapshot!(out);
+        assert!(out.contains("<table"), "a simple table must survive: {out}");
+        assert_eq!(report.len(), 1);
+        assert_eq!(report[0].kind, "table-kept");
+        assert!(
+            report[0].detail.contains("2 columns"),
+            "{}",
+            report[0].detail
+        );
+    }
+
+    #[test]
+    fn five_columns_are_linearized() {
+        let (out, report) = run(
+            "<table><tr><th>A</th><th>B</th><th>C</th><th>D</th><th>E</th></tr>\
+             <tr><td>1</td><td>2</td><td>3</td><td>4</td><td>5</td></tr></table>",
+        );
+        assert!(!out.contains("<table"), "{out}");
+        assert_eq!(report[0].kind, "table-linearized");
+        assert!(
+            report[0].detail.contains("more than 4 columns"),
+            "{}",
+            report[0].detail
+        );
+    }
+
+    #[test]
+    fn native_grid_blockers_name_their_reason() {
+        let blocker = |body: &str| {
+            let doc = doc_from_body(body);
+            let table = collect_by_name(&doc, "table").remove(0);
+            native_grid_blocker(&table)
+        };
+        assert_eq!(
+            blocker("<table><tr><td>a</td><td>b</td></tr></table>"),
+            None
+        );
+        assert_eq!(
+            blocker("<table><tr><td colspan=\"2\">a</td><td>b</td></tr></table>"),
+            Some("spanning cells")
+        );
+        assert_eq!(
+            blocker("<table><tr><td rowspan=\"2\">a</td><td>b</td></tr></table>"),
+            Some("spanning cells")
+        );
+        assert_eq!(
+            blocker("<table><tr><td><a href=\"#n1\">1</a></td><td>b</td></tr></table>"),
+            Some("links")
+        );
+        assert_eq!(
+            blocker("<table><tr><td><img src=\"x.png\"/></td><td>b</td></tr></table>"),
+            Some("images")
+        );
+        assert_eq!(
+            blocker(
+                "<table><tr><td><table><tr><td>i</td></tr></table></td><td>b</td></tr></table>"
+            ),
+            Some("nested table")
+        );
+        assert_eq!(
+            blocker("<table><tr><td id=\"t1\">a</td><td>b</td></tr></table>"),
+            Some("anchor targets")
+        );
+        assert_eq!(
+            blocker("<table><tr><td><hr/></td><td>b</td></tr></table>"),
+            Some("rules")
+        );
+        assert_eq!(
+            blocker("<table><caption>c</caption><tr><td>a</td><td>b</td></tr></table>"),
+            Some("caption")
+        );
+        assert_eq!(
+            blocker("<table><tr><td><p>a</p><p>b</p></td><td>b</td></tr></table>"),
+            Some("block content in cells")
+        );
+        assert_eq!(
+            blocker("<table><tr><td>only</td></tr></table>"),
+            Some("single column")
+        );
+        let long = "word ".repeat(33);
+        assert_eq!(
+            blocker(&format!(
+                "<table><tr><td>{long}</td><td>b</td></tr></table>"
+            )),
+            Some("long cells")
+        );
+        let bytes = "x".repeat(513);
+        assert_eq!(
+            blocker(&format!(
+                "<table><tr><td>{bytes}</td><td>b</td></tr></table>"
+            )),
+            Some("long cells")
+        );
+    }
+
+    #[test]
+    fn image_mode_keeps_a_simple_table_instead_of_rasterizing() {
+        let doc = doc_from_body(
+            "<table><tr><th>A</th><th>B</th><th>C</th></tr>\
+             <tr><td>1</td><td>2</td><td>3</td></tr></table>",
+        );
+        let mut report = Vec::new();
+        let opts = ConvertOptions {
+            tables: TableMode::Image,
+            ..ConvertOptions::default()
+        };
+        linearize_tables(&doc, &opts, &mut report, "ch.xhtml");
+        let out = serialize(&doc);
+        assert!(out.contains("<table"), "{out}");
+        assert!(
+            !out.contains("data-et-table-render"),
+            "must not be tagged for rendering: {out}"
+        );
+        assert_eq!(report[0].kind, "table-kept");
+    }
+
+    #[test]
+    fn image_all_mode_still_rasterizes_a_simple_table() {
+        let doc = doc_from_body("<table><tr><td>a</td><td>b</td></tr></table>");
+        let mut report = Vec::new();
+        let opts = ConvertOptions {
+            tables: TableMode::ImageAll,
+            ..ConvertOptions::default()
+        };
+        linearize_tables(&doc, &opts, &mut report, "ch.xhtml");
+        assert!(serialize(&doc).contains("data-et-table-render"));
+        assert!(report.is_empty());
     }
 }

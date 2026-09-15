@@ -53,8 +53,11 @@ pub struct DeviceCaps {
     pub ppi: u32,
     /// What the panel paints: grayscale (and at what depth) or color.
     pub panel: Panel,
-    /// Firmware decode hard cap: images larger than this abort decoding entirely.
+    /// Firmware decode hard cap per side: an image wider or taller than this
+    /// aborts decoding entirely.
     pub max_src_px: (u32, u32),
+    /// Firmware decode hard cap on total pixels (width times height).
+    pub max_src_area: u64,
     /// Target size to fit an inline (in-flow) image to, without upscaling.
     pub inline_max: (u32, u32),
     /// Target size to fit a cover image to, without upscaling.
@@ -77,7 +80,8 @@ impl DeviceCaps {
             screen_h: 800,
             ppi: 220,
             panel: Panel::Gray4,
-            max_src_px: (2048, 1536),
+            max_src_px: (32_767, 32_767),
+            max_src_area: 8_388_608,
             inline_max: (480, 730),
             cover_max: (480, 800),
             inline_budget_bytes: 100 * 1024,
@@ -94,7 +98,8 @@ impl DeviceCaps {
             screen_h: 792,
             ppi: 220,
             panel: Panel::Gray4,
-            max_src_px: (2048, 1536),
+            max_src_px: (32_767, 32_767),
+            max_src_area: 8_388_608,
             inline_max: (528, 722),
             cover_max: (528, 792),
             inline_budget_bytes: 100 * 1024,
@@ -119,6 +124,7 @@ impl DeviceCaps {
             ppi: 0,
             panel: Panel::Color,
             max_src_px: (u32::MAX, u32::MAX),
+            max_src_area: u64::MAX,
             inline_max: (u32::MAX, u32::MAX),
             cover_max: (u32::MAX, u32::MAX),
             inline_budget_bytes: usize::MAX,
@@ -140,7 +146,8 @@ mod tests {
         assert_eq!(c.screen_h, 800);
         assert_eq!(c.ppi, 220);
         assert_eq!(c.panel, Panel::Gray4);
-        assert_eq!(c.max_src_px, (2048, 1536));
+        assert_eq!(c.max_src_px, (32_767, 32_767));
+        assert_eq!(c.max_src_area, 8_388_608);
         assert_eq!(c.inline_max, (480, 730));
         assert_eq!(c.cover_max, (480, 800));
         assert_eq!(c.inline_budget_bytes, 100 * 1024);
@@ -156,7 +163,8 @@ mod tests {
         assert_eq!(c.screen_h, 792);
         assert_eq!(c.ppi, 220);
         assert_eq!(c.panel, Panel::Gray4);
-        assert_eq!(c.max_src_px, (2048, 1536));
+        assert_eq!(c.max_src_px, (32_767, 32_767));
+        assert_eq!(c.max_src_area, 8_388_608);
         assert_eq!(c.inline_max, (528, 722));
         assert_eq!(c.cover_max, (528, 792));
         assert_eq!(c.inline_budget_bytes, 100 * 1024);
@@ -170,6 +178,7 @@ mod tests {
         let p = DeviceCaps::permissive();
         for real in [DeviceCaps::x4(), DeviceCaps::x3()] {
             assert!(p.max_src_px.0 >= real.max_src_px.0);
+            assert!(p.max_src_area >= real.max_src_area);
             assert!(p.inline_max.1 >= real.inline_max.1);
             assert!(p.inline_budget_bytes >= real.inline_budget_bytes);
             assert!(p.css_max_bytes >= real.css_max_bytes);

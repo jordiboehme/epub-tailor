@@ -1156,17 +1156,19 @@ fn check_one_image(
         }
     }
 
-    if let Some((w, h)) = image_dimensions(data)
-        && (w > profile.max_src_px.0 || h > profile.max_src_px.1)
-    {
-        findings.push(LintFinding::error(
-            "image-format",
-            format!(
-                "{name} is {w}x{h}, over the device's {}x{} decode cap",
-                profile.max_src_px.0, profile.max_src_px.1
-            ),
-            Some(name.to_string()),
-        ));
+    if let Some((w, h)) = image_dimensions(data) {
+        let over_side = w > profile.max_src_px.0 || h > profile.max_src_px.1;
+        let over_area = u64::from(w) * u64::from(h) > profile.max_src_area;
+        if over_side || over_area {
+            findings.push(LintFinding::error(
+                "image-format",
+                format!(
+                    "{name} is {w}x{h}, over the device's decode cap ({} pixels, at most {}x{})",
+                    profile.max_src_area, profile.max_src_px.0, profile.max_src_px.1
+                ),
+                Some(name.to_string()),
+            ));
+        }
     }
 
     let budget = if opf.cover_href.as_deref() == Some(name) {
@@ -2065,6 +2067,67 @@ mod tests {
             !findings
                 .iter()
                 .any(|f| f.code == "drm" && f.severity == Severity::Error)
+        );
+    }
+
+    /// A real PNG of the given size, all black. `image_dimensions` reads only
+    /// the header, and a flat image deflates to a few KB, so a large one is
+    /// cheap to build.
+    fn gray_png(w: u32, h: u32) -> Vec<u8> {
+        let mut out = Cursor::new(Vec::new());
+        image::GrayImage::new(w, h)
+            .write_to(&mut out, image::ImageFormat::Png)
+            .expect("png encodes");
+        out.into_inner()
+    }
+
+    fn book_with_png(w: u32, h: u32) -> Vec<u8> {
+        let opf = minimal_opf(
+            r#"<item id="pic" href="images/pic.png" media-type="image/png"/>"#,
+            "",
+        );
+        let png = gray_png(w, h);
+        build_zip(&[
+            ("mimetype", b"application/epub+zip"),
+            ("META-INF/container.xml", CONTAINER_XML),
+            ("OEBPS/content.opf", &opf),
+            ("OEBPS/nav.xhtml", NAV),
+            ("OEBPS/text/chapter1.xhtml", CHAPTER1),
+            ("OEBPS/styles/main.css", MAIN_CSS),
+            ("OEBPS/images/pic.png", &png),
+        ])
+    }
+
+    #[test]
+    fn an_image_over_the_area_cap_is_flagged_even_when_each_side_fits() {
+        // 4000 x 2200 = 8.8 MP: both sides are under 32,767, the area is over
+        // the 8,388,608 the firmware decodes (1.6.0, PR #2959).
+        let findings = lint_epub(
+            &book_with_png(4000, 2200),
+            &DeviceCaps::x4(),
+            &Features::all_on(),
+            &[],
+        );
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.code == "image-format" && f.message.contains("decode cap")),
+            "got {findings:#?}"
+        );
+    }
+
+    #[test]
+    fn an_image_at_the_area_cap_is_not_flagged() {
+        // 4096 x 2048 = 8,388,608 exactly: at the cap, not over it.
+        let findings = lint_epub(
+            &book_with_png(4096, 2048),
+            &DeviceCaps::x4(),
+            &Features::all_on(),
+            &[],
+        );
+        assert!(
+            !findings.iter().any(|f| f.code == "image-format"),
+            "got {findings:#?}"
         );
     }
 
