@@ -1,7 +1,7 @@
 <script lang="ts">
   import { resolvePlans } from "../api/plan";
   import type { RunOptions } from "../api/argv";
-  import { conditionSummary, fileCondition, isFixable } from "../api/book-view";
+  import { conditionActions, conditionSummary, isFixable, repairProfiles } from "../api/book-view";
   import ConfirmDialog from "./ConfirmDialog.svelte";
   import { CLEANUP_PROFILE, WATERMARK_PROFILE } from "../api/argv";
   import { books, toTemplateFile } from "../stores/books.svelte";
@@ -65,10 +65,7 @@
   // off that value - so this costs the user their bookmarks, and it has to be
   // a thing they chose rather than a side effect of a button called "Clean up".
   const watermarkTargets = $derived(
-    targetFiles.filter((f) => {
-      const { concerns } = fileCondition(f);
-      return f.kind === "epub" && (concerns.includes("watermark") || concerns.includes("bloat"));
-    }),
+    targetFiles.filter((f) => f.kind === "epub" && conditionActions(f).includes("watermarks")),
   );
   const canRemoveWatermarks = $derived(watermarkTargets.length > 0 && !busy);
   let confirmWatermark = $state(false);
@@ -249,7 +246,7 @@
       : 'files'}?"
     confirmLabel="Remove watermarks"
     cancelLabel="Not now"
-    onConfirm={() => saveInPlace([...watermarkTargets], false, [CLEANUP_PROFILE, WATERMARK_PROFILE])}
+    onConfirm={() => saveInPlace([...watermarkTargets], false, repairProfiles("watermarks"))}
     onCancel={() => (confirmWatermark = false)}
   >
     This strips per-copy identifiers, invisible fingerprint characters, image metadata and files

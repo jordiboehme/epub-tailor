@@ -10,7 +10,7 @@
 
 import { stemOf } from "../stores/books.svelte";
 import type { Book, BookFile } from "../stores/books.svelte";
-import { CLEANUP_PROFILE } from "./argv";
+import { CLEANUP_PROFILE, WATERMARK_PROFILE } from "./argv";
 import { parseCopyName } from "./copies";
 import type { Finding, Stats } from "./contract";
 import { formatSize } from "./format";
@@ -156,8 +156,6 @@ export interface Condition {
   infos: number;
   /** Bytes an in-place repair would reclaim, where findings report a size. */
   wastedBytes: number;
-  /** Concerns an in-place repair can actually remove. */
-  fixable: Concern[];
 }
 
 /**
@@ -195,13 +193,6 @@ export function concernOf(finding: Finding): Concern {
 /** Precedence, worst first - the order a verdict pill picks its label from. */
 const CONCERN_ORDER: Concern[] = ["blocked", "defect", "watermark", "bloat", "device"];
 
-/**
- * Concerns an in-place repair removes. `device` is absent because fitting for
- * a device produces a *copy*, which is Fit mode's job, not a rewrite of the
- * user's book; `blocked` is absent because nothing removes DRM.
- */
-const FIXABLE: Concern[] = ["defect", "watermark", "bloat"];
-
 const EMPTY_CONDITION: Condition = {
   verdict: "unknown",
   concerns: [],
@@ -209,7 +200,6 @@ const EMPTY_CONDITION: Condition = {
   warnings: 0,
   infos: 0,
   wastedBytes: 0,
-  fixable: [],
 };
 
 /**
@@ -232,7 +222,6 @@ export function fileCondition(file: BookFile): Condition {
   const errors = count("error");
   const warnings = count("warning");
   const infos = count("info");
-  const fixable = concerns.filter((c) => FIXABLE.includes(c));
   // Severity, not concern, decides how loud this is. An `info`-only book is
   // worth mentioning but is not "needing attention" - which is what stops a
   // font-obfuscated book (a lone `drm` info saying "safe to process") from
@@ -245,7 +234,6 @@ export function fileCondition(file: BookFile): Condition {
     warnings,
     infos,
     wastedBytes: findings.reduce((sum, f) => sum + (f.bytes ?? 0), 0),
-    fixable,
   };
 }
 
@@ -264,22 +252,44 @@ export function bookCondition(book: Book): Condition {
 }
 
 /** Whether an in-place repair has anything to do for this file. */
+/** Whether Clean up applies: see `conditionActions`. */
 export function isFixable(file: BookFile): boolean {
-  return fileCondition(file).fixable.length > 0;
+  return conditionActions(file).includes("cleanup");
 }
 
 /**
- * The `--profile` specs an in-place repair needs for `concerns`.
- *
- * Structure is repaired by `epub` alone, which is bookmark-safe. Watermarks
- * and dead weight live behind `generic`, which replaces the unique identifier
- * and so orphans the reader's position - so this NEVER returns it implicitly.
- * A caller that wants it asks for it: see `WATERMARK_PROFILE` and the separate
- * action built on it. The consequence of getting this wrong is a button
- * labelled "Clean up" quietly costing the user their place in the book.
+ * An in-place repair the user can run on a file. Two, because they are
+ * different promises: `cleanup` composes only the repair-only `epub` profile
+ * and touches structure; `watermarks` adds `generic`, which also replaces the
+ * book's identifier and so orphans the reader's bookmarks.
  */
-export function repairProfiles(_concerns: Concern[]): string[] {
-  return [CLEANUP_PROFILE];
+export type ConditionAction = "cleanup" | "watermarks";
+
+/**
+ * The actions that apply to a file, in the order a dialog offers them: Clean
+ * up when the check found a structural defect, Remove watermarks when it
+ * found a per-copy mark or unreferenced files (whatever their severity - an
+ * extra-files-only book is worth acting on even though it is not "needing
+ * attention"). Nothing for DRM, a clean book, or a check that has not
+ * finished.
+ */
+export function conditionActions(file: BookFile): ConditionAction[] {
+  const { concerns } = fileCondition(file);
+  const actions: ConditionAction[] = [];
+  if (concerns.includes("defect")) actions.push("cleanup");
+  if (concerns.includes("watermark") || concerns.includes("bloat")) actions.push("watermarks");
+  return actions;
+}
+
+/**
+ * The `--profile` specs an in-place repair composes for `action`. Clean up
+ * is the repair-only baseline and nothing else: `generic` replaces the
+ * book's unique identifier, which orphans the reader's bookmarks, and that
+ * is a trade the user makes by name through Remove watermarks - never as a
+ * side effect of a button called "Clean up".
+ */
+export function repairProfiles(action: ConditionAction): string[] {
+  return action === "watermarks" ? [CLEANUP_PROFILE, WATERMARK_PROFILE] : [CLEANUP_PROFILE];
 }
 
 /** How many of `files` need the user to do something, and how many are broken. */

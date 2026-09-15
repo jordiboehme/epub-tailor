@@ -18,6 +18,7 @@ import {
   findingsOf,
   isFixable,
   concernOf,
+  conditionActions,
   repairProfiles,
   conditionSummary,
   TONE_CLASS,
@@ -309,14 +310,15 @@ describe("concernOf", () => {
 });
 
 describe("repairProfiles", () => {
-  it("never composes generic implicitly, whatever the concerns", () => {
+  it("composes only the repair-only profile for Clean up", () => {
     // Running `generic` replaces the book's unique identifier, which orphans
     // the reader's bookmarks. That is a decision the user makes by name, via
     // the separate action - never a side effect of a button called "Clean up".
-    expect(repairProfiles(["defect"])).toEqual(["epub"]);
-    expect(repairProfiles(["watermark"])).toEqual(["epub"]);
-    expect(repairProfiles(["bloat"])).toEqual(["epub"]);
-    expect(repairProfiles(["watermark", "bloat", "defect"])).not.toContain("generic");
+    expect(repairProfiles("cleanup")).toEqual(["epub"]);
+  });
+
+  it("layers generic on top of the repair for Remove watermarks", () => {
+    expect(repairProfiles("watermarks")).toEqual(["epub", "generic"]);
   });
 });
 
@@ -343,6 +345,21 @@ describe("conditionSummary", () => {
 
 describe("isFixable", () => {
   const finding = { severity: "warning" as const, code: "W1", message: "m", path: null };
+
+  it("is false for a watermark-only book, which Clean up cannot change", () => {
+    // `epub` repairs structure and nothing else. Offering it as the answer to
+    // a "watermarked" chip opened a dialog that then said it would not help.
+    const mark = {
+      severity: "warning" as const,
+      code: "watermark-identifier",
+      category: "watermark" as const,
+      message: "per-copy id",
+      path: null,
+    };
+    expect(isFixable(makeFile({ cleanup: checkReport({ findings: [mark], warnings: 1 }) }))).toBe(
+      false,
+    );
+  });
 
   it("is true only when the automatic check found something a repair can fix", () => {
     expect(isFixable(makeFile())).toBe(false);
@@ -694,5 +711,68 @@ describe("staged-aware display helpers", () => {
   it("effectiveMeta without staged edits is the book's own meta object", () => {
     expect(effectiveMeta(book)).toBe(book.meta);
     expect(effectiveMeta(makeFile({}))).toBeUndefined();
+  });
+});
+
+describe("conditionActions", () => {
+  const defect = { severity: "warning" as const, code: "W1", message: "m", path: null };
+  const mark = {
+    severity: "warning" as const,
+    code: "watermark-identifier",
+    category: "watermark" as const,
+    message: "per-copy id",
+    path: null,
+  };
+  const extra = {
+    severity: "info" as const,
+    code: "unreferenced",
+    category: "waste" as const,
+    message: "nothing references it",
+    path: "OEBPS/junk.png",
+  };
+  const drm = {
+    severity: "error" as const,
+    code: "drm",
+    category: "structure" as const,
+    message: "encrypted",
+    path: null,
+  };
+  const withFindings = (findings: CheckReport["findings"]) =>
+    makeFile({
+      cleanup: checkReport({
+        findings,
+        errors: findings.filter((f) => f.severity === "error").length,
+        warnings: findings.filter((f) => f.severity === "warning").length,
+      }),
+    });
+
+  it("offers Clean up for a structural defect", () => {
+    expect(conditionActions(withFindings([defect]))).toEqual(["cleanup"]);
+  });
+
+  it("offers Remove watermarks for a per-copy mark, not Clean up", () => {
+    expect(conditionActions(withFindings([mark]))).toEqual(["watermarks"]);
+  });
+
+  it("offers Remove watermarks for extra files alone, even at info level", () => {
+    // The panel used to key off the verdict, so an extra-files-only book had a
+    // chip and no way to act on it.
+    expect(conditionActions(withFindings([extra]))).toEqual(["watermarks"]);
+  });
+
+  it("offers both when both apply, Clean up first", () => {
+    expect(conditionActions(withFindings([mark, defect]))).toEqual(["cleanup", "watermarks"]);
+  });
+
+  it("offers nothing for DRM, a clean book or no report", () => {
+    expect(conditionActions(withFindings([drm]))).toEqual([]);
+    expect(conditionActions(withFindings([]))).toEqual([]);
+    expect(conditionActions(makeFile())).toEqual([]);
+  });
+
+  it("offers nothing while the check is pending or after it failed", () => {
+    const cleanup = checkReport({ findings: [defect, mark], warnings: 2 });
+    expect(conditionActions(makeFile({ cleanup, check: "pending" }))).toEqual([]);
+    expect(conditionActions(makeFile({ cleanup, check: "failed" }))).toEqual([]);
   });
 });
