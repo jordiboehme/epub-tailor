@@ -11,8 +11,8 @@
   import { books } from "../stores/books.svelte";
   import { jobs } from "../stores/jobs.svelte";
   import { saveFilesInPlace } from "../stores/inplace";
-  import { CLEANUP_PROFILE, WATERMARK_PROFILE } from "../api/argv";
-  import { conditionSummary, fileCondition, isFixable, repairProfiles } from "../api/book-view";
+  import { CLEANUP_PROFILE } from "../api/argv";
+  import { conditionActions, conditionSummary, fileCondition, repairProfiles } from "../api/book-view";
   import Button from "./ui/Button.svelte";
   import ConfirmDialog from "./ConfirmDialog.svelte";
 
@@ -20,13 +20,10 @@
   const summary = $derived(conditionSummary(targets));
   const checking = $derived(targets.some((f) => f.check === "pending"));
 
-  const fixTargets = $derived(targets.filter(isFixable));
-  const markTargets = $derived(
-    targets.filter((f) => {
-      const { concerns } = fileCondition(f);
-      return concerns.includes("watermark") || concerns.includes("bloat");
-    }),
-  );
+  // Keyed off the actions, not the verdict: an extra-files-only book is not
+  // "needing attention", but it still has a button worth showing.
+  const fixTargets = $derived(targets.filter((f) => conditionActions(f).includes("cleanup")));
+  const markTargets = $derived(targets.filter((f) => conditionActions(f).includes("watermarks")));
   // A dead end, stated as one: nothing removes DRM, so there is no button.
   const blocked = $derived(
     targets.filter((f) => fileCondition(f).concerns.includes("blocked")).length,
@@ -48,7 +45,7 @@
   }
 </script>
 
-{#if targets.length > 0 && !checking && (summary.attention > 0 || summary.broken > 0 || blocked > 0)}
+{#if targets.length > 0 && !checking && (summary.attention > 0 || summary.broken > 0 || fixTargets.length > 0 || markTargets.length > 0 || blocked > 0)}
   <section class="border-b border-ink-200 px-4 py-4 dark:border-ink-800">
     <h3 class="mb-2 text-[11px] font-semibold uppercase tracking-wide text-ink-400">Condition</h3>
 
@@ -57,11 +54,14 @@
         <span class="font-medium text-rose-700 dark:text-rose-400"
           >{summary.broken} of {targets.length} defective</span
         >{#if summary.attention > 0}, {summary.attention} needing attention{/if}.
-      {:else}
+      {:else if summary.attention > 0}
         <span class="font-medium text-amber-700 dark:text-amber-400"
           >{summary.attention} of {targets.length}
           {summary.attention === 1 ? "needs" : "need"} attention</span
         >.
+      {:else if markTargets.length > 0}
+        {markTargets.length} of {targets.length}
+        {markTargets.length === 1 ? "carries" : "carry"} files nothing references.
       {/if}
     </p>
 
@@ -97,7 +97,7 @@
     title="Clean up {fixTargets.length} {fixTargets.length === 1 ? 'file' : 'files'}?"
     confirmLabel="Clean up"
     cancelLabel="Not now"
-    onConfirm={() => run(fixTargets, repairProfiles(fileCondition(fixTargets[0]).fixable))}
+    onConfirm={() => run(fixTargets, repairProfiles("cleanup"))}
     onCancel={() => (confirmFix = false)}
   >
     This repairs the files' structure in place, under the {CLEANUP_PROFILE} profile. The current
@@ -112,7 +112,7 @@
       : 'files'}?"
     confirmLabel="Remove watermarks"
     cancelLabel="Not now"
-    onConfirm={() => run(markTargets, [CLEANUP_PROFILE, WATERMARK_PROFILE])}
+    onConfirm={() => run(markTargets, repairProfiles("watermarks"))}
     onCancel={() => (confirmMarks = false)}
   >
     This strips per-copy identifiers, invisible fingerprint characters, image metadata and files

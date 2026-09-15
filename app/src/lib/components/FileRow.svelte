@@ -13,26 +13,17 @@
   import { edits } from "../stores/edits.svelte";
   import { saveFilesInPlace } from "../stores/inplace";
   import { countEdits } from "../api/edits";
-  import {
-    chipsFor,
-    failureOf,
-    fileBadge,
-    fileCondition,
-    findingsOf,
-    isFixable,
-    repairProfiles,
-    TONE_CLASS,
-  } from "../api/book-view";
-  import type { Chip } from "../api/book-view";
+  import { chipsFor, failureOf, fileBadge, findingsOf, repairProfiles, TONE_CLASS } from "../api/book-view";
+  import type { Chip, ConditionAction } from "../api/book-view";
   import CardDetails from "./CardDetails.svelte";
-  import ConfirmDialog from "./ConfirmDialog.svelte";
+  import ConditionDialog from "./ConditionDialog.svelte";
 
   let { book, file }: { book: Book; file: BookFile } = $props();
 
   let showDetails = $state(false);
   let trashFailed = $state<string | null>(null);
-  let confirmCleanup = $state(false);
-  let cleanupFailed = $state<string | null>(null);
+  let showCondition = $state(false);
+  let repairFailed = $state<string | null>(null);
 
   const selected = $derived(books.selectedFileIds.has(file.id));
   const staged = $derived(edits.get(file.id));
@@ -80,19 +71,17 @@
     }
   }
 
-  // The verdict chip doubles as the fix: click, confirm, and the file is
-  // repaired in place through the same Trash-backed flow the ActionBar's
-  // Clean up uses. Only when a repair can actually do something - a
-  // copy-protected book gets a chip that says so and no button that lies.
-  const condition = $derived(fileCondition(file));
-  const canCleanup = $derived(file.kind === "epub" && !jobs.active && isFixable(file));
-
-  async function runCleanup() {
-    confirmCleanup = false;
-    cleanupFailed = null;
-    const outcome = await saveFilesInPlace([file], false, repairProfiles(condition.fixable));
+  // The verdict chip opens the file's Condition dialog: what the check found
+  // and, where a repair can actually do something, the buttons to run it
+  // through the same Trash-backed in-place flow the Inspector's panel uses.
+  // A copy-protected book gets the dialog too, saying so, and no button that
+  // lies.
+  async function repair(action: ConditionAction) {
+    showCondition = false;
+    repairFailed = null;
+    const outcome = await saveFilesInPlace([file], false, repairProfiles(action));
     if (outcome.failures.length > 0) {
-      cleanupFailed = `Nothing was written - a safety copy could not be made. ${outcome.failures[0]}`;
+      repairFailed = `Nothing was written - a safety copy could not be made. ${outcome.failures[0]}`;
     }
   }
 </script>
@@ -157,15 +146,16 @@
 
     <div class="ml-auto flex shrink-0 items-center gap-1">
       {#each chips as c}
-        {#if c.id === "condition" && canCleanup}
+        {#if c.id === "condition"}
           <button
             type="button"
-            title={`Repair this file in place under ${repairProfiles(condition.fixable).join(" + ")} - a safety copy goes to the Trash first`}
+            title={c.title}
+            aria-haspopup="dialog"
             onclick={(e) => {
               e.stopPropagation();
-              confirmCleanup = true;
+              showCondition = true;
             }}
-            class="shrink-0 rounded px-1 py-0.5 text-[10px] font-medium ring-1 ring-inset ring-amber-400/50 transition-shadow hover:ring-amber-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 dark:focus-visible:ring-teal-400 {TONE_CLASS[c.tone]}"
+            class="shrink-0 cursor-pointer rounded px-1 py-0.5 text-[10px] font-medium ring-1 ring-current/30 ring-inset transition-shadow hover:ring-current/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 dark:focus-visible:ring-teal-400 {TONE_CLASS[c.tone]}"
           >
             {c.label}
           </button>
@@ -244,8 +234,8 @@
     <p class="text-[10px] leading-snug text-rose-600 dark:text-rose-400">{trashFailed}</p>
   {/if}
 
-  {#if cleanupFailed}
-    <p class="text-[10px] leading-snug text-rose-600 dark:text-rose-400">{cleanupFailed}</p>
+  {#if repairFailed}
+    <p class="text-[10px] leading-snug text-rose-600 dark:text-rose-400">{repairFailed}</p>
   {/if}
 
   {#if showDetails && canExpand}
@@ -261,21 +251,6 @@
   {/if}
 </div>
 
-{#if confirmCleanup}
-  <ConfirmDialog
-    title="Clean up {file.fileName}?"
-    confirmLabel="Clean up"
-    cancelLabel="Not now"
-    onConfirm={runCleanup}
-    onCancel={() => (confirmCleanup = false)}
-  >
-    This repairs the file's structure in place, under the {repairProfiles(condition.fixable).join(" + ")}
-    profile. The current version goes to the Trash first, so nothing is lost.
-    {#if condition.concerns.includes("watermark") || condition.concerns.includes("bloat")}
-      <br />
-      It does <strong>not</strong> remove the per-copy marks - that needs the separate Remove
-      watermarks action, because it rewrites the book's identifier and your reading position is
-      lost with it.
-    {/if}
-  </ConfirmDialog>
+{#if showCondition}
+  <ConditionDialog {file} busy={jobs.active} onAction={repair} onClose={() => (showCondition = false)} />
 {/if}
