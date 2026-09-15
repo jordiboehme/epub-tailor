@@ -2,6 +2,7 @@
 name = "epub-tailor-app"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Desktop app that drives the epub-tailor CLI to fit EPUBs to e-readers"

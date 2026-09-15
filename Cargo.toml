@@ -4,6 +4,10 @@ members = ["crates/core", "crates/cli", "crates/testfixtures", "xtask", "app/src
 
 [workspace.package]
 edition = "2024"
+# The floor the dependency tree needs (askama 0.16, encoding_rs 0.8.40). With
+# `resolver = "3"` this also makes `cargo update` resolve against a fixed
+# version instead of whatever toolchain happens to run it.
+rust-version = "1.88"
 license = "MIT"
 repository = "https://github.com/jordiboehme/epub-tailor"
 version = "0.9.0"
