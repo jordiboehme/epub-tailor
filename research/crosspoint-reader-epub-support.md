@@ -1,6 +1,6 @@
 # CrossPoint Reader - EPUB Rendering & Feature Research Report
 
-Repository: `https://github.com/crosspoint-reader/crosspoint-reader` (default branch: **`develop`**; all file/line references to that branch as of commit `4b34a576eb`, 2026-07-10).
+Repository: `https://github.com/crosspoint-reader/crosspoint-reader` (default branch: **`develop`**). Sections 1-6 cite commit `4b34a576eb` (2026-07-10); section 7 records what changed up to release 1.6.0 (`54337e6d`, 2026-09-05) and pre-release 1.6.5rc (`a1ceb633`, 2026-09-14).
 
 ## 1. Repo Overview
 
@@ -117,7 +117,7 @@ Repository: `https://github.com/crosspoint-reader/crosspoint-reader` (default br
 - `.bmp`: image viewer.
 
 ### 3.8 Display/limits
-480×800 (X4) / 528×792 (X3); orientations swap to 800×480. Hardware bezel margins top 9px, others 3px (GfxRenderer.h:96-99). ~320KB RAM total; decoders heap-allocated ~20-44KB on demand. Word hard-cut at 200 bytes (`MAX_WORD_SIZE`). Giant single spine files → 1,000-page sections, slow indexing, crash reports (#1067, #1752, #2293, #1622, #2047).
+480×800 (X4) / 528×792 (X3); orientations swap to 800×480. Hardware bezel margins top 9px, others 3px (GfxRenderer.h:96-99). ~320KB RAM total; decoders heap-allocated ~20-44KB on demand. Word hard-cut at 200 bytes (`MAX_WORD_SIZE`). Giant single spine files used to become 1,000-page sections with slow indexing and crash reports (#1067, #1752, #2293, #1622, #2047); since 1.5.0 sections index incrementally in the background (8 pages per chunk, 2 chunks per tick, partial section files persist; `Section.h:92-135` at 1.6.0), the page count is a byte-based estimate until done, and a popup warns above 96 KB of HTML. There is no hard size limit in the source; keep chapters under ~200 KB as a quality preference.
 
 ## 4. Known limitations (issues)
 #876 tables (open), #291 list prefixes (open), #1313 noteref (open), #1398 text-decoration (open), #1777/#1161 justification (open), #1182 kerning (open), #2181 landmarks-hidden (open), #383 TOC/spine misalignment (open), #1519 code blocks (open), #1369 embedded fonts (open), #1825 optimizer font extraction (open), #2312 nikud (open), #604/#1200/#2005 CJK, #1719 Arabic shaping, #1126 Thai, #1516 Devanagari, #565 DRM crash (open), #1067 giant chapters (open), #1645 layout edge case, #2347 image position (open), #1029 centering under justify, #2136 cover stub. Closed/fixed: #292 tables hidden, #756 chapter landing, #1011 large grayscale images, #993/#947 PNG/CSS crashes, #1431/#1289/#712 display:none/image toggle/CSS toggle.
@@ -136,11 +136,36 @@ Repository: `https://github.com/crosspoint-reader/crosspoint-reader` (default br
 - Does NOT: extract/convert embedded fonts (#1825), fix tables, split giant chapters, strip DRM.
 
 ## 6. Converter recommendations (derived)
-**Images**: baseline grayscale JPEG q80-85; fit 480×800 (X4)/528×792 (X3), never upscale; cap ≤2048×1536 source; rasterize SVG, convert GIF/WebP; split taller-than-screen images with overlap; strip img width/height attrs.
-**HTML**: linearize tables (or render structural tables to images / labeled text); bake numbers into ordered-list items ("1. …"); pre-format code blocks with explicit `<br/>` + NBSP indentation; footnotes as plain internal `<a href="#…">` (not epub:type-only/javascript:); split spine files >~150-300 layout pages; refuse/flag DRM; block-level anchors only (span-ID cap).
+**Images**: baseline grayscale JPEG q80-85; fit 480×800 (X4)/528×792 (X3), never upscale; cap 8,388,608 px area and 32,767 px per side (1.6.0; 2048×1536 before); rasterize SVG, convert GIF/WebP; split taller-than-screen images with overlap; strip img width/height attrs.
+**HTML**: keep tables the firmware lays out as a grid (≤4 columns, no spans/links/images, cells ≤32 words and ≤512 bytes, 1.5.0+), linearize or render the rest; bake numbers into ordered-list items ("1. …"); pre-format code blocks with explicit `<br/>` + NBSP indentation; footnotes as plain internal `<a href="#…">` (not epub:type-only/javascript:); split spine files >~150-300 layout pages; refuse/flag DRM; block-level anchors only (span-ID cap).
 **CSS**: flatten to single selectors (tag/.class/tag.class); strip unsupported properties (shrinks files); move inline head `<style>` into linked stylesheet; <128KB/file, <1500 rules; no @font-face.
 **Text**: UTF-8 (transcode legacy inputs), NFC-normalize; avoid decomposed marks; feed logical-order unshaped RTL text.
 **Packaging**: mimetype first STORE, rest DEFLATE; EPUB3 nav + NCX both; keep landmarks from polluting TOC; no ZIP64.
+
+## 7. Delta up to 1.6.0 (and 1.6.5rc)
+
+Diffed `4b34a576eb..1.6.0` (`54337e6d`, 2026-09-05) and `..1.6.5rc` (`a1ceb633`, 2026-09-14) on 2026-09-15. Line numbers at 1.6.0 unless marked.
+
+### 7.1 Unchanged (checked)
+Selector grammar and `MAX_SELECTOR_LENGTH = 256` (`lib/Epub/Epub/css/CssParser.cpp:663-679`); all @-rules skipped (`:723-733, 746-750`); property chain (`:540-631`, `CssStyle.h` byte-identical); `<style>` in `<head>` skipped (`lib/Epub/Epub/VisibleTextUtils.h:17-20`); 1,500 rules / 128 KB / 64 KB and 48 KB heap guards (`lib/Epub/Epub.cpp:244-246, 322-343`); embedded fonts never loaded; JPEG+PNG only by extension (`converters/ImageDecoderFactory.cpp:14-40`); progressive JPEG DC-only (`JpegToFramebufferConverter.cpp:423-426`); no upscaling, `<img width/height>` ignored (`ChapterHtmlSlimParser.cpp:921-930, 1004-1096`); no `<pre>`/`<code>` handling; headings centered and bold; footnotes href-based, `epub:type` ignored (`:1270-1272`); 1,024 anchors, span ids dropped unless TOC targets (`:41-46, 715-736`); `MAX_WORD_SIZE 200`; UTF-8 only; no ZIP64 (`lib/ZipFile/ZipFile.h:13-19`); no `encryption.xml` handling; X4 480×800 / X3 528×792 (`freeink-sdk/libs/display/FreeInkDisplay/include/FreeInkDisplay.h:76-81`).
+
+### 7.2 Changed
+| Area | Now | Evidence | Consequence for epub-tailor |
+|---|---|---|---|
+| Tables (1.5.0, PR #2654) | Simple rows laid out as a grid: ≤4 columns (`MAX_GRID_TABLE_COLUMNS`), ≤32 words and ≤512 bytes per cell, no colspan/rowspan >1, no internal links, cell width ≥3 line heights; `th` bold; 1-px rule between rows. Otherwise "stacked": each cell an unlabeled full-width paragraph. Nested tables flatten into the cell, `hr` dropped, block tags collapse to a word boundary, images → alt. The "Tab Row N, Cell M:" label is gone. | `ChapterHtmlSlimParser.h:92-103`; `.cpp:48-52, 354-371, 490-535, 556-678, 784-916` | `linearize_tables` keeps grid-fit tables (`native_grid_blocker`) |
+| Image decode cap (1.6.0, PR #2959) | 8,388,608 px area + 32,767 px per side (was 2048×1536). PNG rows bounded by `PNG_MAX_BUFFERED_PIXELS = 16416`: max width 8,191 (8-bit gray/indexed), 2,730 (RGB), 2,047 (RGBA). 1/2/4-bit gray and indexed PNG decode; 16-bit fails to a placeholder. | `converters/ImageToFramebufferDecoder.h:49-57`; `platformio.ini:40`; `PngToFramebufferConverter.cpp:111-124, 410-434` | `max_source_px` + `max_source_area_px` |
+| `<image href>` in `<svg>` (1.6.0) | The wrapped raster renders; vector SVG still does not. | `ChapterHtmlSlimParser.cpp:60, 918-935` | none, `rasterize_svg` stays |
+| Image probing | JPEG SOF / PNG IHDR probed in the first ~1 KB, extraction lazy on first render, failures draw a placeholder. | `ChapterHtmlSlimParser.cpp:960-999`; `converters/ImageDimsProbe.h` | strip EXIF/XMP (already done) |
+| Ordered lists (1.6.5rc, PR #3500) | `<ol>` items numbered "N." with per-list counters and nested restart; `list-style-type: none` suppresses the marker; `ul`/`ol` become block tags. 1.6.0 still renders "•". | 1.6.5rc `ChapterHtmlSlimParser.cpp:1390-1417`, `CssParser.cpp:637-641` | none: baked paragraphs render identically |
+| `<br>` (1.5.0, PR #2548) | After text: a margin-stripped line break. A `<br>` whose block stays empty injects a full line-height gap. | `ChapterHtmlSlimParser.cpp:378-402, 1358-1380` | none; eyeball code blocks on a device |
+| CSS store caps (1.6.0) | `SELECTOR_POOL_CAP = 32 KB` of selector text and `MAX_UNIQUE_STYLES = 256` deduplicated declaration bodies; rules with no supported property dropped before storage; `!important` stripped; byte-identical stylesheets deduplicated by (CRC32, size). | `CssParser.cpp:42-50, 117-138, 300-345, 651-654`; `Epub.cpp:257-318` | doc only |
+| `hidden` attribute (1.6.5rc, PR #3390) | Treated as `display: none`. | 1.6.5rc parser diff | do not strip |
+| Fonts | Reader fonts are NotoSerif + NotoSans at 12/14/16/18 pt; no Greek, CJK, Arabic or Hebrew built in. SD fonts via a manifest with script groups. Arabic contextual shaping added. Hyphenation adds Finnish; the language comes from `dc:language`. `<ruby>`/`<rt>` render natively, `<rp>` skipped. | `lib/EpdFont/scripts/convert-builtin-fonts.sh:8-10`; `fontconvert.py:44-136`; `sd-fonts.yaml:34-233`; `hyphenation/LanguageRegistry.cpp:35-44`; `ChapterHtmlSlimParser.cpp:1226-1249` | emit a correct `dc:language`; never flatten ruby |
+| Footnotes | `FOOTNOTE_HREF_LEN` 96 → 256; label strips `[ ]`, 31 chars; links are tap targets and keep sup/sub; a link inside a grid cell forces the stacked layout. | `FootnoteEntry.h:5-9`; `ChapterHtmlSlimParser.cpp:1556-1582` | doc only |
+| OPF / TOC | Namespace-prefix agnostic parsing (PR #3001); guide honours only `type="start"` (PR #2716); metadata fields clamped to 512 bytes (1.6.5rc); TOC fragment targets resolve (already true at base: `TocNavParser.cpp:127-141`, `Section.cpp:397-404`). | `ContentOpfParser.cpp`; `Epub.cpp:511-535` | doc correction |
+| Big spine files (1.5.0) | Incremental background indexing replaces the stall; no hard limit; popup above 96 KB of HTML. | `Section.h:92-135`; `Section.cpp:288-293` | keep 200 KB as a preference |
+| Devices | Seeed reTerminal Sticky (1.5.0), Xteink X4 Pro and M5Stack PaperMono (1.6.0), Xteink X4 Classic (1.6.5rc): all ESP32-S3 + 8 MB PSRAM, 800×480 B/W panels (PaperMono 3-level), same engine. | `freeink-sdk/README.md:123-135`; `docs/xteink-x4pro-support.md`; `docs/xteink-x4c-support.md` | `x4-pro`, `x4-classic` aliases |
+| Cache versions | book.bin v10, sections v45, CSS v11 (v12 at 1.6.5rc); heap comment now ~380 KB. | `BookMetadataCache.cpp:14`; `Section.cpp:50`; `ChapterHtmlSlimParser.cpp:45` | none |
 
 *Sourced read-only from the develop branch via GitHub REST API + raw.githubusercontent.com and the public issue tracker.*
 
