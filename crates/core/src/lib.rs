@@ -730,16 +730,24 @@ pub fn convert(input: Input, opts: &ConvertOptions) -> Result<Converted, Convert
     // whose path matches an existing warning's file is not treated as a bug.
     #[cfg(debug_assertions)]
     {
-        // The firmware cannot render a `<table>` at all, so - in every table
-        // mode - none may survive a table-linearizing profile: they are
+        // The only `<table>` that may survive a table-linearizing profile is
+        // one the firmware lays out as a grid itself (CrossPoint 1.5.0+, the
+        // rules in `html::tables::native_grid_blocker`). Everything else is
         // linearized or rasterized away, and the `data-et-table-render`
-        // sentinel goes with them.
+        // sentinel goes with it.
         if opts.features.linearize_tables {
             for (path, doc) in &chapters {
-                debug_assert!(
-                    collect_by_name(doc, "table").is_empty(),
-                    "convert() left a <table> in {path}"
-                );
+                for table in collect_by_name(doc, "table") {
+                    debug_assert!(
+                        get_attr(&table, "data-et-table-render").is_none(),
+                        "convert() left a table tagged for rendering in {path}"
+                    );
+                    debug_assert!(
+                        crate::html::tables::native_grid_blocker(&table).is_none(),
+                        "convert() left a <table> the device cannot lay out in {path}: {:?}",
+                        crate::html::tables::native_grid_blocker(&table)
+                    );
+                }
             }
         }
         let findings = validate::lint_epub(&epub, &opts.device, &opts.features, &opts.filters);

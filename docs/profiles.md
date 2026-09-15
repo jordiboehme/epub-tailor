@@ -127,7 +127,7 @@ switch.
 turning them on for a capable reader damages the book.** `filter_css` reduces a
 stylesheet to CrossPoint's ~12-property grammar; a Kindle honors `@font-face`,
 floats, borders and positioning, and a Kobo-based tolino honors the publisher
-stylesheet too. `linearize_tables` flattens a table into labelled paragraphs;
+stylesheet too. `linearize_tables` flattens every table the firmware cannot lay out as a grid into labelled paragraphs;
 Kindle and Kobo render real tables. `preserve_code_blocks` rebuilds code with
 `<br/>` and `&nbsp;`; Kindle has a real monospaced font for `<pre>`/`<code>`.
 So every non-Xteink profile keeps only what genuinely helps on a capable device:
@@ -165,7 +165,7 @@ declaration survives with its value intact rather than being dropped.
 | `relocate_styles` | Lift `<head>`/inline `<style>` CSS into an external stylesheet, scoped per chapter. |
 | `transcode_images` | Re-encode raster images to baseline grayscale JPEG/8-bit PNG, fitted and budgeted. |
 | `rasterize_svg` | Rasterize SVG resources and inline `<svg>` elements. |
-| `linearize_tables` | Flatten tables to labeled paragraphs (or rasterize per `options.tables`). |
+| `linearize_tables` | Keep tables the device renders as a grid (at most 4 columns, no spans, links, images or long cells); flatten the rest to labeled paragraphs, or rasterize per `options.tables`. |
 | `degrade_boxes` | Degrade `<aside>`, `<figure>`/`<figcaption>` and `<dl>` to plain flow content. |
 | `bake_ordered_lists` | Bake `<ol>` numbering into the item text. |
 | `preserve_code_blocks` | Rebuild `<pre>`/`<code>` with explicit breaks and non-breaking spaces. |

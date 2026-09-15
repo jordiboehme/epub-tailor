@@ -52,7 +52,7 @@ Converter obligations: transcode everything to baseline grayscale JPEG (photos) 
 
 - Supported: `h1-h6` (centered by default), `p div blockquote br`, `b strong i em u ins del s strike sup sub`, `hr` (real rule), `img`, `li`, internal `<a href>`.
 - **`<li>` always renders as "•"** - ordered lists lose numbering. Bake numbers into text.
-- **Tables are flattened** to "Tab Row N, Cell M:" paragraphs; the device drops nested tables outright. Linearize before the device does. Opt-in: `--tables image` rasterizes tables complex enough that flattening would hurt to a line-art PNG, rendering a nested table as an inner grid inside the parent's image (one nesting level; a table nested deeper collapses to text).
+- **Tables**: since firmware 1.5.0 a simple table renders as a real grid - at most 4 columns, no `colspan`/`rowspan`, no links, cells of at most 32 words and 512 bytes. Anything else is "stacked": every cell becomes an unlabeled paragraph, a nested table flattens into its cell, an `hr` is dropped and an image becomes its alt text. Keep the simple ones, linearize the rest before the device does. Opt-in: `--tables image` rasterizes tables complex enough that flattening would hurt to a line-art PNG, rendering a nested table as an inner grid inside the parent's image (one nesting level; a table nested deeper collapses to text).
 - **`<pre>`/`<code>` whitespace collapses**; no monospace exists. Use `<br/>` + `&nbsp;`.
 - Footnotes are href-based: any internal `<a href="#x">` becomes a footnote entry. `epub:type` ignored; `javascript:` hrefs unparsed. Targets must be `id`s on block elements (span ids dropped; 1,024 anchors/chapter cap).
 - Words hard-cut at 200 bytes. NBSP honored as non-breaking.

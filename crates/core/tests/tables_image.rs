@@ -68,11 +68,13 @@ fn image_mode_rasterizes_complex_linearizes_simple_and_keeps_anchors() {
 
     let chapter = read_entry(epub, "OEBPS/text/chapter.xhtml");
 
-    // (a) The 3-column table became a single rasterized image; NO <table>
-    // survives anywhere in the chapter.
-    assert!(
-        !chapter.contains("<table"),
-        "no <table> may survive under --tables image:\n{chapter}"
+    // (a) The 3-column table (its caption alone rules out the device's own
+    // grid layout) became a single rasterized image. The only <table> left
+    // in the chapter is the simple 2-column one, see (b).
+    assert_eq!(
+        chapter.matches("<table").count(),
+        1,
+        "only the simple table may survive under --tables image:\n{chapter}"
     );
     // A rendered table is synthetic black-on-white text/lines and must encode
     // as crisp line-art PNG, never a soft photo-classified JPEG.
@@ -98,12 +100,13 @@ fn image_mode_rasterizes_complex_linearizes_simple_and_keeps_anchors() {
         "the manifest should declare chapter-table-1.png:\n{opf}"
     );
 
-    // (b) The 2-col simple table linearized to paragraphs (its cell text
-    // survives, its markup does not).
+    // (b) The 2-col simple table is kept as markup: CrossPoint 1.5.0+ lays a
+    // table like it out as a real grid, which beats both a picture of it and
+    // our paragraphs.
     for text in ["alpha", "beta", "gamma", "delta"] {
         assert!(
-            chapter.contains(text),
-            "the simple table's cell text {text} should survive linearization:\n{chapter}"
+            chapter.contains(&format!("<td>{text}</td>")),
+            "the simple table's cell {text} should stay a cell:\n{chapter}"
         );
     }
 
@@ -114,11 +117,15 @@ fn image_mode_rasterizes_complex_linearizes_simple_and_keeps_anchors() {
         "the referenced anchor id must survive linearization:\n{chapter}"
     );
 
-    // The report records both a rasterization and a linearization.
+    // The report records a rasterization, a kept table and a linearization.
     let kinds = kinds(&converted);
     assert!(
         kinds.contains(&"table-rasterized"),
         "expected a table-rasterized transformation: {kinds:?}"
+    );
+    assert!(
+        kinds.contains(&"table-kept"),
+        "expected a table-kept transformation: {kinds:?}"
     );
     assert!(
         kinds.contains(&"table-linearized"),

@@ -4,4 +4,4 @@ expression: out
 ---
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE html>
-<html xmlns="http://www.w3.org/1999/xhtml"><head><title>T</title></head><body><p class="et-table-cell"><strong>A:</strong> 1</p><p class="et-table-cell"><strong>B:</strong> 2</p></body></html>
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>T</title></head><body><p class="et-table-cell"><strong>A:</strong> 1</p><p class="et-table-cell"><strong>B:</strong> 2</p><p class="et-table-cell"><strong>C:</strong> 3</p><p class="et-table-cell"><strong>D:</strong> 4</p><p class="et-table-cell"><strong>E:</strong> 5</p></body></html>

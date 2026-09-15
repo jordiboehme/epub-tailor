@@ -41,9 +41,7 @@ fn chapter_text(epub: &[u8], name_fragment: &str) -> String {
     buf
 }
 
-#[test]
-fn gfm_table_is_linearized_by_the_shared_m3_pipeline() {
-    let md = "# Chapter One\n\n| A | B |\n|---|---|\n| 1 | 2 |\n";
+fn convert_md(md: &str) -> String {
     let converted = convert(
         Input::Markdown {
             text: md.to_string(),
@@ -52,8 +50,22 @@ fn gfm_table_is_linearized_by_the_shared_m3_pipeline() {
         &ConvertOptions::default(),
     )
     .expect("conversion should succeed");
-    let ch1 = chapter_text(&converted.epub, "ch-001.xhtml");
-    assert!(!ch1.contains("<table"), "table must be linearized: {ch1}");
+    chapter_text(&converted.epub, "ch-001.xhtml")
+}
+
+#[test]
+fn gfm_table_goes_through_the_shared_m3_table_pass() {
+    // A two-column table is one the device lays out as a grid itself
+    // (CrossPoint 1.5.0+), so it stays a table.
+    let ch1 = convert_md("# Chapter One\n\n| A | B |\n|---|---|\n| 1 | 2 |\n");
+    assert!(ch1.contains("<table"), "a simple table is kept: {ch1}");
+
+    // Five columns are past the device's grid limit, so that one is
+    // linearized like any other over-wide table.
+    let ch1 = convert_md(
+        "# Chapter One\n\n| A | B | C | D | E |\n|---|---|---|---|---|\n| 1 | 2 | 3 | 4 | 5 |\n",
+    );
+    assert!(!ch1.contains("<table"), "a wide table is linearized: {ch1}");
 }
 
 #[test]
