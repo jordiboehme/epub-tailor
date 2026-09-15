@@ -5,7 +5,8 @@
     "screen": { "width": 480, "height": 800, "ppi": 220 },
     "panel": "gray4",
     "images": {
-      "max_source_px": [2048, 1536],
+      "max_source_px": [32767, 32767],
+      "max_source_area_px": 8388608,
       "inline_max": [480, 730],
       "cover_max": [480, 800],
       "inline_budget_kb": 100,

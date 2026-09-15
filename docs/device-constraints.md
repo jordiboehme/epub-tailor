@@ -35,7 +35,8 @@ Inline image target: fit 480×730 (X4 usable reading area), never upscale. Cover
 | PNG (8-bit) | ✅ renders (alpha flattened onto white) |
 | Progressive JPEG | ⚠️ DC-only 1/8-resolution blur |
 | GIF / WebP / TIFF / SVG | ❌ `[Image]` placeholder or nothing |
-| Anything > 2048×1536 px | ❌ decode aborts |
+| Over 8,388,608 px in area, or over 32,767 px on a side | ❌ decode aborts (firmware 1.6.0; 2048×1536 before) |
+| PNG wider than 8,191 px (8-bit gray) | ❌ row buffer overflow, placeholder |
 
 Converter obligations: transcode everything to baseline grayscale JPEG (photos) or PNG (line art); rasterize SVG; pre-fit to screen; strip `<img width/height>` attributes.
 

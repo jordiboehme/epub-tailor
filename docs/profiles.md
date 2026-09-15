@@ -35,7 +35,8 @@ leave the profile values untouched.
     "screen": { "width": 480, "height": 800, "ppi": 220 },
     "panel": "gray4",
     "images": {
-      "max_source_px": [2048, 1536],
+      "max_source_px": [32767, 32767],
+      "max_source_area_px": 8388608,
       "inline_max": [480, 730],
       "cover_max": [480, 800],
       "inline_budget_kb": 100,
@@ -87,7 +88,8 @@ feature switched off never reads the cap.
 | `screen.width` / `screen.height` | Screen geometry in pixels. |
 | `screen.ppi` | Pixel density, informational. |
 | `panel` | What the panel paints: `"gray4"`, `"gray16"` or `"color"`. See below. |
-| `images.max_source_px` | `[w, h]` decode hard cap; larger source images abort decoding on device. |
+| `images.max_source_px` | `[w, h]` decode hard cap per side; a wider or taller source image aborts decoding on device. |
+| `images.max_source_area_px` | Decode hard cap on total pixels (width times height). |
 | `images.inline_max` | `[w, h]` box an inline image is fitted into (no upscaling). |
 | `images.cover_max` | `[w, h]` box the cover is fitted into. |
 | `images.inline_budget_kb` | Byte budget for an inline image; quality drops until it fits. |
