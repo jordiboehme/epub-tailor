@@ -165,7 +165,7 @@ A profile is a JSON file bundling device capabilities, feature switches, tunable
 |--------|---------|-------|------------|
 | `epub` | -       | -      | The default: repair and cleanup, everything the EPUB standard allows stays. |
 | `generic` | -    | -      | Modifier, not a device: strips per-copy watermark channels so two copies of the same shop edition converge to the same file. Composes with any device profile. |
-| `x4`   | 480x800 | gray4  | Xteink X4 running CrossPoint firmware, the full conversion. |
+| `x4`   | 480x800 | gray4  | Xteink X4 (also the X4 Pro and X4 Classic, aliases `x4-pro` and `x4-classic`) running CrossPoint firmware, the full conversion. |
 | `x3`   | 528x792 | gray4  | Xteink X3, same treatment with its own geometry. |
 | `nomad` | 1404x1872 | gray16 | Supernote A6X2 Nomad running Chauvet. |
 | `kindle` | 1072x1448 | gray16 | Kindle 11th gen (2024). |

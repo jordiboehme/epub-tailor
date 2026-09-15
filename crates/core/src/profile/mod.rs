@@ -113,7 +113,10 @@ const BUILTINS: &[Builtin] = &[
     // modern-reader base.
     Builtin {
         name: "x4",
-        aliases: &[],
+        // The X4 Pro (firmware 1.6.0) and X4 Classic (1.6.5rc) share the
+        // X4's 800x480 panel and its CrossPoint engine; nothing about them
+        // needs a profile of its own.
+        aliases: &["x4-pro", "x4-classic"],
         layers: &[X4_JSON],
     },
     Builtin {

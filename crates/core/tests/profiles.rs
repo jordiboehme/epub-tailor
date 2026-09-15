@@ -507,3 +507,16 @@ fn a_profile_layer_can_set_the_decode_area_cap() {
     // Untouched by the layer: the per-side cap stays the x4 value.
     assert_eq!(p.caps.max_src_px, (32_767, 32_767));
 }
+
+#[test]
+fn the_x4_pro_and_classic_resolve_to_the_x4_profile() {
+    // Same 800x480 panel and the same CrossPoint engine (firmware 1.6.0 and
+    // 1.6.5rc device docs), so the same caps and switches apply.
+    let x4 = resolve_specs(&["x4"]).expect("x4 resolves");
+    for alias in ["x4-pro", "x4-classic", "X4-Pro"] {
+        let p = resolve_specs(&[alias]).expect("alias resolves");
+        assert_eq!(p.name, "x4", "{alias}");
+        assert_eq!(p.features, x4.features, "{alias}");
+        assert_eq!(p.caps, x4.caps, "{alias}");
+    }
+}

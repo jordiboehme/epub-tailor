@@ -13,7 +13,7 @@ baseline (the built-in `epub` profile):
 - **`features`**: merged per key. A layer that sets `"strip_fonts": false` changes only that switch.
 - **`filters`**: concatenated in composition order and applied in that order.
 
-Built-in names are case-insensitive: `epub` (alias `default`), `x4`, `x3`,
+Built-in names are case-insensitive: `epub` (alias `default`), `x4` (aliases `x4-pro`, `x4-classic`), `x3`,
 `nomad`, `kindle`, `kindle-paperwhite`, `kindle-colorsoft`, `kindle-scribe`,
 `kindle-scribe-colorsoft`, `tolino-shine`, `tolino-shine-color`,
 `tolino-vision-color` and `tolino-epos-3`. Anything containing a path separator
