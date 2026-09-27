@@ -382,8 +382,25 @@ body { color: green; text-align: justify; }
     }
 
     #[test]
-    fn remapping_a_remapped_sheet_changes_nothing() {
+    fn remapping_a_remapped_sheet_changes_nothing_but_text_going_black() {
+        // Colored text comes out of the first pass as a dark gray; a second
+        // pass reads that as colorless text and pins it to black. That is the
+        // accepted price of black body text. Backgrounds stay a fixed point.
         let input = ".a{color:red}.b{color:teal;background-color:#eef}";
+        let (out, _) = remap(input, Panel::Gray16);
+        let (once, _) = out.expect("first pass rewrites");
+        let (again, _) = remap(&once, Panel::Gray16);
+        let again = again.map_or(once.clone(), |(css, _)| css);
+        assert_eq!(again, ".a{color:#000}.b{color:#000;background-color:#eee}");
+        assert!(
+            once.contains("background-color:#eee"),
+            "background unchanged by the second pass: {once}"
+        );
+    }
+
+    #[test]
+    fn a_black_text_sheet_is_a_fixed_point() {
+        let input = ".a{color:#555}.b{color:#333;background-color:#eef}";
         let (out, _) = remap(input, Panel::Gray16);
         let (once, _) = out.expect("first pass rewrites");
         let (again, _) = remap(&once, Panel::Gray16);

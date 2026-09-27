@@ -22,6 +22,10 @@ use super::space::{Rgb8, apparent_lightness, lightness_of_gray, rgb_to_lch};
 /// Ceiling for text tones: dark enough to stay readable on a paper-white page.
 const TEXT_MAX_L: f32 = 60.0;
 
+/// Chroma below which a text color counts as colorless gray. A gray with a
+/// faint tint (a cool `#4a4a52`) is still body text, not an accent.
+const NEUTRAL_TEXT_MAX_C: f32 = 12.0;
+
 /// Floor for background tones: light enough that dark text stays readable on
 /// them.
 const BG_MIN_L: f32 = 80.0;
@@ -208,7 +212,19 @@ fn tone_input(rgb: Rgb8, role: Role, count: u32) -> ToneInput {
         };
     }
 
-    let raw = apparent_lightness(rgb_to_lch(rgb));
+    let lch = rgb_to_lch(rgb);
+    let raw = apparent_lightness(lch);
+    // Dark gray text is a screen nicety: on a few-level panel it dithers into a
+    // pale raster. Colorless text inside the readable text range rides the
+    // black pin; colored text stays in the solve so it keeps its distinction.
+    if role == Role::Text && lch.c < NEUTRAL_TEXT_MAX_C && raw <= TEXT_MAX_L {
+        return ToneInput {
+            t: 0.0,
+            weight,
+            lo: 0.0,
+            hi: 0.0,
+        };
+    }
     let t = raw.clamp(role_lo, role_hi);
     // The shift window centers on the clamped target: clamping into the role
     // range is the deliberate move, the solver may only drift a bounded extra
@@ -379,6 +395,47 @@ mod tests {
     }
 
     #[test]
+    fn dark_neutral_text_goes_to_black() {
+        // Publishers set body text in soft grays that read fine on a screen but
+        // dither into a pale raster on a few-level panel.
+        for panel in [Panel::Gray4, Panel::Gray16] {
+            for rgb in [
+                Rgb8::new(0x55, 0x55, 0x55),
+                Rgb8::new(0x33, 0x33, 0x33),
+                Rgb8::new(0x4a, 0x4a, 0x52),
+            ] {
+                let (palette, _) = build(&[(rgb, Role::Text)], panel);
+                assert_eq!(
+                    palette.gray_for(rgb, Role::Text),
+                    Some(Rgb8::new(0, 0, 0)),
+                    "{rgb:?} text on {panel:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn light_gray_text_keeps_a_gray_tone() {
+        let light = Rgb8::new(0x99, 0x99, 0x99);
+        let (palette, _) = build(&[(light, Role::Text)], Panel::Gray16);
+        let gray = palette.gray_for(light, Role::Text).expect("solved");
+        assert_ne!(gray, Rgb8::new(0, 0, 0), "light gray is a deliberate tone");
+    }
+
+    #[test]
+    fn colored_text_stays_apart_from_black_body_text() {
+        let body = Rgb8::new(0x44, 0x44, 0x44);
+        let red = Rgb8::new(0xc0, 0x20, 0x20);
+        let (palette, _) = build(&[(body, Role::Text), (red, Role::Text)], Panel::Gray16);
+        assert_eq!(palette.gray_for(body, Role::Text), Some(Rgb8::new(0, 0, 0)));
+        let red_l = lightness(&palette, red, Role::Text);
+        assert!(
+            red_l >= JND_L - 1.0,
+            "colored text must stay distinguishable from black, got L*{red_l}"
+        );
+    }
+
+    #[test]
     fn distinct_svg_fills_come_out_distinct_on_gray16() {
         // Two hues of near-equal luminance - the whole point of the solver.
         let teal = Rgb8::new(0, 150, 136);
@@ -452,10 +509,17 @@ mod tests {
             .collect();
         let (second, _) = build(&second_entries, Panel::Gray16);
         for &(gray, role) in &second_entries {
+            // Text is the one exception: the gray red text became is colorless
+            // dark text on the second pass, and that goes to black.
+            let expected = if role == Role::Text {
+                Rgb8::new(0, 0, 0)
+            } else {
+                gray
+            };
             assert_eq!(
                 second.gray_for(gray, role),
-                Some(gray),
-                "an already-solved gray must map to itself"
+                Some(expected),
+                "an already-solved {role:?} gray"
             );
         }
     }

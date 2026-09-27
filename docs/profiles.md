@@ -176,7 +176,7 @@ declaration survives with its value intact rather than being dropped.
 | `dedupe_ids` | Remove duplicate element ids. |
 | `unicode_hygiene` | NFC-normalize text, strip XML-invalid characters. |
 | `chapter_split` | Split chapters over `options.max_chapter_kb` at heading boundaries. |
-| `remap_colors` | Remap text (CSS) and diagram (SVG) colors to perceptually spaced gray tones: each color keeps its apparent brightness while staying distinguishable on the panel's gray levels. Document colors get one solve per book, each SVG its own. Never applies on a color panel. |
+| `remap_colors` | Remap text (CSS) and diagram (SVG) colors to perceptually spaced gray tones: each color keeps its apparent brightness while staying distinguishable on the panel's gray levels. Colorless dark text (gray body text such as `#555`) goes to solid black, because a soft gray dithers into a pale raster on a few-level panel; colored text keeps a tone of its own. Document colors get one solve per book, each SVG its own. Never applies on a color panel. |
 | `strip_media_metadata` | Remove EXIF, XMP and IPTC from JPEG and PNG, without re-encoding. |
 | `strip_invisible_chars` | Remove zero-width and other invisible fingerprinting characters from text nodes, book metadata and TOC titles, script-aware. |
 | `normalize_identity` | Pin `dcterms:modified` to a fixed epoch, drop per-copy `dc:identifier` values and replace a per-copy unique identifier with one derived from title and authors. A checksum-valid ISBN or ISSN is kept, as is a DOI under an all-digit registrant a registration agency could actually have assigned. Only an all-digit registrant is recognised as a DOI at all, so the ISBN-A, ISMN-A and sub-registrant forms fall outside the screen. |

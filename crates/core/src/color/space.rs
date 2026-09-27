@@ -7,8 +7,10 @@
 //! correction here is Fairchild & Pirrotta's chromatic lightness L** (1991), a
 //! closed-form model of the effect over CIELAB - the same practical route the
 //! "Apparent Greyscale" conversion (Smith et al., Eurographics 2008) takes via
-//! Nayatani's VAC model. A gray has zero chroma and therefore zero lift, which
-//! makes remapping an already-remapped book a fixed point.
+//! Nayatani's VAC model. A gray has zero chroma and therefore zero lift, so an
+//! already-remapped gray keeps its lightness. (Remapping a remapped book is
+//! still not a full fixed point: colorless dark text goes to black, see
+//! `palette.rs`, and that includes the grays colored text became.)
 //!
 //! Everything is hand-rolled on purpose: the solver only ever needs the 1D
 //! lightness axis, far too small a slice of a color library to justify a new
