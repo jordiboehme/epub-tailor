@@ -168,7 +168,7 @@ declaration survives with its value intact rather than being dropped.
 | `transcode_images` | Re-encode raster images to baseline grayscale JPEG/8-bit PNG, fitted and budgeted. |
 | `rasterize_svg` | Rasterize SVG resources and inline `<svg>` elements. |
 | `linearize_tables` | Keep tables the device renders as a grid (at most 4 columns, no spans, links, images or long cells); flatten the rest to labeled paragraphs, or rasterize per `options.tables`. |
-| `degrade_boxes` | Degrade `<aside>`, `<figure>`/`<figcaption>` and `<dl>` to plain flow content. |
+| `degrade_boxes` | Degrade `<aside>`, `<figure>`/`<figcaption>` and `<dl>` to plain flow content. A `<dl>` whose terms are only bullet glyphs (`+`, `•`, `–`) is a list set as a definition list and becomes a real `<ul>`. |
 | `bake_ordered_lists` | Bake `<ol>` numbering into the item text. |
 | `preserve_code_blocks` | Rebuild `<pre>`/`<code>` with explicit breaks and non-breaking spaces. |
 | `normalize_footnotes` | Normalize footnote links, drop `javascript:` hrefs. |
@@ -176,7 +176,7 @@ declaration survives with its value intact rather than being dropped.
 | `dedupe_ids` | Remove duplicate element ids. |
 | `unicode_hygiene` | NFC-normalize text, strip XML-invalid characters. |
 | `chapter_split` | Split chapters over `options.max_chapter_kb` at heading boundaries. |
-| `remap_colors` | Remap text (CSS) and diagram (SVG) colors to perceptually spaced gray tones: each color keeps its apparent brightness while staying distinguishable on the panel's gray levels. Document colors get one solve per book, each SVG its own. Never applies on a color panel. |
+| `remap_colors` | Remap text (CSS) and diagram (SVG) colors to perceptually spaced gray tones: each color keeps its apparent brightness while staying distinguishable on the panel's gray levels. Colorless dark text (gray body text such as `#555`) goes to solid black, because a soft gray dithers into a pale raster on a few-level panel; colored text keeps a tone of its own. Document colors get one solve per book, each SVG its own. Never applies on a color panel. |
 | `strip_media_metadata` | Remove EXIF, XMP and IPTC from JPEG and PNG, without re-encoding. |
 | `strip_invisible_chars` | Remove zero-width and other invisible fingerprinting characters from text nodes, book metadata and TOC titles, script-aware. |
 | `normalize_identity` | Pin `dcterms:modified` to a fixed epoch, drop per-copy `dc:identifier` values and replace a per-copy unique identifier with one derived from title and authors. A checksum-valid ISBN or ISSN is kept, as is a DOI under an all-digit registrant a registration agency could actually have assigned. Only an all-digit registrant is recognised as a DOI at all, so the ISBN-A, ISMN-A and sub-registrant forms fall outside the screen. |

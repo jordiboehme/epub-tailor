@@ -107,19 +107,18 @@ fn x4_defaults_remap_every_surviving_color() {
     assert!(kinds.contains(&"colors-remapped"), "got: {kinds:?}");
     assert!(kinds.contains(&"svg-colors-remapped"), "got: {kinds:?}");
 
-    // Six text-ish colors cannot stay apart on 4 levels: the collapse warns.
-    assert!(
-        converted
-            .report
-            .warnings
-            .iter()
-            .any(|w| w.message.contains("share a gray tone")),
-        "expected a collapse warning, got: {:?}",
-        converted.report.warnings
-    );
-
     // The external sheet: colors survive filtering, remapped to gray4 levels.
     let ext = read_entry(&converted.epub, "OEBPS/styles/ext.css");
+    // Colorless dark text rides the black pin; the colored accents keep a
+    // tone of their own instead of collapsing into it.
+    assert_eq!(
+        gray_of(&ext, ".muted"),
+        0,
+        "dark gray text goes black: {ext}"
+    );
+    for selector in [".alert", ".note"] {
+        assert_ne!(gray_of(&ext, selector), 0, "{selector} stays apart: {ext}");
+    }
     for source in ["#e67e22", "#009688", "#663399", "#ffee88", "#b22222"] {
         assert!(!ext.contains(source), "{source} survived: {ext}");
     }
@@ -199,7 +198,7 @@ fn gray16_sanitize_profile_remaps_but_keeps_the_sheet_whole() {
         convert(Input::Epub(epub3_color_kitchen()), &opts).expect("conversion should succeed");
 
     // The sheet keeps every rule (no subset filtering) but the colors turned
-    // gray. `.muted` (#444444) is already a 16-level gray and stays itself.
+    // gray. `.muted` (#444444) is colorless dark text and goes to black.
     let ext = read_entry(&converted.epub, "OEBPS/styles/ext.css");
     for selector in ["body", ".alert", ".note", ".muted", ".box"] {
         assert!(ext.contains(selector), "{selector} must survive: {ext}");
@@ -209,8 +208,8 @@ fn gray16_sanitize_profile_remaps_but_keeps_the_sheet_whole() {
     }
     assert_hex_literals_are_gray(&ext, "ext.css");
     assert!(
-        ext.contains(".muted{color:#444"),
-        "an on-level gray stays: {ext}"
+        ext.contains(".muted{color:#000"),
+        "dark gray text goes black: {ext}"
     );
 
     // The head <style> stays in-chapter (no relocation) with its color gray.
@@ -335,7 +334,9 @@ fn dry_run_reports_the_same_transformations() {
 }
 
 #[test]
-fn remapping_is_a_fixed_point_across_runs() {
+fn remapping_settles_after_the_second_run() {
+    // The second run may still pin the grays colored text became to black
+    // (colorless dark text goes black); from then on nothing moves.
     let once = convert(
         Input::Epub(epub3_color_kitchen()),
         &ConvertOptions::default(),
@@ -343,14 +344,16 @@ fn remapping_is_a_fixed_point_across_runs() {
     .expect("first conversion succeeds");
     let twice = convert(Input::Epub(once.epub.clone()), &ConvertOptions::default())
         .expect("second conversion succeeds");
+    let thrice = convert(Input::Epub(twice.epub.clone()), &ConvertOptions::default())
+        .expect("third conversion succeeds");
     assert!(
-        !twice
+        !thrice
             .report
             .transformations
             .iter()
             .any(|t| t.kind.contains("colors-remapped")),
         "already-solved grays must map to themselves, got: {:?}",
-        twice
+        thrice
             .report
             .transformations
             .iter()

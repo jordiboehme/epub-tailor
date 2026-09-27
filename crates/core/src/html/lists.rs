@@ -8,7 +8,7 @@
 
 use kuchikiki::{NodeData, NodeRef};
 
-use crate::html::dom::{child_elements, element, get_attr, is_named, set_attr, text};
+use crate::html::dom::{add_class, child_elements, element, get_attr, is_named, set_attr, text};
 use crate::report::Transformation;
 
 const NBSP: char = '\u{A0}';
@@ -201,14 +201,6 @@ fn trim_leading_whitespace(inline: &mut Vec<NodeRef>) {
         let trimmed = text.borrow().trim_start().to_string();
         *text.borrow_mut() = trimmed;
     }
-}
-
-fn add_class(node: &NodeRef, class: &str) {
-    let combined = match get_attr(node, "class") {
-        Some(existing) if !existing.trim().is_empty() => format!("{existing} {class}"),
-        _ => class.to_string(),
-    };
-    set_attr(node, "class", &combined);
 }
 
 /// Format a counter into a list token per the `<ol type>` value. Non-positive
