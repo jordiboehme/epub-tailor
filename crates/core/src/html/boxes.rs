@@ -1,18 +1,20 @@
 //! Degrade callout boxes the firmware renders poorly: `<aside>`, `<figure>`
 //! (with `<figcaption>`) and `<dl>`. `<section>` and `<div>` are left alone -
-//! the device renders them fine.
+//! the device renders them fine. A `<dl>` whose terms are only bullet glyphs
+//! is a list in disguise and becomes a real `<ul>`.
 
 use kuchikiki::{NodeData, NodeRef};
 
 use crate::html::dom::{
-    collect_by_name, element, has_descendant_named, is_named, move_children, replace_with,
-    unwrap_element,
+    add_class, collect_by_name, element, get_attr, has_descendant_named, is_named, move_children,
+    replace_with, set_attr, text_content, unwrap_element,
 };
 use crate::report::Transformation;
 
-/// Block elements whose presence inside an `<aside>` means we simply unwrap it
-/// (splicing children in place) rather than rebuilding it as paragraphs.
-const ASIDE_BLOCK_TRIGGER: &[&str] = &[
+/// Block elements. Inside an `<aside>` their presence means we simply unwrap
+/// it (splicing children in place) rather than rebuilding it as paragraphs;
+/// inside a `<dd>` they are the blocks, everything else is inline content.
+const BLOCK_ELEMENTS: &[&str] = &[
     "p",
     "div",
     "h1",
@@ -61,7 +63,7 @@ fn degrade_aside(aside: &NodeRef, report: &mut Vec<Transformation>, chapter_path
         record(report, chapter_path, "removed an empty aside");
         return;
     }
-    if has_descendant_named(aside, ASIDE_BLOCK_TRIGGER) {
+    if has_descendant_named(aside, BLOCK_ELEMENTS) {
         unwrap_element(aside);
         record(
             report,
@@ -146,6 +148,17 @@ fn degrade_dl(dl: &NodeRef, report: &mut Vec<Transformation>, chapter_path: &str
     if dl.parent().is_none() {
         return;
     }
+    let terms: Vec<NodeRef> = dl.children().filter(|c| is_named(c, "dt")).collect();
+    if !terms.is_empty() && terms.iter().all(is_bullet_marker) {
+        let replacements = marker_dl_to_list(dl);
+        replace_with(dl, replacements);
+        record(
+            report,
+            chapter_path,
+            "turned a bullet-marker dl into a list",
+        );
+        return;
+    }
     let mut replacements = Vec::new();
     for child in dl.children() {
         if is_named(&child, "dt") {
@@ -155,13 +168,98 @@ fn degrade_dl(dl: &NodeRef, report: &mut Vec<Transformation>, chapter_path: &str
             paragraph.append(strong);
             replacements.push(paragraph);
         } else if is_named(&child, "dd") {
-            let paragraph = element("p", &[("class", "et-dd")]);
-            move_children(&child, &paragraph);
-            replacements.push(paragraph);
+            replacements.extend(dd_to_blocks(&child));
         }
     }
     replace_with(dl, replacements);
     record(report, chapter_path, "flattened a dl to paragraphs");
+}
+
+/// A `<dt>` holding nothing but one or two non-alphanumeric glyphs ("+", "•",
+/// "–", "✓"): a bullet a publisher floated beside its `<dd>`, not a term.
+fn is_bullet_marker(dt: &NodeRef) -> bool {
+    let content = text_content(dt);
+    let marker = content.trim();
+    (1..=2).contains(&marker.chars().count()) && !marker.chars().any(char::is_alphanumeric)
+}
+
+/// Rebuild a bullet-marker `<dl>` as a `<ul>`: the firmware draws its own "•"
+/// with a proper hanging indent, where a floated `<dt>` lands on a line of its
+/// own. The item takes the `<dd>`'s inline content, or its first paragraph's;
+/// further blocks follow the list (indented) and a new list resumes after them.
+fn marker_dl_to_list(dl: &NodeRef) -> Vec<NodeRef> {
+    let mut result = Vec::new();
+    let mut list: Option<NodeRef> = None;
+    let mut term_id = None;
+    for child in dl.children() {
+        if is_named(&child, "dt") {
+            term_id = get_attr(&child, "id");
+            continue;
+        }
+        if !is_named(&child, "dd") {
+            continue;
+        }
+        let item = element("li", &[]);
+        if let Some(id) = term_id.take().or_else(|| get_attr(&child, "id")) {
+            set_attr(&item, "id", &id);
+        }
+        let (inline, mut blocks): (Vec<NodeRef>, Vec<NodeRef>) =
+            child.children().partition(|n| !is_dd_block(n));
+        if inline.iter().any(|n| !is_whitespace_text(n)) {
+            for node in inline {
+                item.append(node);
+            }
+        } else if !blocks.is_empty() {
+            let first = blocks.remove(0);
+            if get_attr(&item, "id").is_none()
+                && let Some(id) = get_attr(&first, "id")
+            {
+                set_attr(&item, "id", &id);
+            }
+            move_children(&first, &item);
+        }
+        trim_leading_whitespace(&item);
+        trim_trailing_whitespace(&item);
+        list.get_or_insert_with(|| element("ul", &[])).append(item);
+        if !blocks.is_empty() {
+            result.extend(list.take());
+            for block in blocks {
+                add_class(&block, "et-dd");
+                result.push(block);
+            }
+        }
+    }
+    result.extend(list);
+    result
+}
+
+/// A `<dd>` as indented blocks: its own block children take the indent class,
+/// runs of inline content get a paragraph - never a paragraph around a
+/// paragraph.
+fn dd_to_blocks(dd: &NodeRef) -> Vec<NodeRef> {
+    if !dd.children().any(|n| is_dd_block(&n)) {
+        let paragraph = element("p", &[("class", "et-dd")]);
+        move_children(dd, &paragraph);
+        return vec![paragraph];
+    }
+    let mut result = Vec::new();
+    let mut run: Option<NodeRef> = None;
+    for node in dd.children() {
+        if is_dd_block(&node) {
+            result.extend(run.take());
+            add_class(&node, "et-dd");
+            result.push(node);
+        } else if !is_whitespace_text(&node) || run.is_some() {
+            run.get_or_insert_with(|| element("p", &[("class", "et-dd")]))
+                .append(node);
+        }
+    }
+    result.extend(run);
+    result
+}
+
+fn is_dd_block(node: &NodeRef) -> bool {
+    matches!(node.data(), NodeData::Element(e) if BLOCK_ELEMENTS.contains(&e.name.local.as_ref()))
 }
 
 fn has_meaningful_content(node: &NodeRef) -> bool {
@@ -187,6 +285,19 @@ fn trim_leading_whitespace(paragraph: &NodeRef) {
         let trimmed = text.borrow().trim_start().to_string();
         if trimmed.is_empty() {
             first.detach();
+        } else {
+            *text.borrow_mut() = trimmed;
+        }
+    }
+}
+
+fn trim_trailing_whitespace(node: &NodeRef) {
+    if let Some(last) = node.last_child()
+        && let Some(text) = last.as_text()
+    {
+        let trimmed = text.borrow().trim_end().to_string();
+        if trimmed.is_empty() {
+            last.detach();
         } else {
             *text.borrow_mut() = trimmed;
         }
@@ -238,6 +349,60 @@ mod tests {
     fn dl_becomes_paragraphs_snapshot() {
         let (out, _) = run("<dl><dt>Term</dt><dd>Definition</dd><dt>T2</dt><dd>D2</dd></dl>");
         insta::assert_snapshot!(out);
+    }
+
+    #[test]
+    fn dd_with_paragraphs_does_not_nest_paragraphs() {
+        let (out, _) = run("<dl><dt>Term</dt><dd><p class=\"x\">one</p><p>two</p></dd></dl>");
+        assert!(!out.contains("<p class=\"et-dd\"><p"), "nested p: {out}");
+        assert!(
+            out.contains("<p class=\"x et-dd\">one</p><p class=\"et-dd\">two</p>"),
+            "the dd's own paragraphs carry the indent: {out}"
+        );
+    }
+
+    #[test]
+    fn marker_dl_becomes_a_bullet_list() {
+        // A publisher pattern: a list set as a dl whose terms are one bullet
+        // glyph each, floated left by CSS the device ignores.
+        let (out, report) = run(concat!(
+            "<dl><dt class=\"term\">+</dt><dd><p class=\"Aufz\">Bleib bei deinem Kind.</p></dd>",
+            "<dt>+</dt><dd>Fühle <em>mit</em>.</dd></dl>"
+        ));
+        assert!(
+            out.contains("<ul><li>Bleib bei deinem Kind.</li><li>Fühle <em>mit</em>.</li></ul>"),
+            "got: {out}"
+        );
+        assert!(
+            !out.contains('+'),
+            "the glyph gives way to the native bullet: {out}"
+        );
+        assert_eq!(report[0].detail, "turned a bullet-marker dl into a list");
+    }
+
+    #[test]
+    fn marker_dl_keeps_further_blocks_after_the_item() {
+        let (out, _) =
+            run("<dl><dt>•</dt><dd><p>first</p><p>second</p></dd><dt>•</dt><dd>third</dd></dl>");
+        assert!(
+            out.contains(
+                "<ul><li>first</li></ul><p class=\"et-dd\">second</p><ul><li>third</li></ul>"
+            ),
+            "got: {out}"
+        );
+    }
+
+    #[test]
+    fn marker_dl_moves_ids_to_the_item() {
+        let (out, _) = run("<dl><dt id=\"a\">–</dt><dd id=\"b\">x</dd></dl>");
+        assert!(out.contains("<li id=\"a\">x</li>"), "got: {out}");
+    }
+
+    #[test]
+    fn a_dl_with_word_terms_stays_a_definition_list() {
+        let (out, _) = run("<dl><dt>+</dt><dd>plus</dd><dt>Minus</dt><dd>minus</dd></dl>");
+        assert!(!out.contains("<ul>"), "real terms are not bullets: {out}");
+        assert!(out.contains("<strong>Minus</strong>"), "got: {out}");
     }
 
     #[test]

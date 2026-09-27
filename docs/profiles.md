@@ -168,7 +168,7 @@ declaration survives with its value intact rather than being dropped.
 | `transcode_images` | Re-encode raster images to baseline grayscale JPEG/8-bit PNG, fitted and budgeted. |
 | `rasterize_svg` | Rasterize SVG resources and inline `<svg>` elements. |
 | `linearize_tables` | Keep tables the device renders as a grid (at most 4 columns, no spans, links, images or long cells); flatten the rest to labeled paragraphs, or rasterize per `options.tables`. |
-| `degrade_boxes` | Degrade `<aside>`, `<figure>`/`<figcaption>` and `<dl>` to plain flow content. |
+| `degrade_boxes` | Degrade `<aside>`, `<figure>`/`<figcaption>` and `<dl>` to plain flow content. A `<dl>` whose terms are only bullet glyphs (`+`, `•`, `–`) is a list set as a definition list and becomes a real `<ul>`. |
 | `bake_ordered_lists` | Bake `<ol>` numbering into the item text. |
 | `preserve_code_blocks` | Rebuild `<pre>`/`<code>` with explicit breaks and non-breaking spaces. |
 | `normalize_footnotes` | Normalize footnote links, drop `javascript:` hrefs. |

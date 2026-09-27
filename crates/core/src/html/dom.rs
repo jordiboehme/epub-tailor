@@ -95,6 +95,15 @@ pub(crate) fn set_attr(node: &NodeRef, name: &str, value: &str) {
     }
 }
 
+/// Append `class` to the element's class list (or set it when there is none).
+pub(crate) fn add_class(node: &NodeRef, class: &str) {
+    let combined = match get_attr(node, "class") {
+        Some(existing) if !existing.trim().is_empty() => format!("{existing} {class}"),
+        _ => class.to_string(),
+    };
+    set_attr(node, "class", &combined);
+}
+
 /// Remove an attribute from an element node, returning whether it was present.
 pub(crate) fn remove_attr(node: &NodeRef, name: &str) -> bool {
     match node.data() {
