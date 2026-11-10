@@ -127,17 +127,18 @@ fn a_book_root_size_rescales_rem_everywhere_and_body_text_keeps_the_reader_size(
 }
 
 #[test]
-fn generated_stylesheets_come_first_in_the_manifest() {
+fn generated_stylesheets_frame_the_book_sheets_in_the_manifest() {
     // The device loads sheets in manifest order and stops storing rules at a
-    // cap, so the helper rules go in before the book's own.
+    // cap, so the helper rules go in first; the relocated head styles go
+    // last, where a browser has them, so they still win ties.
     let out = fit(book("p{font-style:italic}", "p{text-align:left}", LIST));
     let opf = text_entry(&out.epub, "OEBPS/content.opf");
     let at = |href: &str| {
         opf.find(&format!(r#"href="{href}""#))
             .unwrap_or_else(|| panic!("{href} in the manifest:\n{opf}"))
     };
-    assert!(at("et-styles.css") < at("et-relocated.css"), "{opf}");
-    assert!(at("et-relocated.css") < at("styles/main.css"), "{opf}");
+    assert!(at("et-styles.css") < at("styles/main.css"), "{opf}");
+    assert!(at("styles/main.css") < at("et-relocated.css"), "{opf}");
 }
 
 #[test]
@@ -206,10 +207,10 @@ fn a_transparent_background_alone_gets_no_inline_white() {
 }
 
 #[test]
-fn a_class_scoped_head_rule_now_precedes_the_main_sheet() {
-    // Documents the I3 trade-off: the relocated `.note` keeps the
-    // specificity of a single class and is loaded before the main sheet, so
-    // on the device the main sheet wins the tie (`CssParser.cpp:1447-1448`).
+fn a_class_scoped_head_rule_still_follows_the_main_sheet() {
+    // The relocated `.note` keeps the specificity of a single class; loaded
+    // after the main sheet, it wins the tie on the device
+    // (`CssParser.cpp:1447-1448`) as the head `<style>` does in a browser.
     let out = fit(book(
         ".note{margin-left:2em}",
         ".note{margin-left:1em}",
@@ -219,7 +220,7 @@ fn a_class_scoped_head_rule_now_precedes_the_main_sheet() {
     assert_eq!(relocated, ".cpr1-c-note{margin-left:2em}");
     let opf = text_entry(&out.epub, "OEBPS/content.opf");
     assert!(
-        opf.find("et-relocated.css").unwrap() < opf.find("styles/main.css").unwrap(),
+        opf.find("styles/main.css").unwrap() < opf.find("et-relocated.css").unwrap(),
         "{opf}"
     );
 }

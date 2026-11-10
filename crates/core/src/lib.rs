@@ -234,9 +234,11 @@ pub fn convert(input: Input, opts: &ConvertOptions) -> Result<Converted, Convert
     } else {
         None
     };
-    // The stylesheets this conversion generates, listed ahead of the book's
-    // own in the manifest (see [`put_generated_css_first`]).
-    let mut generated_css: Vec<String> = Vec::new();
+    // The stylesheets this conversion generates: et-styles.css goes ahead of
+    // the book's own in the manifest, et-relocated.css (and its parts) after
+    // them (see [`order_generated_css`]).
+    let mut helper_css: Option<String> = None;
+    let mut relocated_css: Vec<String> = Vec::new();
     if opts.features.sanitize_css || opts.features.filter_css {
         let css_paths: Vec<String> = book
             .resources
@@ -516,8 +518,8 @@ pub fn convert(input: Input, opts: &ConvertOptions) -> Result<Converted, Convert
                 &mut warnings,
             );
             // The sheet itself, then any split parts (appended as new keys).
-            generated_css.push(relocated_path.clone());
-            generated_css.extend(
+            relocated_css.push(relocated_path.clone());
+            relocated_css.extend(
                 book.resources
                     .keys()
                     .skip(resources_before)
@@ -575,7 +577,7 @@ pub fn convert(input: Input, opts: &ConvertOptions) -> Result<Converted, Convert
     }
     if css_needed {
         // et-styles.css is already device-conformant, so it is not filtered.
-        generated_css.insert(0, css_path.clone());
+        helper_css = Some(css_path.clone());
         book.resources.insert(
             css_path.clone(),
             Resource {
@@ -591,7 +593,7 @@ pub fn convert(input: Input, opts: &ConvertOptions) -> Result<Converted, Convert
         });
     }
 
-    put_generated_css_first(&mut book, &generated_css);
+    order_generated_css(&mut book, helper_css.as_deref(), &relocated_css);
 
     // Every stylesheet in its final form (filtered, color-remapped), against
     // the device's rule store caps.
@@ -2206,36 +2208,39 @@ fn remap_document_colors(
     }
 }
 
-/// Move the `generated` stylesheets, in that order, ahead of the book's own
-/// stylesheets in `book.resources`, which is the manifest order. The device
-/// loads stylesheets in manifest order (`ContentOpfParser.cpp:362-363`,
-/// `Epub.cpp:170-171, 337` at firmware 2.0.0) and stops storing new rules once
-/// a store cap is hit, so the helper rules our output depends on go in first.
-/// At equal specificity an earlier rule loses (`CssParser.cpp:1447-1448`). For
-/// et-styles.css that only matters where an author class rule ties with a
-/// helper class on a reused block. For et-relocated.css it inverts a tie
-/// between a chapter's `<style>` and the book's own sheets: a class-scoped
-/// head rule (`.note` -> `.cpr1-c-note`) keeps the specificity of the
-/// original and now loses to an equal main-sheet rule, where a browser lets
-/// the head `<style>` win.
-fn put_generated_css_first(book: &mut Book, generated: &[String]) {
-    let moved: Vec<(String, Resource)> = generated
-        .iter()
-        .filter_map(|path| {
-            book.resources
-                .shift_remove(path)
-                .map(|resource| (path.clone(), resource))
-        })
-        .collect();
+/// Put the generated stylesheets where the device should load them.
+/// `book.resources` order is the manifest order, and the device loads
+/// stylesheets in manifest order (`ContentOpfParser.cpp:362-363`,
+/// `Epub.cpp:170-171, 337` at firmware 2.0.0):
+///
+/// - `helper` (et-styles.css) goes ahead of the book's own sheets, so its
+///   rules are stored before a store cap can stop the device storing more.
+///   At equal specificity the later rule wins (`CssParser.cpp:1447-1448`), so
+///   an author class rule beats a helper class rule it ties with; the
+///   generated paragraphs carry their hang inline for that reason
+///   (see [`html::hang`]).
+/// - `relocated` (et-relocated.css, then its split parts) goes after the
+///   book's own sheets, where a browser has the head `<style>` it came from,
+///   so a scoped head rule still wins a tie with an equal main-sheet rule.
+fn order_generated_css(book: &mut Book, helper: Option<&str>, relocated: &[String]) {
+    for path in relocated {
+        if let Some(resource) = book.resources.shift_remove(path) {
+            book.resources.insert(path.clone(), resource);
+        }
+    }
+    let Some(helper) = helper else {
+        return;
+    };
+    let Some(resource) = book.resources.shift_remove(helper) else {
+        return;
+    };
     let first_sheet = book
         .resources
         .values()
         .position(|resource| resource.media_type == "text/css")
         .unwrap_or(book.resources.len());
-    for (offset, (path, resource)) in moved.into_iter().enumerate() {
-        book.resources
-            .shift_insert(first_sheet + offset, path, resource);
-    }
+    book.resources
+        .shift_insert(first_sheet, helper.to_string(), resource);
 }
 
 /// Whether any element in `doc` carries a generated `et-*` helper class.
