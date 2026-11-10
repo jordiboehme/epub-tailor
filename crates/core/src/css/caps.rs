@@ -66,7 +66,8 @@ const SELECTOR_POOL_CAP: usize = 32 * 1024;
 /// declaration blocks and 32 KB of selector text; past any of them the device
 /// stops storing new rules, so rules in later sheets are lost. The device
 /// compares parsed styles rather than text, so counting distinct declaration
-/// text is a close, slightly high, estimate.
+/// text is a close estimate (a merged entry's combined style is not counted
+/// separately).
 pub(crate) fn store_cap_warnings(sheets: &[&str], max_rules: usize) -> Vec<Warning> {
     let mut rules = 0usize;
     let mut selector_bytes = 0usize;
@@ -81,6 +82,7 @@ pub(crate) fn store_cap_warnings(sheets: &[&str], max_rules: usize) -> Vec<Warni
             let Some((selectors, body)) = rule.split_once('{') else {
                 continue;
             };
+            let mut stored = false;
             for selector in selectors.split(',') {
                 let key = selector.to_ascii_lowercase();
                 if last_selector.as_deref() == Some(key.as_str()) {
@@ -89,8 +91,14 @@ pub(crate) fn store_cap_warnings(sheets: &[&str], max_rules: usize) -> Vec<Warni
                 rules += 1;
                 selector_bytes += selector.len();
                 last_selector = Some(key);
+                stored = true;
             }
-            bodies.insert(body);
+            // A rule that only merged into the previous entry changes that
+            // entry's style in place (`CssParser.cpp:738-755`) and adds no
+            // style of its own.
+            if stored {
+                bodies.insert(body);
+            }
         }
     }
     let mut warnings = Vec::new();

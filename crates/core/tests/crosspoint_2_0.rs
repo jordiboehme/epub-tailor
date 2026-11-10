@@ -146,19 +146,10 @@ fn too_many_distinct_declaration_blocks_are_warned_about() {
     let sheet: String = (0..300)
         .map(|i| format!(".c{i}{{margin-left:{i}px}}"))
         .collect();
-    let paragraphs: String = (0..300)
+    let body: String = (0..300)
         .map(|i| format!(r#"<p class="c{i}">x</p>"#))
         .collect();
-    // A baked list brings in et-styles.css and a head <style> brings in
-    // et-relocated.css, so both generated sheets are part of the count.
-    let body = format!("{LIST}{paragraphs}");
-    let out = fit(book("p{margin:0}", &sheet, &body));
-    for generated in ["OEBPS/et-styles.css", "OEBPS/et-relocated.css"] {
-        assert!(
-            entry(&out.epub, generated).is_some(),
-            "{generated} is in the output"
-        );
-    }
+    let out = fit(book("", &sheet, &body));
     assert!(
         out.report
             .warnings
@@ -259,10 +250,19 @@ fn check_and_fit_count_the_css_store_alike() {
     let sheet: String = (0..300)
         .map(|i| format!(".c{i},.d{i}{{margin-left:{i}px}}"))
         .collect();
-    let body: String = (0..300)
+    let paragraphs: String = (0..300)
         .map(|i| format!(r#"<p class="c{i}">x</p>"#))
         .collect();
-    let out = fit(book("", &sheet, &body));
+    // A baked list brings in et-styles.css and a head <style> brings in
+    // et-relocated.css, so both generated sheets are part of the count.
+    let body = format!("{LIST}{paragraphs}");
+    let out = fit(book("p{margin:0}", &sheet, &body));
+    for generated in ["OEBPS/et-styles.css", "OEBPS/et-relocated.css"] {
+        assert!(
+            entry(&out.epub, generated).is_some(),
+            "{generated} is in the output"
+        );
+    }
     let mut from_fit: Vec<String> = out
         .report
         .warnings
