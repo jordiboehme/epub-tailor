@@ -104,6 +104,34 @@ pub(crate) fn add_class(node: &NodeRef, class: &str) {
     set_attr(node, "class", &combined);
 }
 
+/// Set `declarations` in `node`'s inline `style`: any existing declaration of
+/// the same property is removed and the new ones are appended last, so they
+/// win however the device or a browser resolves duplicates (the firmware
+/// parses declarations in order, the later one overwriting,
+/// `CssParser.cpp:1146-1160` at firmware 2.0.0). Splits the existing value on
+/// `;`, which is safe for the filtered, string-free styles this runs on.
+pub(crate) fn merge_inline_style(node: &NodeRef, declarations: &[(&str, &str)]) {
+    let mut kept: Vec<String> = get_attr(node, "style")
+        .unwrap_or_default()
+        .split(';')
+        .map(str::trim)
+        .filter(|decl| !decl.is_empty())
+        .filter(|decl| {
+            let name = decl.split(':').next().unwrap_or("").trim();
+            !declarations
+                .iter()
+                .any(|(ours, _)| name.eq_ignore_ascii_case(ours))
+        })
+        .map(str::to_string)
+        .collect();
+    kept.extend(
+        declarations
+            .iter()
+            .map(|(name, value)| format!("{name}:{value}")),
+    );
+    set_attr(node, "style", &kept.join(";"));
+}
+
 /// Remove an attribute from an element node, returning whether it was present.
 pub(crate) fn remove_attr(node: &NodeRef, name: &str) -> bool {
     match node.data() {

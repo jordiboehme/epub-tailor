@@ -14,6 +14,73 @@ use crate::report::{Transformation, Warning};
 /// Words strictly longer than this many bytes are hard-cut by the device.
 const MAX_WORD_BYTES: usize = 200;
 
+/// Split `text` into the word tokens the device builds from it
+/// (`ChapterHtmlSlimParser.cpp:2444-2523` at firmware 2.0.0). Only ASCII
+/// space, tab, CR and LF separate words; a no-break space (U+00A0) or narrow
+/// no-break space (U+202F) becomes a word of its own, stored as a single
+/// `" "`; a BOM (U+FEFF) is skipped. Every other character, including other
+/// Unicode spaces, is part of a word. Ignores the device's 200-byte hard cut
+/// and the word breaks at inline element boundaries.
+pub(crate) fn device_words(text: &str) -> Vec<String> {
+    let mut words = Vec::new();
+    let mut current = String::new();
+    for c in text.chars() {
+        match c {
+            ' ' | '\t' | '\r' | '\n' => {
+                if !current.is_empty() {
+                    words.push(std::mem::take(&mut current));
+                }
+            }
+            '\u{A0}' | '\u{202F}' => {
+                if !current.is_empty() {
+                    words.push(std::mem::take(&mut current));
+                }
+                words.push(" ".to_string());
+            }
+            '\u{FEFF}' => {}
+            other => current.push(other),
+        }
+    }
+    if !current.is_empty() {
+        words.push(current);
+    }
+    words
+}
+
+/// Whether the device lays out a paragraph holding `text` right to left when
+/// no `dir` or `direction` sets it: one of its first three words starts (by
+/// its first strong character) with a right-to-left letter
+/// (`ParsedText.cpp:780-790`, `BidiUtils.cpp:61-77` at firmware 2.0.0).
+pub(crate) fn device_detects_rtl(text: &str) -> bool {
+    device_words(text).iter().take(3).any(|word| {
+        word.chars()
+            .find_map(|c| {
+                if is_rtl_letter(c) {
+                    Some(true)
+                } else if c.is_alphabetic() {
+                    Some(false)
+                } else {
+                    None
+                }
+            })
+            .unwrap_or(false)
+    })
+}
+
+/// Whether `c` is a strong right-to-left character (bidi class R or AL): the
+/// Hebrew, Arabic, Syriac, Thaana, NKo, Samaritan and Mandaic blocks and their
+/// presentation forms, minus the Arabic digits (class AN) and the combining
+/// marks (class NSM), which `is_alphabetic` treats as neutral anyway when they
+/// are not letters.
+fn is_rtl_letter(c: char) -> bool {
+    let cp = u32::from(c);
+    let in_rtl_block = matches!(
+        cp,
+        0x0590..=0x08FF | 0xFB1D..=0xFDFF | 0xFE70..=0xFEFF | 0x10800..=0x10FFF | 0x1E800..=0x1EFFF
+    );
+    in_rtl_block && c.is_alphabetic()
+}
+
 /// Sanitize (strip XML-invalid characters and any BOM) and NFC-normalize one
 /// string. Equal to the input when it is already clean.
 pub(crate) fn clean_string(s: &str) -> String {
@@ -90,6 +157,28 @@ mod tests {
         let mut warnings = Vec::new();
         unicode_hygiene(&doc, &mut report, &mut warnings, "ch.xhtml");
         (serialize(&doc), report, warnings)
+    }
+
+    #[test]
+    fn device_words_split_like_the_firmware() {
+        assert_eq!(
+            device_words("200\u{A0}km and\u{202F}more\u{FEFF}\tx\u{2003}y"),
+            vec!["200", " ", "km", "and", " ", "more", "x\u{2003}y"]
+        );
+        assert!(device_words(" \n ").is_empty());
+    }
+
+    #[test]
+    fn rtl_detection_probes_the_first_three_words() {
+        assert!(device_detects_rtl("1.\u{A0}\u{5e9}\u{5dc}\u{5d5}\u{5dd}"));
+        assert!(device_detects_rtl(
+            "\u{627}\u{644}\u{633}\u{644}\u{627}\u{645}"
+        ));
+        assert!(!device_detects_rtl("1.\u{A0}Hello \u{5e9}"));
+        // The fourth word is past the probe.
+        assert!(!device_detects_rtl("1. 2. 3. \u{5e9}"));
+        // Arabic digits are not letters.
+        assert!(!device_detects_rtl("\u{661}\u{662}"));
     }
 
     #[test]

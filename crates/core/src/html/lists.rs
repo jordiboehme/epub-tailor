@@ -6,10 +6,24 @@
 //! numbered twice. Each `<ol>` becomes numbered `<p class="et-ol-item">`
 //! paragraphs. `<ul>` is left untouched - its native bullets are already
 //! correct.
+//!
+//! Each numbered paragraph hangs its label: the `et-ol-item`/`et-ol-nested`
+//! class rules in `et-styles.css` carry the hang for other readers, and the
+//! same pair is also written inline, because a more specific author rule (a
+//! scoped `p{margin:0}`, `.chapter p{margin:0}`) would otherwise replace the
+//! margin and leave the negative indent drawing the label left of the text
+//! column. The device applies inline styles over the resolved cascade
+//! (`ChapterHtmlSlimParser.cpp:1430-1433` at firmware 2.0.0). A right-to-left
+//! paragraph starts its first line at the right edge plus the hang
+//! (`ParsedText.cpp:1541, 1703-1706`), so there the margin goes on the right.
 
 use kuchikiki::{NodeData, NodeRef};
 
-use crate::html::dom::{add_class, child_elements, element, get_attr, is_named, set_attr, text};
+use crate::html::dom::{
+    add_class, child_elements, element, get_attr, is_named, merge_inline_style, set_attr, text,
+    text_content,
+};
+use crate::html::text::device_detects_rtl;
 use crate::report::Transformation;
 
 const NBSP: char = '\u{A0}';
@@ -151,6 +165,7 @@ fn flatten_li(
             paragraph.append(node);
         }
         transfer_id(&paragraph, li_id.as_deref());
+        hang_inline(&paragraph, li, nested);
         result.push(paragraph);
         for block in blocks {
             add_class(&block, "et-ol-cont");
@@ -163,6 +178,7 @@ fn flatten_li(
             add_class(&first, item_class);
             first.prepend(text(&format!("{label}{NBSP}")));
             transfer_id(&first, li_id.as_deref());
+            hang_inline(&first, li, nested);
             result.push(first);
         }
         for block in iter {
@@ -172,6 +188,82 @@ fn flatten_li(
     }
     result.extend(trailers);
     result
+}
+
+/// Write the hanging indent of a numbered paragraph inline on `paragraph`
+/// (see the module docs), mirrored for a right-to-left paragraph.
+fn hang_inline(paragraph: &NodeRef, li: &NodeRef, nested: bool) {
+    let (margin, indent) = if nested {
+        ("2em", "-1em")
+    } else {
+        ("1.5em", "-1.5em")
+    };
+    if paragraph_is_rtl(paragraph, li) {
+        merge_inline_style(
+            paragraph,
+            &[
+                ("margin-left", "0"),
+                ("margin-right", margin),
+                ("text-indent", indent),
+            ],
+        );
+    } else {
+        merge_inline_style(
+            paragraph,
+            &[("margin-left", margin), ("text-indent", indent)],
+        );
+    }
+}
+
+/// Whether the device lays `paragraph` out right to left. The nearest `dir`
+/// of `rtl` or `ltr` decides: on the paragraph, its inline `direction`, then
+/// the `<li>` and its ancestors. The `<li>` and `<ol>` do not survive, so a
+/// `dir` found on them is copied onto the paragraph. With no `dir` at all
+/// the device looks at the first words (see [`device_detects_rtl`]). A
+/// `direction` set in a stylesheet is not seen here.
+fn paragraph_is_rtl(paragraph: &NodeRef, li: &NodeRef) -> bool {
+    if let Some(rtl) = get_attr(paragraph, "dir").and_then(|d| explicit_rtl(&d)) {
+        return rtl;
+    }
+    if let Some(rtl) = get_attr(paragraph, "style").and_then(|s| inline_direction(&s)) {
+        return rtl;
+    }
+    for node in li.inclusive_ancestors() {
+        if let Some(dir) = get_attr(&node, "dir")
+            && let Some(rtl) = explicit_rtl(&dir)
+        {
+            if is_named(&node, "li") || is_named(&node, "ol") {
+                set_attr(paragraph, "dir", dir.trim());
+            }
+            return rtl;
+        }
+    }
+    device_detects_rtl(&text_content(paragraph))
+}
+
+/// `Some(true)` for `rtl`, `Some(false)` for `ltr`, `None` for anything else
+/// (`auto`, empty), compared as the device does, ignoring ASCII case.
+fn explicit_rtl(dir: &str) -> Option<bool> {
+    let dir = dir.trim();
+    if dir.eq_ignore_ascii_case("rtl") {
+        Some(true)
+    } else if dir.eq_ignore_ascii_case("ltr") {
+        Some(false)
+    } else {
+        None
+    }
+}
+
+/// The direction an inline `direction:` declaration sets, if any.
+fn inline_direction(style: &str) -> Option<bool> {
+    style.split(';').rev().find_map(|decl| {
+        let (name, value) = decl.split_once(':')?;
+        if name.trim().eq_ignore_ascii_case("direction") {
+            explicit_rtl(value)
+        } else {
+            None
+        }
+    })
 }
 
 /// Set `id` on `node` from the original `<li>`'s id, unless `node` already
@@ -329,6 +421,87 @@ mod tests {
         assert_eq!(out.matches("<p").count(), 1, "got: {out}");
         assert!(out.contains(r#"id="fn-1""#), "got: {out}");
         assert!(out.contains(r#"class="et-ol-item""#), "got: {out}");
+    }
+
+    const HANG: &str = "margin-left:1.5em;text-indent:-1.5em";
+    const NESTED_HANG: &str = "margin-left:2em;text-indent:-1em";
+    const RTL_HANG: &str = "margin-left:0;margin-right:1.5em;text-indent:-1.5em";
+
+    #[test]
+    fn items_carry_their_hang_inline() {
+        let (out, _) = run("<ol><li>a<ol><li>x</li></ol></li><li>b</li></ol>");
+        assert_eq!(
+            out.matches(&format!(r#"style="{HANG}""#)).count(),
+            2,
+            "{out}"
+        );
+        assert_eq!(
+            out.matches(&format!(r#"style="{NESTED_HANG}""#)).count(),
+            1,
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn hang_is_merged_after_an_existing_inline_style() {
+        let (out, _) =
+            run(r#"<ol><li><p style="margin:0;text-indent:2em;font-style:italic">x</p></li></ol>"#);
+        assert!(
+            out.contains(&format!(r#"style="margin:0;font-style:italic;{HANG}""#)),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn continuation_blocks_take_no_inline_hang() {
+        let (out, _) = run("<ol><li><p>first</p><p>second</p></li></ol>");
+        assert_eq!(out.matches("style=").count(), 1, "{out}");
+    }
+
+    #[test]
+    fn rtl_dir_on_an_ancestor_hangs_on_the_right() {
+        let (out, _) = run(r#"<div dir="rtl"><ol><li>x</li></ol></div>"#);
+        assert!(out.contains(&format!(r#"style="{RTL_HANG}""#)), "{out}");
+    }
+
+    #[test]
+    fn rtl_text_without_dir_hangs_on_the_right() {
+        // The device detects the direction from the first words when no
+        // `dir` is set (`ParsedText.cpp:780-790`).
+        let (out, _) = run("<ol><li>\u{5e9}\u{5dc}\u{5d5}\u{5dd} world</li></ol>");
+        assert!(out.contains(&format!(r#"style="{RTL_HANG}""#)), "{out}");
+    }
+
+    #[test]
+    fn explicit_ltr_wins_over_rtl_text() {
+        let (out, _) = run(r#"<div dir="ltr"><ol dir="auto"><li>\u{5e9}</li></ol></div>"#);
+        assert!(out.contains(&format!(r#"style="{HANG}""#)), "{out}");
+    }
+
+    #[test]
+    fn rtl_nested_item_hangs_on_the_right() {
+        let (out, _) = run(r#"<ol dir="rtl"><li>a<ol><li>b</li></ol></li></ol>"#);
+        assert!(
+            out.contains(r#"style="margin-left:0;margin-right:2em;text-indent:-1em""#),
+            "{out}"
+        );
+        // The `<ol dir>` does not survive, so the paragraphs carry it.
+        assert_eq!(out.matches(r#"dir="rtl""#).count(), 2, "{out}");
+    }
+
+    #[test]
+    fn inline_hangs_are_kept_by_the_inline_filter() {
+        for style in [
+            HANG,
+            NESTED_HANG,
+            RTL_HANG,
+            "margin-left:0;margin-right:2em;text-indent:-1em",
+        ] {
+            assert_eq!(
+                crate::css::filter_inline_style(style, false).as_deref(),
+                Some(style)
+            );
+        }
     }
 
     #[test]
