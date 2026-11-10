@@ -223,3 +223,23 @@ fn a_class_scoped_head_rule_now_precedes_the_main_sheet() {
         "{opf}"
     );
 }
+
+#[test]
+fn helper_paragraphs_keep_their_margin_under_author_resets() {
+    // `p{margin:0}` (head) and `.note{margin-left:0}` (linked) both target
+    // the same blocks; the inline pair beats both on the device.
+    let body = r#"<ol><li><p>First</p><p class="note">More</p></li></ol>
+<table><tr><th>Planet</th><th>Ruler</th><th>Notes</th></tr><tr><td class="note">Arrakis</td><td>Atreides</td><td>Spice<br/>sand</td></tr></table>
+<pre class="note">line one</pre>"#;
+    let out = fit(book("p{margin:0}", ".note{margin-left:0}", body));
+    let chapter = text_entry(&out.epub, "OEBPS/text/chapter1.xhtml");
+    let cont = r#"style="margin-left:2em;text-indent:-1px""#;
+    let cell = r#"style="margin-left:1em;text-indent:-1px""#;
+    assert!(chapter.contains(&format!("{cont}>More</p>")), "{chapter}");
+    // Three cells plus the code line share the 1em pair.
+    assert_eq!(chapter.matches(cell).count(), 4, "{chapter}");
+    assert!(
+        chapter.contains(&format!("{cell}>line one</p>")),
+        "{chapter}"
+    );
+}

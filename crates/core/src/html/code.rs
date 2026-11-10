@@ -8,6 +8,7 @@
 use kuchikiki::NodeRef;
 
 use crate::html::dom::{element, text, text_content};
+use crate::html::hang::{self, hang_inline};
 use crate::report::Transformation;
 
 /// A tab expands to this many non-breaking spaces.
@@ -43,6 +44,7 @@ pub(crate) fn preserve_code_blocks(
                 paragraph.append(element("br", &[]));
             }
         }
+        hang_inline(&paragraph, &pre, hang::CODE);
         pre.insert_before(paragraph);
         pre.detach();
         report.push(Transformation {
@@ -117,6 +119,17 @@ mod tests {
     }
 
     #[test]
+    fn rtl_code_hangs_from_the_right() {
+        let doc = doc_from_body(r#"<div dir="rtl"><pre>x</pre></div>"#);
+        preserve_code_blocks(&doc, &mut Vec::new(), "ch.xhtml");
+        let out = serialize(&doc);
+        assert!(
+            out.contains(r#"style="margin-left:0;margin-right:1em;text-indent:-1px""#),
+            "{out}"
+        );
+    }
+
+    #[test]
     fn pre_with_tabs_and_indentation_snapshot() {
         let (out, report) = run("<pre><code>def f():\n\tif x:\n\t\treturn  1\n</code></pre>");
         insta::assert_snapshot!(out);
@@ -128,7 +141,9 @@ mod tests {
     fn drops_inner_markup_keeping_text() {
         let (out, _) = run("<pre><span style=\"color:red\">tok</span>en</pre>");
         assert!(
-            out.contains(r#"<p class="et-code">token</p>"#),
+            out.contains(
+                r#"<p class="et-code" style="margin-left:1em;text-indent:-1px">token</p>"#
+            ),
             "got: {out}"
         );
         assert!(
@@ -141,7 +156,7 @@ mod tests {
     fn leading_spaces_map_one_to_one() {
         let (out, _) = run("<pre>  two</pre>");
         assert!(
-            out.contains("<p class=\"et-code\">\u{A0}\u{A0}two</p>"),
+            out.contains("<p class=\"et-code\" style=\"margin-left:1em;text-indent:-1px\">\u{A0}\u{A0}two</p>"),
             "got: {out}"
         );
     }
@@ -149,7 +164,10 @@ mod tests {
     #[test]
     fn single_interior_space_stays_breakable() {
         let (out, _) = run("<pre>a b</pre>");
-        assert!(out.contains("<p class=\"et-code\">a b</p>"), "got: {out}");
+        assert!(
+            out.contains("<p class=\"et-code\" style=\"margin-left:1em;text-indent:-1px\">a b</p>"),
+            "got: {out}"
+        );
     }
 
     #[test]

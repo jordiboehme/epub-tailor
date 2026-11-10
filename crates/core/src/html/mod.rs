@@ -20,6 +20,7 @@ mod boxes;
 mod code;
 mod dedupe;
 mod footnotes;
+pub(crate) mod hang;
 mod lists;
 mod styles;
 pub(crate) mod tables;

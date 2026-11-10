@@ -7,23 +7,14 @@
 //! paragraphs. `<ul>` is left untouched - its native bullets are already
 //! correct.
 //!
-//! Each numbered paragraph hangs its label: the `et-ol-item`/`et-ol-nested`
-//! class rules in `et-styles.css` carry the hang for other readers, and the
-//! same pair is also written inline, because a more specific author rule (a
-//! scoped `p{margin:0}`, `.chapter p{margin:0}`) would otherwise replace the
-//! margin and leave the negative indent drawing the label left of the text
-//! column. The device applies inline styles over the resolved cascade
-//! (`ChapterHtmlSlimParser.cpp:1430-1433` at firmware 2.0.0). A right-to-left
-//! paragraph starts its first line at the right edge plus the hang
-//! (`ParsedText.cpp:1541, 1703-1706`), so there the margin goes on the right.
+//! Each numbered paragraph hangs its label, and each continuation block lines
+//! up under the text; both carry their margin and indent inline as well as
+//! through their class (see [`super::hang`]).
 
 use kuchikiki::{NodeData, NodeRef};
 
-use crate::html::dom::{
-    add_class, child_elements, element, get_attr, is_named, merge_inline_style, set_attr, text,
-    text_content,
-};
-use crate::html::text::device_detects_rtl;
+use crate::html::dom::{add_class, child_elements, element, get_attr, is_named, set_attr, text};
+use crate::html::hang::{self, hang_inline};
 use crate::report::Transformation;
 
 const NBSP: char = '\u{A0}';
@@ -129,10 +120,10 @@ fn flatten_li(
     chapter_path: &str,
 ) -> Vec<NodeRef> {
     let label = format!("{core}.");
-    let item_class = if nested {
-        "et-ol-item et-ol-nested"
+    let (item_class, item_hang) = if nested {
+        ("et-ol-item et-ol-nested", hang::OL_NESTED)
     } else {
-        "et-ol-item"
+        ("et-ol-item", hang::OL_ITEM)
     };
     // An `<li id="...">` is a same-document link target (e.g. GFM's rendered
     // footnote definitions, `<ol><li id="fn-1">`) - the `<li>` itself never
@@ -165,10 +156,11 @@ fn flatten_li(
             paragraph.append(node);
         }
         transfer_id(&paragraph, li_id.as_deref());
-        hang_inline(&paragraph, li, nested);
+        hang_inline(&paragraph, li, item_hang);
         result.push(paragraph);
         for block in blocks {
             add_class(&block, "et-ol-cont");
+            hang_inline(&block, li, hang::OL_CONT);
             result.push(block);
         }
     } else {
@@ -178,92 +170,17 @@ fn flatten_li(
             add_class(&first, item_class);
             first.prepend(text(&format!("{label}{NBSP}")));
             transfer_id(&first, li_id.as_deref());
-            hang_inline(&first, li, nested);
+            hang_inline(&first, li, item_hang);
             result.push(first);
         }
         for block in iter {
             add_class(&block, "et-ol-cont");
+            hang_inline(&block, li, hang::OL_CONT);
             result.push(block);
         }
     }
     result.extend(trailers);
     result
-}
-
-/// Write the hanging indent of a numbered paragraph inline on `paragraph`
-/// (see the module docs), mirrored for a right-to-left paragraph.
-fn hang_inline(paragraph: &NodeRef, li: &NodeRef, nested: bool) {
-    let (margin, indent) = if nested {
-        ("2em", "-1em")
-    } else {
-        ("1.5em", "-1.5em")
-    };
-    if paragraph_is_rtl(paragraph, li) {
-        merge_inline_style(
-            paragraph,
-            &[
-                ("margin-left", "0"),
-                ("margin-right", margin),
-                ("text-indent", indent),
-            ],
-        );
-    } else {
-        merge_inline_style(
-            paragraph,
-            &[("margin-left", margin), ("text-indent", indent)],
-        );
-    }
-}
-
-/// Whether the device lays `paragraph` out right to left. The nearest `dir`
-/// of `rtl` or `ltr` decides: on the paragraph, its inline `direction`, then
-/// the `<li>` and its ancestors. The `<li>` and `<ol>` do not survive, so a
-/// `dir` found on them is copied onto the paragraph. With no `dir` at all
-/// the device looks at the first words (see [`device_detects_rtl`]). A
-/// `direction` set in a stylesheet is not seen here.
-fn paragraph_is_rtl(paragraph: &NodeRef, li: &NodeRef) -> bool {
-    if let Some(rtl) = get_attr(paragraph, "dir").and_then(|d| explicit_rtl(&d)) {
-        return rtl;
-    }
-    if let Some(rtl) = get_attr(paragraph, "style").and_then(|s| inline_direction(&s)) {
-        return rtl;
-    }
-    for node in li.inclusive_ancestors() {
-        if let Some(dir) = get_attr(&node, "dir")
-            && let Some(rtl) = explicit_rtl(&dir)
-        {
-            if is_named(&node, "li") || is_named(&node, "ol") {
-                set_attr(paragraph, "dir", dir.trim());
-            }
-            return rtl;
-        }
-    }
-    device_detects_rtl(&text_content(paragraph))
-}
-
-/// `Some(true)` for `rtl`, `Some(false)` for `ltr`, `None` for anything else
-/// (`auto`, empty), compared as the device does, ignoring ASCII case.
-fn explicit_rtl(dir: &str) -> Option<bool> {
-    let dir = dir.trim();
-    if dir.eq_ignore_ascii_case("rtl") {
-        Some(true)
-    } else if dir.eq_ignore_ascii_case("ltr") {
-        Some(false)
-    } else {
-        None
-    }
-}
-
-/// The direction an inline `direction:` declaration sets, if any.
-fn inline_direction(style: &str) -> Option<bool> {
-    style.split(';').rev().find_map(|decl| {
-        let (name, value) = decl.split_once(':')?;
-        if name.trim().eq_ignore_ascii_case("direction") {
-            explicit_rtl(value)
-        } else {
-            None
-        }
-    })
 }
 
 /// Set `id` on `node` from the original `<li>`'s id, unless `node` already
@@ -453,9 +370,16 @@ mod tests {
     }
 
     #[test]
-    fn continuation_blocks_take_no_inline_hang() {
-        let (out, _) = run("<ol><li><p>first</p><p>second</p></li></ol>");
-        assert_eq!(out.matches("style=").count(), 1, "{out}");
+    fn continuation_blocks_hang_inline_too() {
+        let (out, _) = run(
+            r#"<ol><li><p>first</p><p class="note" style="margin-left:0">second</p></li></ol>"#,
+        );
+        assert!(
+            out.contains(
+                r#"<p class="note et-ol-cont" style="margin-left:2em;text-indent:-1px">second</p>"#
+            ),
+            "{out}"
+        );
     }
 
     #[test]

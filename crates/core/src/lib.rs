@@ -2590,6 +2590,30 @@ mod tests {
         }
     }
 
+    /// The pairs written inline on generated paragraphs must equal their
+    /// class rules, so other readers and CrossPoint lay them out alike.
+    #[test]
+    fn inline_hangs_match_et_styles() {
+        for hang in crate::html::hang::ALL {
+            let rule = ET_STYLES
+                .split('}')
+                .find_map(|r| r.strip_prefix(&format!(".{}{{", hang.class)))
+                .unwrap_or_else(|| panic!(".{} has a rule", hang.class));
+            assert!(
+                rule.split(';')
+                    .any(|d| d == format!("margin-left:{}", hang.margin)),
+                ".{}: {rule}",
+                hang.class
+            );
+            assert!(
+                rule.split(';')
+                    .any(|d| d == format!("text-indent:{}", hang.indent)),
+                ".{}: {rule}",
+                hang.class
+            );
+        }
+    }
+
     /// A book already carrying a `styles/main-2.css` resource unrelated to
     /// splitting; storing an oversized `styles/main.css` must not let its
     /// generated part silently overwrite (or be shadowed by) it.

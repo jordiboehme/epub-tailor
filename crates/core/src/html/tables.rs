@@ -25,6 +25,7 @@ use crate::html::dom::{
     child_elements, collect_by_name, element, get_attr, has_descendant_named, is_named,
     move_children, replace_with, set_attr, text, text_content,
 };
+use crate::html::hang::{self, hang_inline};
 use crate::html::table_render::{Cell, TableModel};
 use crate::html::text::device_words;
 use crate::options::{ConvertOptions, TableMode};
@@ -545,6 +546,7 @@ fn flatten_one(
                     paragraph.append(text(" "));
                 }
                 let extras = distribute_cell(cell, &paragraph);
+                hang_inline(&paragraph, cell, hang::TABLE_CELL);
                 out.push(paragraph);
                 out.extend(extras);
             }
