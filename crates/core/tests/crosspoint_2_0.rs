@@ -158,3 +158,38 @@ fn too_many_distinct_declaration_blocks_are_warned_about() {
         out.report.warnings
     );
 }
+
+#[test]
+fn a_page_tint_does_not_shade_every_page() {
+    let body =
+        r#"<div class="page"><h1>Dune</h1><p>Text</p><div class="tip"><p>Water</p></div></div>"#;
+    let out = fit(book(
+        "",
+        "body{background:wheat}.page{background-color:#ddd}.tip{background:#eee}",
+        body,
+    ));
+    let chapter = text_entry(&out.epub, "OEBPS/text/chapter1.xhtml");
+    assert!(
+        chapter.contains(r#"<body style="background-color:#fff">"#),
+        "{chapter}"
+    );
+    assert!(
+        chapter.contains(r#"style="background-color:#fff">"#),
+        "{chapter}"
+    );
+    assert!(
+        chapter.contains(r#"<div class="page" style="background-color:#fff">"#),
+        "{chapter}"
+    );
+    // The callout deeper in the chapter keeps its shade.
+    assert!(chapter.contains(r#"<div class="tip">"#), "{chapter}");
+    let main = text_entry(&out.epub, "OEBPS/styles/main.css");
+    assert!(main.contains(".tip{background-color:#aaa}"), "{main}");
+}
+
+#[test]
+fn a_book_without_backgrounds_gets_no_inline_white() {
+    let out = fit(book("", "p{text-align:left}", "<div><p>Text</p></div>"));
+    let chapter = text_entry(&out.epub, "OEBPS/text/chapter1.xhtml");
+    assert!(!chapter.contains("background-color"), "{chapter}");
+}

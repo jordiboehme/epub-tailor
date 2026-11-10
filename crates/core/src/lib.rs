@@ -2171,6 +2171,17 @@ fn remap_document_colors(
         }
     }
 
+    // A CrossPoint panel shades a light background. Once the book has any,
+    // keep the page itself and whole-chapter wrappers white (see
+    // [`color::page`]); added after the solve, so the stats are unchanged.
+    if opts.device.panel == crate::profile::caps::Panel::Gray4
+        && collected.has_role(color::palette::Role::Background)
+    {
+        for (_, doc) in chapters {
+            color::page::keep_page_white(doc);
+        }
+    }
+
     if rewritten_total == 0 {
         return;
     }

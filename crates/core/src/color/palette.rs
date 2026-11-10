@@ -74,6 +74,11 @@ impl Collected {
         self.counts.is_empty()
     }
 
+    /// Whether any collected color has `role`.
+    pub(crate) fn has_role(&self, role: Role) -> bool {
+        self.counts.keys().any(|&(_, r)| r == role)
+    }
+
     /// The distinct `(color, role)` pairs collected so far, in no particular
     /// order. A test-side window; production reads go through the solve.
     #[cfg(test)]
