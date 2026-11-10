@@ -987,7 +987,7 @@ body { color: green; text-align: justify; }
 </head>
 <body>
 <h1>CSS Kitchen</h1>
-<p style="color:red;text-align:center;font-size:12px">Filtered inline.</p>
+<p style="color:red;text-align:center;letter-spacing:1px">Filtered inline.</p>
 <p style="color:blue">Dropped inline.</p>
 <p class="note">A note.</p>
 </body>

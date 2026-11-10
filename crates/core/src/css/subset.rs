@@ -1,11 +1,15 @@
 //! Filter arbitrary stylesheet text down to the tiny subset the CrossPoint
 //! firmware actually parses.
 //!
-//! The device's CSS grammar (see `docs/device-constraints.md`) is minute:
-//! selectors may only be `tag`, `.class`, `tag.class` or comma groups of those;
-//! there are no @-rules; and roughly a dozen properties are honored. Everything
-//! outside that is dead weight at best and layout noise at worst, so we drop it
-//! and keep only what renders.
+//! The device's CSS grammar (see `docs/device-constraints.md`) is small. A
+//! selector is a chain of up to 8 compounds joined by descendant (` `) or child
+//! (` > `) combinators, optionally ending in `::first-letter`; a compound is an
+//! element or `*`, at most one `#id` and at most 4 classes (`CssParser.cpp:111-138,
+//! 1180-1205` at firmware 2.0.0). Sibling combinators, attribute selectors and
+//! every other pseudo are unsupported, there are no @-rules besides an
+//! unconditional `@media screen`/`all`, and a few dozen properties are honored
+//! (`CssParser.cpp:938-1144`). Everything outside that is dead weight at best
+//! and layout noise at worst, so we drop it and keep only what renders.
 //!
 //! Parsing goes through [`lightningcss`] in error-recovery mode, so a malformed
 //! construct is skipped rather than failing the whole conversion. We do not use
@@ -19,6 +23,8 @@ use std::sync::{Arc, RwLock};
 
 use lightningcss::declaration::DeclarationBlock;
 use lightningcss::media_query::{MediaList, MediaType, Qualifier};
+use lightningcss::properties::Property;
+use lightningcss::properties::list::ListStyleType;
 use lightningcss::rules::CssRule;
 use lightningcss::selector::SelectorList;
 use lightningcss::stylesheet::{ParserOptions, PrinterOptions, StyleSheet};
@@ -27,9 +33,11 @@ use lightningcss::values::color::CssColor;
 
 use crate::report::Warning;
 
-/// Properties the device honors, matched by canonical (unprefixed) name.
-/// `display` and `vertical-align` are additionally value-restricted and handled
-/// in [`property_is_supported`].
+/// Properties the device honors, matched by canonical (unprefixed) name
+/// (`CssParser.cpp:938-1144` at firmware 2.0.0). `display`, `vertical-align`,
+/// `float` and `list-style-type` are additionally value-restricted and handled
+/// in [`property_is_supported`]; the `list-style` and `background` shorthands
+/// are rewritten in [`filter_declarations`].
 const ALLOWED_PROPERTIES: &[&str] = &[
     "text-align",
     "font-style",
@@ -50,6 +58,31 @@ const ALLOWED_PROPERTIES: &[&str] = &[
     "width",
     "height",
     "direction",
+    "font-size",
+    "font-variant",
+    "font-variant-caps",
+    "page-break-before",
+    "page-break-after",
+    "break-before",
+    "break-after",
+    // The device ignores border colors (`CssParser.cpp:1089-1144`).
+    "border",
+    "border-width",
+    "border-style",
+    "border-top",
+    "border-right",
+    "border-bottom",
+    "border-left",
+    "border-top-width",
+    "border-right-width",
+    "border-bottom-width",
+    "border-left-width",
+    "border-top-style",
+    "border-right-style",
+    "border-bottom-style",
+    "border-left-style",
+    "initial-letter",
+    "white-space",
 ];
 
 /// Color properties kept only when the gray-tone remap is active
@@ -98,8 +131,8 @@ pub struct FilteredCss {
 /// minified, whitelisted declaration block behind them.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FilteredRule {
-    /// The kept selectors, already validated as device-legal (`tag`,
-    /// `.class`, or `tag.class`). Joining with `,` reproduces the selector
+    /// The kept selectors, already validated as device-legal (see
+    /// `selector_is_supported`). Joining with `,` reproduces the selector
     /// list of the original rule (minus any rejected group members).
     pub selectors: Vec<String>,
     /// The minified `name:value;name:value` declaration block, with no
@@ -313,20 +346,49 @@ fn filter_declarations(block: &DeclarationBlock<'_>, keep_colors: bool) -> (Stri
         .iter()
         .chain(block.important_declarations.iter())
     {
-        let id = property.property_id();
-        let name = id.name();
-        let Ok(value) = property.value_to_css_string(PrinterOptions::default()) else {
+        let Some((name, value)) = device_declaration(property, keep_colors) else {
             dropped += 1;
             continue;
         };
         let value = restore_leading_zeros(&value);
-        if property_is_supported(name, &value, keep_colors) {
+        if property_is_supported(&name, &value, keep_colors) {
             kept.push(format!("{name}:{value}"));
         } else {
             dropped += 1;
         }
     }
     (kept.join(";"), dropped)
+}
+
+/// The `name` and serialized `value` a declaration reaches the device as, or
+/// `None` when it has no device form. Most declarations pass through as they
+/// are. Two shorthands the device does not parse are rewritten to the longhand
+/// it does: `list-style` that sets the marker type to `none` becomes
+/// `list-style-type:none` (`CssParser.cpp:1082-1085`; any other `list-style`
+/// has no device form), and under `keep_colors` `background` becomes
+/// `background-color` with its color, dropping images and positions (no
+/// concrete color means no device form; the default `transparent` counts as
+/// none).
+fn device_declaration(property: &Property<'_>, keep_colors: bool) -> Option<(String, String)> {
+    match property {
+        Property::ListStyle(list_style) => (list_style.list_style_type == ListStyleType::None)
+            .then(|| ("list-style-type".to_string(), "none".to_string())),
+        Property::Background(layers) if keep_colors => {
+            // Only the final layer carries a color.
+            let color = &layers.last()?.color;
+            if *color == CssColor::default() {
+                return None;
+            }
+            let value = color.to_css_string(PrinterOptions::default()).ok()?;
+            Some(("background-color".to_string(), value))
+        }
+        _ => {
+            let value = property
+                .value_to_css_string(PrinterOptions::default())
+                .ok()?;
+            Some((property.property_id().name().to_string(), value))
+        }
+    }
 }
 
 /// Put back the integer `0` that lightningcss strips from a fractional length
@@ -368,16 +430,121 @@ fn property_is_supported(name: &str, value: &str, keep_colors: bool) -> bool {
         "vertical-align" => {
             value.eq_ignore_ascii_case("super") || value.eq_ignore_ascii_case("sub")
         }
+        // The device only models a left float (drop caps); anything else is a no-op.
+        "float" => value.eq_ignore_ascii_case("left"),
+        // The device only tells `none` from "draw the default marker".
+        "list-style-type" => value.eq_ignore_ascii_case("none"),
         other if keep_colors && COLOR_PROPERTIES.contains(&other) => is_concrete_color(value),
         other => ALLOWED_PROPERTIES.contains(&other),
     }
 }
 
-/// Whether a serialized selector matches one of the three device-supported
-/// shapes: `tag`, `.class`, or `tag.class`. Anything with a combinator,
-/// descendant space, universal, id, attribute, pseudo, or a second class is
-/// rejected.
+/// The device skips a selector longer than this many bytes
+/// (`CssParser.cpp:50, 1175` at firmware 2.0.0).
+pub(crate) const MAX_SELECTOR_LEN: usize = 256;
+
+/// Bytes kept free under [`MAX_SELECTOR_LEN`] for the scope class a chapter's
+/// relocated styles get prefixed with.
+const SCOPE_PREFIX_HEADROOM: usize = 16;
+
+/// Most compounds we keep in one selector chain.
+const MAX_COMPOUNDS: usize = 8;
+
+/// Most classes in one compound; the device rejects a fifth
+/// (`CssParser.h:32`, `CssParser.cpp:130`).
+const MAX_CLASSES: usize = 4;
+
+/// Whether a serialized selector is one the device parses: a chain of up to
+/// [`MAX_COMPOUNDS`] compounds joined by descendant (` `) or child (` > `)
+/// combinators, optionally ending in `::first-letter`, and at most
+/// `MAX_SELECTOR_LEN - SCOPE_PREFIX_HEADROOM` bytes long. Expects lightningcss
+/// serialization, which normalizes the spacing around combinators.
 fn selector_is_supported(selector: &str) -> bool {
+    if selector.is_empty() || selector.len() > MAX_SELECTOR_LEN - SCOPE_PREFIX_HEADROOM {
+        return false;
+    }
+    let chain = strip_first_letter(selector);
+    let mut compounds = 0usize;
+    let mut subject_is_empty = true;
+    let mut awaiting_compound = true;
+    for token in chain.split(' ') {
+        if token == ">" {
+            if awaiting_compound {
+                return false;
+            }
+            awaiting_compound = true;
+            continue;
+        }
+        let Some(is_empty) = parse_compound(token) else {
+            return false;
+        };
+        compounds += 1;
+        subject_is_empty = is_empty;
+        awaiting_compound = false;
+    }
+    // The device rejects a bare `*` as the subject (the last compound): it
+    // stores rules under the subject's tag, id and classes, and `*` has none
+    // (`CssParser.cpp:1196`). A `*` ancestor is fine.
+    !awaiting_compound && !subject_is_empty && compounds <= MAX_COMPOUNDS
+}
+
+/// `selector` without a trailing `::first-letter` (or legacy `:first-letter`),
+/// which the device stores as its own rule key (`CssParser.cpp:1180-1188`).
+/// Something must precede the pseudo; a bare `::first-letter` is left as it is
+/// and later rejected for its `:`.
+fn strip_first_letter(selector: &str) -> &str {
+    for suffix in ["::first-letter", ":first-letter"] {
+        if selector.len() > suffix.len() {
+            let split = selector.len() - suffix.len();
+            if selector.is_char_boundary(split) && selector[split..].eq_ignore_ascii_case(suffix) {
+                return &selector[..split];
+            }
+        }
+    }
+    selector
+}
+
+/// Parse one compound - an optional element or `*`, then `#id` and `.class`
+/// parts in any order with at most one id and [`MAX_CLASSES`] classes - the way
+/// the device does (`CssParser.cpp:111-138`). Returns `None` when the device
+/// rejects it, else whether it is a bare `*` (no element, id or class).
+fn parse_compound(token: &str) -> Option<bool> {
+    if token.is_empty() {
+        return None;
+    }
+    let (tag, mut rest) = match token.strip_prefix('*') {
+        Some(rest) => ("", rest),
+        None => {
+            let end = token.find(['#', '.']).unwrap_or(token.len());
+            token.split_at(end)
+        }
+    };
+    if !tag.is_empty() && !is_ident(tag) {
+        return None;
+    }
+    let mut has_id = false;
+    let mut classes = 0usize;
+    while let Some(marker) = rest.chars().next() {
+        let body = &rest[marker.len_utf8()..];
+        let end = body.find(['#', '.']).unwrap_or(body.len());
+        let (name, tail) = body.split_at(end);
+        if !is_ident(name) {
+            return None;
+        }
+        match marker {
+            '#' if !has_id => has_id = true,
+            '.' if classes < MAX_CLASSES => classes += 1,
+            _ => return None,
+        }
+        rest = tail;
+    }
+    Some(tag.is_empty() && !has_id && classes == 0)
+}
+
+/// Whether a serialized selector is one of the three simple shapes `tag`,
+/// `.class` or `tag.class`. Anything with a combinator, descendant space,
+/// universal, id, attribute, pseudo, or a second class is rejected.
+pub(crate) fn is_simple_selector(selector: &str) -> bool {
     if selector.is_empty() {
         return false;
     }
@@ -538,6 +705,10 @@ sub { vertical-align: sub; }
 @media only screen { .o { padding: 1em; } }
 @media (min-width: 500px) { .cond { text-align: right; } }
 .trailing { text-align: center }
+ul { list-style: none outside; }
+div > p::first-letter { float: left; initial-letter: 3; color: red; }
+p + p { text-indent: 0; }
+.box { border: 1px solid; page-break-before: always; float: right; }
 "#;
         let filtered = filter(input);
         insta::assert_snapshot!(filtered.css);
@@ -573,6 +744,10 @@ sub { vertical-align: sub; }
 @media only screen { .o { padding: 1em; } }
 @media (min-width: 500px) { .cond { text-align: right; } }
 .trailing { text-align: center }
+ul { list-style: none outside; }
+div > p::first-letter { float: left; initial-letter: 3; color: red; }
+p + p { text-indent: 0; }
+.box { border: 1px solid; page-break-before: always; float: right; }
 "#;
         let filtered = filter(input);
         let mut warnings = Vec::new();
@@ -630,29 +805,182 @@ sub { vertical-align: sub; }
 
     #[test]
     fn unsupported_selectors_are_dropped() {
-        assert_eq!(filter("div p{text-align:center}").css, "");
-        assert_eq!(filter("#id{text-align:center}").css, "");
-        assert_eq!(filter(".a.b{text-align:center}").css, "");
         assert_eq!(filter("a:hover{text-align:center}").css, "");
-        assert_eq!(filter("*{text-align:center}").css, "");
         assert_eq!(filter("[href]{text-align:center}").css, "");
+        assert_eq!(filter("p + p{text-align:center}").css, "");
+        assert_eq!(filter("#a#b{text-align:center}").css, "");
     }
 
     #[test]
     fn supported_selector_shapes_are_kept() {
-        assert_eq!(filter("p{text-align:center}").css, "p{text-align:center}");
-        assert_eq!(filter(".c{text-align:center}").css, ".c{text-align:center}");
+        for selector in ["p", ".c", "p.c", "div p", "#id", ".a.b", "* p"] {
+            let css = format!("{selector}{{text-align:center}}");
+            assert_eq!(filter(&css).css, css, "selector {selector}");
+        }
+    }
+
+    /// The selector a rule keeps after filtering, or `None` when it is dropped.
+    fn kept_selector(selector: &str) -> Option<String> {
+        let css = filter(&format!("{selector}{{text-align:center}}")).css;
+        css.strip_suffix("{text-align:center}").map(str::to_string)
+    }
+
+    #[test]
+    fn two_point_oh_selector_shapes_are_kept() {
+        for selector in [
+            "#intro",
+            "p#intro",
+            "p.a.b.c.d",
+            "div p",
+            "div > p",
+            ".box .title",
+            "* > p",
+        ] {
+            assert_eq!(
+                kept_selector(selector).as_deref(),
+                Some(selector),
+                "selector {selector}"
+            );
+        }
+        // lightningcss prints `::first-letter` in its legacy one-colon form,
+        // which the device accepts too (`CssParser.cpp:1180-1188`).
         assert_eq!(
-            filter("p.c{text-align:center}").css,
-            "p.c{text-align:center}"
+            kept_selector("p::first-letter").as_deref(),
+            Some("p:first-letter")
+        );
+        assert_eq!(
+            kept_selector("p.first::first-letter").as_deref(),
+            Some("p.first:first-letter")
         );
     }
 
     #[test]
+    fn a_bare_universal_subject_is_dropped() {
+        // The device keys a rule by its subject's element, id and classes; a
+        // bare `*` subject has none of them and is skipped
+        // (`CssParser.cpp:1196`). `*` works as an ancestor.
+        assert_eq!(kept_selector("*"), None);
+        assert_eq!(kept_selector("div *"), None);
+        assert_eq!(kept_selector("*::first-letter"), None);
+    }
+
+    #[test]
+    fn still_unsupported_selectors_are_dropped() {
+        // A well-formed selector of 250 bytes: only its length rejects it.
+        let long = format!(".{}", "a".repeat(249));
+        for selector in [
+            "p + p",
+            "p ~ p",
+            "a[href]",
+            "a:hover",
+            "p:first-child",
+            "p.a.b.c.d.e",
+            "p::before",
+            "p::first-letter span",
+            long.as_str(),
+        ] {
+            assert_eq!(kept_selector(selector), None, "selector {selector}");
+        }
+    }
+
+    #[test]
+    fn selector_length_and_depth_limits() {
+        let compounds_8 = ["p"; 8].join(" ");
+        let compounds_9 = ["p"; 9].join(" ");
+        assert!(selector_is_supported(&compounds_8));
+        assert!(!selector_is_supported(&compounds_9));
+        // 240 bytes is the most we keep: 16 bytes of headroom under the
+        // device's 256-byte limit for the scope prefix.
+        let exactly = format!(".{}", "a".repeat(MAX_SELECTOR_LEN - 16 - 1));
+        assert_eq!(exactly.len(), MAX_SELECTOR_LEN - 16);
+        assert!(selector_is_supported(&exactly));
+        let over = format!(".{}", "a".repeat(MAX_SELECTOR_LEN - 16));
+        assert!(!selector_is_supported(&over));
+    }
+
+    #[test]
+    fn non_ascii_after_a_universal_is_rejected_not_a_panic() {
+        assert!(!selector_is_supported("*é"));
+        assert!(!selector_is_supported("p é"));
+    }
+
+    #[test]
+    fn simple_selector_is_the_one_three_shapes() {
+        for simple in ["p", ".c", "p.c"] {
+            assert!(is_simple_selector(simple), "{simple}");
+        }
+        for complex in ["div p", "#id", ".a.b", "*", "p::first-letter", "div > p"] {
+            assert!(!is_simple_selector(complex), "{complex}");
+        }
+    }
+
+    #[test]
     fn partial_selector_group_keeps_survivors() {
-        // `div p` is dropped, `.keep` survives, so the rule is kept with only it.
-        let filtered = filter("div p,.keep{text-align:center}");
+        // `p + p` is dropped, `.keep` survives, so the rule is kept with only it.
+        let filtered = filter("p + p,.keep{text-align:center}");
         assert_eq!(filtered.css, ".keep{text-align:center}");
+    }
+
+    #[test]
+    fn two_point_oh_properties_are_kept() {
+        for declaration in [
+            "font-size:1.2em",
+            "font-variant:small-caps",
+            "page-break-before:always",
+            "break-after:page",
+            "border:1px solid",
+            "border-bottom-width:2px",
+            "initial-letter:3",
+            "white-space:pre",
+            "float:left",
+            "list-style-type:none",
+        ] {
+            let css = format!("p{{{declaration}}}");
+            assert_eq!(filter(&css).css, css, "declaration {declaration}");
+        }
+    }
+
+    #[test]
+    fn float_right_and_list_style_disc_are_dropped() {
+        assert_eq!(filter("p{float:right}").css, "");
+        assert_eq!(filter("ul{list-style-type:disc}").css, "");
+    }
+
+    #[test]
+    fn list_style_none_shorthand_becomes_list_style_type() {
+        assert_eq!(
+            filter("ul{list-style:none outside}").css,
+            "ul{list-style-type:none}"
+        );
+        assert_eq!(
+            filter("ul{list-style:none}").css,
+            "ul{list-style-type:none}"
+        );
+        // A shorthand that sets a marker type is dropped: the device has no
+        // `list-style` and draws its default marker anyway.
+        assert_eq!(filter("ul{list-style:square inside}").css, "");
+        assert_eq!(
+            filter_inline_style("list-style:none", false),
+            Some("list-style-type:none".to_string())
+        );
+    }
+
+    #[test]
+    fn background_shorthand_becomes_background_color_when_keeping_colors() {
+        assert_eq!(
+            filter_keeping_colors("div{background:#eee url(x.png) no-repeat}").css,
+            "div{background-color:#eee}"
+        );
+        assert_eq!(filter("div{background:#eee url(x.png) no-repeat}").css, "");
+        // No concrete color: nothing for the device to shade, so it is dropped.
+        assert_eq!(
+            filter_keeping_colors("div{background:url(x.png) no-repeat}").css,
+            ""
+        );
+        assert_eq!(
+            filter_inline_style("background:#ddd", true),
+            Some("background-color:#ddd".to_string())
+        );
     }
 
     #[test]
@@ -686,14 +1014,17 @@ sub { vertical-align: sub; }
     #[test]
     fn inline_style_keeps_supported_drops_unsupported() {
         assert_eq!(
-            filter_inline_style("color:red;text-align:center;font-size:12px", false),
+            filter_inline_style("color:red;text-align:center;letter-spacing:1px", false),
             Some("text-align:center".to_string())
         );
     }
 
     #[test]
     fn inline_style_all_unsupported_returns_none() {
-        assert_eq!(filter_inline_style("color:blue;font-size:9px", false), None);
+        assert_eq!(
+            filter_inline_style("color:blue;letter-spacing:1px", false),
+            None
+        );
     }
 
     #[test]
@@ -707,12 +1038,12 @@ sub { vertical-align: sub; }
     #[test]
     fn keep_colors_keeps_concrete_color_declarations() {
         let out = filter_keeping_colors(
-            ".x{color:red;background-color:#eef;border-color:rgb(1,2,3);font-size:9px}",
+            ".x{color:red;background-color:#eef;border-color:rgb(1,2,3);letter-spacing:1px}",
         );
         assert!(out.css.contains("color:red"), "got: {}", out.css);
         assert!(out.css.contains("background-color:"), "got: {}", out.css);
         assert!(out.css.contains("border-color:"), "got: {}", out.css);
-        assert!(!out.css.contains("font-size"), "got: {}", out.css);
+        assert!(!out.css.contains("letter-spacing"), "got: {}", out.css);
         assert_conformant_with(&out.css, true);
     }
 
@@ -731,17 +1062,9 @@ sub { vertical-align: sub; }
     }
 
     #[test]
-    fn keep_colors_still_drops_the_shorthands() {
-        // `background`/`border` shorthands carry constructs beyond a color;
-        // they stay out even when colors are kept.
-        let out = filter_keeping_colors(".x{background:#eef;border:1px solid red}");
-        assert_eq!(out.css, "", "got: {}", out.css);
-    }
-
-    #[test]
     fn keep_colors_inline_style_keeps_the_color() {
         assert_eq!(
-            filter_inline_style("color:teal;font-size:9px", true),
+            filter_inline_style("color:teal;letter-spacing:1px", true),
             Some("color:teal".to_string())
         );
     }
@@ -765,7 +1088,26 @@ sub { vertical-align: sub; }
 
     fn selector_fragment() -> impl Strategy<Value = &'static str> {
         prop::sample::select(vec![
-            ".a", "div", "div.a", "#id", ".a .b", "a:hover", "*", "[x]", ".a.b", "h1", "span",
+            ".a",
+            "div",
+            "div.a",
+            "#id",
+            "p#id.a",
+            ".a .b",
+            "div > p",
+            "p.a.b.c.d",
+            "p.a.b.c.d.e",
+            "p::first-letter",
+            "p::before",
+            "p + p",
+            "p ~ p",
+            "a:hover",
+            "*",
+            "* p",
+            "[x]",
+            ".a.b",
+            "h1",
+            "span",
         ])
     }
 
@@ -786,6 +1128,21 @@ sub { vertical-align: sub; }
             "text-indent:0.5em",
             "foo:bar",
             "width:10px",
+            "font-size:1.2em",
+            "font-variant:small-caps",
+            "break-after:page",
+            "border:1px solid red",
+            "border-left-style:dotted",
+            "initial-letter:3",
+            "white-space:pre",
+            "float:left",
+            "float:right",
+            "list-style-type:none",
+            "list-style-type:disc",
+            "list-style:none outside",
+            "list-style:square",
+            "background:#eee url(x.png) no-repeat",
+            "background:url(x.png)",
         ])
     }
 

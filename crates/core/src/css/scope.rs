@@ -31,6 +31,7 @@
 use kuchikiki::NodeRef;
 
 use crate::css::filter_css_rules;
+use crate::css::subset::is_simple_selector;
 use crate::css::subset::push_rule;
 use crate::html::dom::{get_attr, is_named, set_attr};
 use crate::report::Warning;
@@ -51,9 +52,13 @@ pub(crate) fn scope_relocated_css(
     let rules = filter_css_rules(css, path, keep_colors, warnings);
     let mut out = String::new();
     for rule in &rules {
+        // `scope_selector` only knows the three simple shapes; the wider
+        // CrossPoint 2.0 grammar (descendants, ids, compounds) is dropped here
+        // until it learns them.
         let scoped: Vec<String> = rule
             .selectors
             .iter()
+            .filter(|selector| is_simple_selector(selector))
             .filter_map(|selector| scope_selector(doc, selector, scope_idx))
             .collect();
         // A comma group with no surviving members is a dead rule; drop it.
@@ -267,6 +272,21 @@ mod tests {
             1,
         );
         assert_eq!(css, ".cpr1-c-note{margin-left:2em}");
+    }
+
+    #[test]
+    fn wider_device_selectors_are_not_scoped_yet() {
+        // `div p` and `.a.b` are device-legal since CrossPoint 2.0, but the
+        // scoper only knows `tag`, `.class` and `tag.class`, so they are
+        // dropped from relocated styles. A literal `class="a.b"` token must
+        // not be taken for the compound `.a.b`.
+        let (css, dom) = run(
+            r#"<div><p class="a.b">x</p></div>"#,
+            "div p{text-align:center}.a.b{text-indent:1em}p{margin-left:2em}",
+            1,
+        );
+        assert_eq!(css, "p.cpr1-e-p{margin-left:2em}");
+        assert!(!dom.contains("cpr1-c-"), "nothing class-scoped:\n{dom}");
     }
 
     #[test]

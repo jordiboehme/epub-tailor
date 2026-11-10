@@ -94,7 +94,8 @@ mod tests {
 
     #[test]
     fn inline_style_is_filtered_to_the_subset() {
-        let (out, _, report) = run("<p style=\"color:red;text-align:center;font-size:9px\">hi</p>");
+        let (out, _, report) =
+            run("<p style=\"color:red;text-align:center;letter-spacing:1px\">hi</p>");
         assert!(out.contains(r#"style="text-align:center""#), "got: {out}");
         assert!(!out.contains("color:red"), "got: {out}");
         assert_eq!(report.len(), 1);
@@ -103,13 +104,13 @@ mod tests {
 
     #[test]
     fn empty_inline_style_attribute_is_dropped() {
-        let (out, _, _) = run("<p style=\"color:red;font-size:9px\">hi</p>");
+        let (out, _, _) = run("<p style=\"color:red;letter-spacing:1px\">hi</p>");
         assert!(!out.contains("style="), "attribute must be dropped: {out}");
     }
 
     #[test]
     fn keep_colors_preserves_inline_color_declarations() {
-        let doc = doc_from_body(r#"<p style="color:teal;font-size:9px">hi</p>"#);
+        let doc = doc_from_body(r#"<p style="color:teal;letter-spacing:1px">hi</p>"#);
         let mut report = Vec::new();
         relocate_styles(&doc, true, &mut report, "ch.xhtml");
         let out = serialize(&doc);
