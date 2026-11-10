@@ -74,12 +74,26 @@ pub fn transform_chapter(
     warnings: &mut Vec<Warning>,
     chapter_path: &str,
 ) -> ChapterTransform {
+    transform_chapter_scaled(doc, opts, None, report, warnings, chapter_path)
+}
+
+/// [`transform_chapter`] with the book's root font size (`rem_scale`, a factor
+/// of 16px, see [`crate::css::font_size`]) for the inline styles. `None` takes
+/// the root size from the chapter's own `<style>` elements, if they set one.
+pub(crate) fn transform_chapter_scaled(
+    doc: &NodeRef,
+    opts: &ConvertOptions,
+    rem_scale: Option<f64>,
+    report: &mut Vec<Transformation>,
+    warnings: &mut Vec<Warning>,
+    chapter_path: &str,
+) -> ChapterTransform {
     let features = &opts.features;
     if features.dedupe_ids {
         dedupe::dedupe_ids(doc, report, chapter_path);
     }
     let extracted_css = if features.relocate_styles {
-        styles::relocate_styles(doc, opts.remap_active(), report, chapter_path)
+        styles::relocate_styles(doc, opts.remap_active(), rem_scale, report, chapter_path)
     } else {
         String::new()
     };

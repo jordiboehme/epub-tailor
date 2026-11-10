@@ -10,18 +10,24 @@
 
 use kuchikiki::NodeRef;
 
-use crate::css::filter_inline_style;
-use crate::html::dom::{collect_by_name, get_attr, remove_attr, set_attr, text_content};
+use crate::css::font_size::root_font_scale;
+use crate::css::subset::filter_inline_style_on;
+use crate::html::dom::{
+    collect_by_name, get_attr, local_name, remove_attr, set_attr, text_content,
+};
 use crate::report::Transformation;
 
 /// Extract and remove every `<style>` element, and filter every inline style
 /// attribute, in `doc`. `keep_colors` keeps concrete inline color declarations
-/// for the gray-tone remap pass to rewrite. Returns the concatenated raw text
+/// for the gray-tone remap pass to rewrite. `rem_scale` is the book's root
+/// font size (a factor of 16px); when `None`, a root size set in the
+/// chapter's own `<style>` elements is used. Returns the concatenated raw text
 /// of the removed `<style>` elements (empty when there were none) for the
 /// caller to relocate.
 pub(crate) fn relocate_styles(
     doc: &NodeRef,
     keep_colors: bool,
+    rem_scale: Option<f64>,
     report: &mut Vec<Transformation>,
     chapter_path: &str,
 ) -> String {
@@ -37,13 +43,17 @@ pub(crate) fn relocate_styles(
         style.detach();
     }
 
+    let rem_scale = rem_scale
+        .or_else(|| root_font_scale(&extracted))
+        .unwrap_or(1.0);
     let mut rewritten = 0usize;
     let mut dropped = 0usize;
     for node in doc.inclusive_descendants() {
         let Some(style) = get_attr(&node, "style") else {
             continue;
         };
-        match filter_inline_style(&style, keep_colors) {
+        let tag = local_name(&node).unwrap_or_default();
+        match filter_inline_style_on(&style, keep_colors, &tag, rem_scale) {
             Some(kept) => {
                 if kept != style {
                     set_attr(&node, "style", &kept);
@@ -78,7 +88,7 @@ mod tests {
     fn run(body: &str) -> (String, String, Vec<Transformation>) {
         let doc = doc_from_body(body);
         let mut report = Vec::new();
-        let extracted = relocate_styles(&doc, false, &mut report, "ch.xhtml");
+        let extracted = relocate_styles(&doc, false, None, &mut report, "ch.xhtml");
         (serialize(&doc), extracted, report)
     }
 
@@ -112,7 +122,7 @@ mod tests {
     fn keep_colors_preserves_inline_color_declarations() {
         let doc = doc_from_body(r#"<p style="color:teal;letter-spacing:1px">hi</p>"#);
         let mut report = Vec::new();
-        relocate_styles(&doc, true, &mut report, "ch.xhtml");
+        relocate_styles(&doc, true, None, &mut report, "ch.xhtml");
         let out = serialize(&doc);
         assert!(out.contains(r#"style="color:teal""#), "got: {out}");
     }

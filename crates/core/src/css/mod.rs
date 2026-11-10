@@ -15,6 +15,7 @@ pub mod sanitize;
 pub mod subset;
 
 pub(crate) mod caps;
+pub(crate) mod font_size;
 pub(crate) mod scope;
 
 pub use sanitize::{SanitizedCss, sanitize_css};

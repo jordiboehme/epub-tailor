@@ -107,3 +107,21 @@ fn rtl_list_hangs_on_the_right() {
         "{chapter}"
     );
 }
+
+#[test]
+fn a_book_root_size_rescales_rem_everywhere_and_body_text_keeps_the_reader_size() {
+    let sheet = "html{font-size:62.5%}body{font-size:1.6rem;margin:0}h1{font-size:3.2rem}";
+    let head = "p{font-size:1.6rem}.big{font-size:2.4rem}";
+    let body = r#"<h1>Dune</h1><p class="big">Big</p><p>Text <span style="font-size:1.6rem">same</span></p>"#;
+    let out = fit(book(head, sheet, body));
+    let main = text_entry(&out.epub, "OEBPS/styles/main.css");
+    assert_eq!(main, "body{margin:0}h1{font-size:2rem}");
+    let relocated = text_entry(&out.epub, "OEBPS/et-relocated.css");
+    assert!(relocated.contains("{font-size:1.5rem}"), "{relocated}");
+    assert!(
+        !relocated.contains("1.6rem") && !relocated.contains("1rem}"),
+        "{relocated}"
+    );
+    let chapter = text_entry(&out.epub, "OEBPS/text/chapter1.xhtml");
+    assert!(chapter.contains("<span>same</span>"), "{chapter}");
+}

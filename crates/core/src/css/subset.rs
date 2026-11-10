@@ -31,6 +31,7 @@ use lightningcss::stylesheet::{ParserOptions, PrinterOptions, StyleSheet};
 use lightningcss::traits::{Parse, ToCss};
 use lightningcss::values::color::CssColor;
 
+use super::font_size::{self, SizeSubject, device_font_size};
 use crate::report::Warning;
 
 /// Properties the device honors, matched by canonical (unprefixed) name
@@ -164,6 +165,7 @@ fn filter_css_to_accumulator(
     css: &str,
     path: &str,
     keep_colors: bool,
+    rem_scale: Option<f64>,
     warnings: &mut Vec<Warning>,
 ) -> Option<Accumulator> {
     let parse_warnings = Arc::new(RwLock::new(Vec::new()));
@@ -185,8 +187,16 @@ fn filter_css_to_accumulator(
         }
     };
 
+    let rem_scale = rem_scale
+        .or_else(|| font_size::root_font_scale_of(&stylesheet.rules.0))
+        .unwrap_or(1.0);
     let mut acc = Accumulator::default();
-    process_rules(&stylesheet.rules.0, path, keep_colors, warnings, &mut acc);
+    let ctx = RuleContext {
+        path,
+        keep_colors,
+        rem_scale,
+    };
+    process_rules(&stylesheet.rules.0, &ctx, warnings, &mut acc);
 
     // One warning per construct lightningcss skipped during error recovery.
     let skipped = parse_warnings.read().map(|w| w.len()).unwrap_or(0);
@@ -205,13 +215,30 @@ fn filter_css_to_accumulator(
 /// declarations for the gray-tone remap pass to rewrite. Never fails: parse
 /// errors are recovered from and reported as warnings, and a stylesheet that
 /// cannot be parsed at all is dropped entirely.
+///
+/// `rem` font sizes are rescaled by the root size the sheet itself sets on
+/// `html` (see [`super::font_size`]); [`filter_css_scaled`] takes a book-wide
+/// root size instead.
 pub fn filter_css(
     css: &str,
     path: &str,
     keep_colors: bool,
     warnings: &mut Vec<Warning>,
 ) -> FilteredCss {
-    let Some(acc) = filter_css_to_accumulator(css, path, keep_colors, warnings) else {
+    filter_css_scaled(css, path, keep_colors, None, warnings)
+}
+
+/// [`filter_css`] with the book's root font size (`rem_scale`, a factor of
+/// 16px) given by the caller, or found in `css` itself when `None`. Rescale a
+/// sheet once only: its output no longer carries the root size.
+pub(crate) fn filter_css_scaled(
+    css: &str,
+    path: &str,
+    keep_colors: bool,
+    rem_scale: Option<f64>,
+    warnings: &mut Vec<Warning>,
+) -> FilteredCss {
+    let Some(acc) = filter_css_to_accumulator(css, path, keep_colors, rem_scale, warnings) else {
         return FilteredCss::default();
     };
 
@@ -239,7 +266,18 @@ pub fn filter_css_rules(
     keep_colors: bool,
     warnings: &mut Vec<Warning>,
 ) -> Vec<FilteredRule> {
-    filter_css_to_accumulator(css, path, keep_colors, warnings)
+    filter_css_rules_scaled(css, path, keep_colors, None, warnings)
+}
+
+/// [`filter_css_rules`] with a root font size, as in [`filter_css_scaled`].
+pub(crate) fn filter_css_rules_scaled(
+    css: &str,
+    path: &str,
+    keep_colors: bool,
+    rem_scale: Option<f64>,
+    warnings: &mut Vec<Warning>,
+) -> Vec<FilteredRule> {
+    filter_css_to_accumulator(css, path, keep_colors, rem_scale, warnings)
         .map(|acc| acc.rules)
         .unwrap_or_default()
 }
@@ -259,12 +297,24 @@ pub(crate) fn push_rule(out: &mut String, selectors: &[String], declarations: &s
 /// whitelist. Returns the minified survivors, or `None` when nothing survives
 /// (so the caller can drop the attribute).
 pub fn filter_inline_style(style: &str, keep_colors: bool) -> Option<String> {
+    filter_inline_style_on(style, keep_colors, "", 1.0)
+}
+
+/// [`filter_inline_style`] for the style of an element named `tag`, with the
+/// book's root font size `rem_scale` (see [`super::font_size`]).
+pub(crate) fn filter_inline_style_on(
+    style: &str,
+    keep_colors: bool,
+    tag: &str,
+    rem_scale: f64,
+) -> Option<String> {
     let options = ParserOptions {
         error_recovery: true,
         ..Default::default()
     };
     let block = DeclarationBlock::parse_string(style, options).ok()?;
-    let (declarations, _) = filter_declarations(&block, keep_colors);
+    let (declarations, _) =
+        filter_declarations(&block, keep_colors, SizeSubject::of_tag(tag), rem_scale);
     if declarations.is_empty() {
         None
     } else {
@@ -272,23 +322,33 @@ pub fn filter_inline_style(style: &str, keep_colors: bool) -> Option<String> {
     }
 }
 
+/// What every rule of one stylesheet is filtered with.
+struct RuleContext<'a> {
+    /// The sheet's path, for warnings.
+    path: &'a str,
+    /// Keep concrete colors for the remap pass.
+    keep_colors: bool,
+    /// The book's root font size as a factor of 16px.
+    rem_scale: f64,
+}
+
 /// Walk a rule list, appending kept style rules to `acc.out`. `@media all` /
 /// `@media screen` bodies are hoisted (their inner rules processed in place);
 /// every other at-rule is dropped.
 fn process_rules(
     rules: &[CssRule<'_>],
-    path: &str,
-    keep_colors: bool,
+    ctx: &RuleContext<'_>,
     warnings: &mut Vec<Warning>,
     acc: &mut Accumulator,
 ) {
+    let path = ctx.path;
     for rule in rules {
         match rule {
             CssRule::Style(style) => {
-                emit_style_rule(&style.selectors, &style.declarations, keep_colors, acc)
+                emit_style_rule(&style.selectors, &style.declarations, ctx, acc)
             }
             CssRule::Media(media) if media_is_screen_or_all(&media.query) => {
-                process_rules(&media.rules.0, path, keep_colors, warnings, acc);
+                process_rules(&media.rules.0, ctx, warnings, acc);
             }
             CssRule::Import(import) => {
                 acc.dropped += 1;
@@ -308,12 +368,15 @@ fn process_rules(
     }
 }
 
-/// Emit a single style rule if at least one selector and one declaration
-/// survive; otherwise count it as dropped.
+/// Emit a style rule if at least one selector and one declaration survive;
+/// otherwise count it as dropped. A `font-size` depends on the subject (see
+/// [`super::font_size`]), so a comma group whose members end up with different
+/// declarations is split into one rule per distinct block, in the order of
+/// each block's first member.
 fn emit_style_rule(
     selectors: &SelectorList<'_>,
     declarations: &DeclarationBlock<'_>,
-    keep_colors: bool,
+    ctx: &RuleContext<'_>,
     acc: &mut Accumulator,
 ) {
     let kept_selectors: Vec<String> = selectors
@@ -327,24 +390,49 @@ fn emit_style_rule(
         return;
     }
 
-    let (declarations, dropped) = filter_declarations(declarations, keep_colors);
-    acc.decls_dropped += dropped;
-    if declarations.is_empty() {
+    let mut by_subject: Vec<(SizeSubject, String, usize)> = Vec::new();
+    let mut groups: Vec<FilteredRule> = Vec::new();
+    for selector in kept_selectors {
+        let subject = SizeSubject::of_selector(&selector);
+        let filtered = match by_subject.iter().find(|(s, _, _)| *s == subject) {
+            Some((_, decls, _)) => decls.clone(),
+            None => {
+                let (decls, dropped) =
+                    filter_declarations(declarations, ctx.keep_colors, subject, ctx.rem_scale);
+                by_subject.push((subject, decls.clone(), dropped));
+                decls
+            }
+        };
+        if filtered.is_empty() {
+            continue;
+        }
+        match groups.iter_mut().find(|g| g.declarations == filtered) {
+            Some(group) => group.selectors.push(selector),
+            None => groups.push(FilteredRule {
+                selectors: vec![selector],
+                declarations: filtered,
+            }),
+        }
+    }
+    acc.decls_dropped += by_subject.iter().map(|(_, _, d)| *d).max().unwrap_or(0);
+    if groups.is_empty() {
         acc.dropped += 1;
         return;
     }
-
-    acc.rules.push(FilteredRule {
-        selectors: kept_selectors,
-        declarations,
-    });
-    acc.kept += 1;
+    acc.kept += groups.len();
+    acc.rules.extend(groups);
 }
 
-/// Filter a declaration block to the whitelist, stripping `!important`. Returns
-/// the minified `name:value;name:value` string and the count of dropped
-/// declarations.
-fn filter_declarations(block: &DeclarationBlock<'_>, keep_colors: bool) -> (String, usize) {
+/// Filter a declaration block to the whitelist, stripping `!important`, for a
+/// rule or element whose font-size `subject` is given (see
+/// [`super::font_size`]). Returns the minified `name:value;name:value` string
+/// and the count of dropped declarations.
+fn filter_declarations(
+    block: &DeclarationBlock<'_>,
+    keep_colors: bool,
+    subject: SizeSubject,
+    rem_scale: f64,
+) -> (String, usize) {
     let mut kept: Vec<String> = Vec::new();
     let mut dropped = 0usize;
     for property in block
@@ -356,7 +444,16 @@ fn filter_declarations(block: &DeclarationBlock<'_>, keep_colors: bool) -> (Stri
             dropped += 1;
             continue;
         };
-        let value = restore_leading_zeros(&value);
+        let mut value = restore_leading_zeros(&value);
+        if name == "font-size" {
+            match device_font_size(&value, subject, rem_scale) {
+                Some(device_value) => value = device_value,
+                None => {
+                    dropped += 1;
+                    continue;
+                }
+            }
+        }
         if property_is_supported(&name, &value, keep_colors) {
             kept.push(format!("{name}:{value}"));
         } else {
@@ -632,6 +729,62 @@ mod tests {
     fn filter_keeping_colors(css: &str) -> FilteredCss {
         let mut warnings = Vec::new();
         filter_css(css, "test.css", true, &mut warnings)
+    }
+
+    #[test]
+    fn root_size_rescales_rem_and_body_sizes_are_dropped() {
+        let out = filter(
+            "html{font-size:62.5%}body{font-size:1.6rem;margin:0}\
+             p{font-size:1.6rem}h1{font-size:3.2rem}",
+        );
+        assert_eq!(out.css, "body{margin:0}h1{font-size:2rem}");
+    }
+
+    #[test]
+    fn near_one_sizes_go_and_real_sizes_stay() {
+        let out = filter(
+            "p{font-size:0.9em}h1{font-size:2em}small{font-size:0.75em}\
+             h2{font-size:1em}.note{font-size:110%}",
+        );
+        assert_eq!(
+            out.css,
+            "h1{font-size:2em}small{font-size:0.75em}h2{font-size:1em}"
+        );
+    }
+
+    #[test]
+    fn a_root_member_of_a_comma_group_loses_only_its_size() {
+        let out = filter("body,.x{font-size:2em;margin:0}html,p{font-size:1em}");
+        assert_eq!(out.css, "body{margin:0}.x{font-size:2em;margin:0}");
+    }
+
+    #[test]
+    fn a_book_root_size_from_another_sheet_rescales_rem() {
+        let mut warnings = Vec::new();
+        let out = filter_css_scaled(
+            "p{font-size:3.2rem}",
+            "test.css",
+            false,
+            Some(0.625),
+            &mut warnings,
+        );
+        assert_eq!(out.css, "p{font-size:2rem}");
+    }
+
+    #[test]
+    fn inline_font_size_follows_the_element() {
+        assert_eq!(
+            filter_inline_style_on("font-size:2em;margin:0", false, "body", 1.0).as_deref(),
+            Some("margin:0")
+        );
+        assert_eq!(
+            filter_inline_style_on("font-size:1.6rem", false, "span", 0.625),
+            None
+        );
+        assert_eq!(
+            filter_inline_style_on("font-size:1em", false, "h1", 1.0).as_deref(),
+            Some("font-size:1em")
+        );
     }
 
     #[test]
@@ -1189,6 +1342,9 @@ p + p { text-indent: 0; }
             ".a.b",
             "h1",
             "span",
+            "html",
+            "body.a p",
+            "BODY",
         ])
     }
 
@@ -1210,6 +1366,11 @@ p + p { text-indent: 0; }
             "foo:bar",
             "width:10px",
             "font-size:1.2em",
+            "font-size:62.5%",
+            "font-size:1.6rem",
+            "font-size:3.2rem",
+            "font-size:1em",
+            "font-size:inherit",
             "font-variant:small-caps",
             "break-after:page",
             "border:1px solid red",

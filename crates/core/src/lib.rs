@@ -219,6 +219,21 @@ pub fn convert(input: Input, opts: &ConvertOptions) -> Result<Converted, Convert
     // Sanitizing runs first so that a profile with both on (nobody's, today)
     // still behaves: filtering a sanitized sheet is the same as filtering the
     // original, since everything sanitize drops, filter drops too.
+    // The book's root font size (`html{font-size:62.5%}`), from whichever
+    // stylesheet sets it last, so `rem` sizes in every sheet, `<style>` and
+    // inline style are rescaled alike (see [`css::font_size`]). `None` lets
+    // each chapter's own `<style>` supply one.
+    let book_rem_scale = if opts.features.filter_css {
+        book.resources
+            .values()
+            .filter(|resource| resource.media_type == "text/css")
+            .filter_map(|resource| {
+                css::font_size::root_font_scale(&String::from_utf8_lossy(&resource.data))
+            })
+            .next_back()
+    } else {
+        None
+    };
     let mut total_css_rules = 0usize;
     if opts.features.sanitize_css || opts.features.filter_css {
         let css_paths: Vec<String> = book
@@ -248,7 +263,13 @@ pub fn convert(input: Input, opts: &ConvertOptions) -> Result<Converted, Convert
             };
 
             let filtered = if opts.features.filter_css {
-                filter_css(&source, &path, opts.remap_active(), &mut warnings)
+                css::subset::filter_css_scaled(
+                    &source,
+                    &path,
+                    opts.remap_active(),
+                    book_rem_scale,
+                    &mut warnings,
+                )
             } else {
                 FilteredCss {
                     css: source,
@@ -369,7 +390,14 @@ pub fn convert(input: Input, opts: &ConvertOptions) -> Result<Converted, Convert
         let ChapterTransform {
             aliases: chapter_aliases,
             extracted_css,
-        } = transform_chapter(&doc, opts, &mut transformations, &mut warnings, path);
+        } = html::transform_chapter_scaled(
+            &doc,
+            opts,
+            book_rem_scale,
+            &mut transformations,
+            &mut warnings,
+            path,
+        );
         aliases.extend(chapter_aliases);
         if !extracted_css.trim().is_empty() {
             // Scope this chapter's lifted CSS to itself (tagging its own DOM) so
@@ -383,6 +411,7 @@ pub fn convert(input: Input, opts: &ConvertOptions) -> Result<Converted, Convert
                 relocated_scope_idx,
                 path,
                 opts.remap_active(),
+                book_rem_scale,
                 &mut warnings,
             );
             if !scoped.is_empty() {
@@ -441,7 +470,9 @@ pub fn convert(input: Input, opts: &ConvertOptions) -> Result<Converted, Convert
         }
         let relocated_path = join_dir(&parent_dir(&book.opf_path), "et-relocated.css");
         // Only a filtering profile runs the relocated CSS through the subset
-        // filter; otherwise it is relocated verbatim.
+        // filter; otherwise it is relocated verbatim. Its `rem` sizes were
+        // already rescaled while scoping, and the root size is gone, so the
+        // plain filter rescales nothing a second time.
         let filtered = if opts.features.filter_css {
             filter_css(
                 &combined,

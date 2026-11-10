@@ -46,9 +46,9 @@
 
 use kuchikiki::NodeRef;
 
-use crate::css::filter_css_rules;
 use crate::css::subset::{
-    MAX_SELECTOR_LEN, is_simple_selector, push_rule, selector_is_supported, strip_first_letter,
+    MAX_SELECTOR_LEN, filter_css_rules_scaled, is_simple_selector, push_rule,
+    selector_is_supported, strip_first_letter,
 };
 use crate::html::dom::{collect_by_name, get_attr, is_named, set_attr};
 use crate::report::Warning;
@@ -59,17 +59,19 @@ const MAX_ANCESTOR_CLASSES: usize = 4;
 /// Filter `css` to the device subset, then scope every surviving rule to the
 /// chapter `doc` it came from, tagging `doc`'s matching elements as a side
 /// effect. `scope_idx` is the chapter's 1-based contributing index; `path` names
-/// the source in any warnings. Returns the scoped, minified CSS, or `""` when
-/// every rule died (nothing matched).
+/// the source in any warnings; `rem_scale` is the book's root font size, as for
+/// [`crate::css::subset::filter_css_scaled`]. Returns the scoped, minified CSS,
+/// or `""` when every rule died (nothing matched).
 pub(crate) fn scope_relocated_css(
     doc: &NodeRef,
     css: &str,
     scope_idx: usize,
     path: &str,
     keep_colors: bool,
+    rem_scale: Option<f64>,
     warnings: &mut Vec<Warning>,
 ) -> String {
-    let rules = filter_css_rules(css, path, keep_colors, warnings);
+    let rules = filter_css_rules_scaled(css, path, keep_colors, rem_scale, warnings);
     let root_class = format!("cpr{scope_idx}-r");
     let mut root_scoped = false;
     let mut out = String::new();
@@ -244,7 +246,7 @@ mod tests {
     fn run(body: &str, css: &str, idx: usize) -> (String, String) {
         let doc = doc_from_body(body);
         let mut warnings = Vec::new();
-        let out = scope_relocated_css(&doc, css, idx, "ch.xhtml", false, &mut warnings);
+        let out = scope_relocated_css(&doc, css, idx, "ch.xhtml", false, None, &mut warnings);
         (out, serialize(&doc))
     }
 
@@ -253,7 +255,7 @@ mod tests {
         let doc = doc_from_body(body);
         set_attr(&crate::html::dom::find_body(&doc).unwrap(), "class", class);
         let mut warnings = Vec::new();
-        let out = scope_relocated_css(&doc, css, 1, "ch.xhtml", false, &mut warnings);
+        let out = scope_relocated_css(&doc, css, 1, "ch.xhtml", false, None, &mut warnings);
         (out, serialize(&doc))
     }
 
@@ -423,6 +425,7 @@ mod tests {
             1,
             "ch.xhtml",
             false,
+            None,
             &mut warnings,
         );
         // `.x` is not on the body, so that selector is dead.
@@ -515,6 +518,7 @@ mod tests {
             1,
             "ch.xhtml",
             false,
+            None,
             &mut warnings,
         );
         assert_eq!(css, "");
@@ -605,6 +609,7 @@ mod tests {
             1,
             "ch.xhtml",
             true,
+            None,
             &mut warnings,
         );
         assert_eq!(out, ".cpr1-c-note{color:red;margin-left:2em}");
