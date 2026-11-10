@@ -2211,8 +2211,13 @@ fn remap_document_colors(
 /// loads stylesheets in manifest order (`ContentOpfParser.cpp:362-363`,
 /// `Epub.cpp:170-171, 337` at firmware 2.0.0) and stops storing new rules once
 /// a store cap is hit, so the helper rules our output depends on go in first.
-/// At equal specificity an earlier rule loses (`CssParser.cpp:1447-1448`), but
-/// no author rule targets the `et-*` and `cpr*` classes.
+/// At equal specificity an earlier rule loses (`CssParser.cpp:1447-1448`). For
+/// et-styles.css that only matters where an author class rule ties with a
+/// helper class on a reused block. For et-relocated.css it inverts a tie
+/// between a chapter's `<style>` and the book's own sheets: a class-scoped
+/// head rule (`.note` -> `.cpr1-c-note`) keeps the specificity of the
+/// original and now loses to an equal main-sheet rule, where a browser lets
+/// the head `<style>` win.
 fn put_generated_css_first(book: &mut Book, generated: &[String]) {
     let moved: Vec<(String, Resource)> = generated
         .iter()

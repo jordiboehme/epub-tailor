@@ -193,3 +193,33 @@ fn a_book_without_backgrounds_gets_no_inline_white() {
     let chapter = text_entry(&out.epub, "OEBPS/text/chapter1.xhtml");
     assert!(!chapter.contains("background-color"), "{chapter}");
 }
+
+#[test]
+fn a_transparent_background_alone_gets_no_inline_white() {
+    let out = fit(book(
+        "",
+        "a{background:none}p{background-color:transparent}",
+        "<p>Text</p>",
+    ));
+    let chapter = text_entry(&out.epub, "OEBPS/text/chapter1.xhtml");
+    assert!(!chapter.contains("background-color:#fff"), "{chapter}");
+}
+
+#[test]
+fn a_class_scoped_head_rule_now_precedes_the_main_sheet() {
+    // Documents the I3 trade-off: the relocated `.note` keeps the
+    // specificity of a single class and is loaded before the main sheet, so
+    // on the device the main sheet wins the tie (`CssParser.cpp:1447-1448`).
+    let out = fit(book(
+        ".note{margin-left:2em}",
+        ".note{margin-left:1em}",
+        r#"<p class="note">Note</p>"#,
+    ));
+    let relocated = text_entry(&out.epub, "OEBPS/et-relocated.css");
+    assert_eq!(relocated, ".cpr1-c-note{margin-left:2em}");
+    let opf = text_entry(&out.epub, "OEBPS/content.opf");
+    assert!(
+        opf.find("et-relocated.css").unwrap() < opf.find("styles/main.css").unwrap(),
+        "{opf}"
+    );
+}
