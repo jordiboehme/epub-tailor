@@ -146,10 +146,19 @@ fn too_many_distinct_declaration_blocks_are_warned_about() {
     let sheet: String = (0..300)
         .map(|i| format!(".c{i}{{margin-left:{i}px}}"))
         .collect();
-    let body: String = (0..300)
+    let paragraphs: String = (0..300)
         .map(|i| format!(r#"<p class="c{i}">x</p>"#))
         .collect();
-    let out = fit(book("", &sheet, &body));
+    // A baked list brings in et-styles.css and a head <style> brings in
+    // et-relocated.css, so both generated sheets are part of the count.
+    let body = format!("{LIST}{paragraphs}");
+    let out = fit(book("p{margin:0}", &sheet, &body));
+    for generated in ["OEBPS/et-styles.css", "OEBPS/et-relocated.css"] {
+        assert!(
+            entry(&out.epub, generated).is_some(),
+            "{generated} is in the output"
+        );
+    }
     assert!(
         out.report
             .warnings

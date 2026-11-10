@@ -24,6 +24,8 @@ use lightningcss::rules::CssRule;
 use lightningcss::stylesheet::{ParserOptions, PrinterOptions, StyleSheet};
 use lightningcss::traits::ToCss;
 
+use super::subset::media_is_screen_or_all;
+
 /// A size within this band of its reference is ordinary text and dropped.
 const NEAR_ONE: std::ops::RangeInclusive<f64> = 0.85..=1.15;
 
@@ -142,8 +144,8 @@ pub(crate) fn root_font_scale(css: &str) -> Option<f64> {
     root_font_scale_of(&sheet.rules.0)
 }
 
-/// [`root_font_scale`] over already parsed rules, looking into `@media`
-/// blocks as well.
+/// [`root_font_scale`] over already parsed rules, looking into the `@media`
+/// blocks the filter keeps (`screen` and `all`) but not print or conditional ones.
 pub(crate) fn root_font_scale_of(rules: &[CssRule<'_>]) -> Option<f64> {
     let mut found = None;
     for rule in rules {
@@ -171,7 +173,7 @@ pub(crate) fn root_font_scale_of(rules: &[CssRule<'_>]) -> Option<f64> {
                     }
                 }
             }
-            CssRule::Media(media) => {
+            CssRule::Media(media) if media_is_screen_or_all(&media.query) => {
                 if let Some(scale) = root_font_scale_of(&media.rules.0) {
                     found = Some(scale);
                 }
@@ -300,5 +302,24 @@ mod tests {
         assert_eq!(root_font_scale("body{font-size:62.5%}"), None);
         assert_eq!(root_font_scale("html{font-size:large}"), None);
         assert_eq!(root_font_scale("html{margin:0}"), None);
+    }
+
+    #[test]
+    fn root_scale_ignores_media_the_filter_drops() {
+        // The device never sees a print or conditional block, so it cannot
+        // set the root size (`filter_css` keeps only `screen` and `all`).
+        assert_eq!(root_font_scale("@media print{html{font-size:62.5%}}"), None);
+        assert_eq!(
+            root_font_scale("@media (min-width:600px){html{font-size:62.5%}}"),
+            None
+        );
+        assert_eq!(
+            root_font_scale("html{font-size:75%}@media print{html{font-size:62.5%}}"),
+            Some(0.75)
+        );
+        assert_eq!(
+            root_font_scale("@media all{html{font-size:62.5%}}"),
+            Some(0.625)
+        );
     }
 }

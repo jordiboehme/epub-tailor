@@ -724,7 +724,7 @@ fn is_ident(s: &str) -> bool {
 
 /// Whether a media query list is effectively `all` or `screen` (including
 /// `only screen`), i.e. one the device would apply unconditionally.
-fn media_is_screen_or_all(query: &MediaList<'_>) -> bool {
+pub(crate) fn media_is_screen_or_all(query: &MediaList<'_>) -> bool {
     query.media_queries.iter().any(|q| {
         !matches!(q.qualifier, Some(Qualifier::Not))
             && q.condition.is_none()

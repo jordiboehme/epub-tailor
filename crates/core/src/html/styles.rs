@@ -13,7 +13,7 @@ use kuchikiki::NodeRef;
 use crate::css::font_size::root_font_scale;
 use crate::css::subset::filter_inline_style_on;
 use crate::html::dom::{
-    collect_by_name, get_attr, local_name, remove_attr, set_attr, text_content,
+    collect_by_name, get_attr, is_named, local_name, remove_attr, set_attr, text_content,
 };
 use crate::report::Transformation;
 
@@ -52,6 +52,11 @@ pub(crate) fn relocate_styles(
         let Some(style) = get_attr(&node, "style") else {
             continue;
         };
+        // Inline <svg> markup is drawn by `rasterize_inline_svgs`, not by the
+        // device, so its style attributes are not ours to filter.
+        if node.inclusive_ancestors().any(|a| is_named(&a, "svg")) {
+            continue;
+        }
         let tag = local_name(&node).unwrap_or_default();
         match filter_inline_style_on(&style, keep_colors, &tag, rem_scale) {
             Some(kept) => {
@@ -110,6 +115,26 @@ mod tests {
         assert!(!out.contains("color:red"), "got: {out}");
         assert_eq!(report.len(), 1);
         assert_eq!(report[0].kind, "inline-style-filtered");
+    }
+
+    #[test]
+    fn inline_svg_styles_are_left_for_the_rasterizer() {
+        // The device never sees an inline <svg>: it is rasterized from these
+        // attributes, so filtering would change how it is drawn.
+        let (out, _, report) = run(
+            r#"<p style="letter-spacing:1px">a</p><svg viewBox="0 0 10 10" style="font-size:16px"><g style="letter-spacing:1px"><text style="font-size:16px;fill:red">x</text></g></svg>"#,
+        );
+        assert!(
+            out.contains(r#"<text style="font-size:16px;fill:red">"#),
+            "{out}"
+        );
+        assert!(out.contains(r#"<g style="letter-spacing:1px">"#), "{out}");
+        assert!(
+            out.contains(r#"viewBox="0 0 10 10" style="font-size:16px""#),
+            "{out}"
+        );
+        assert!(!out.contains(r#"<p style"#), "{out}");
+        assert_eq!(report.len(), 1);
     }
 
     #[test]

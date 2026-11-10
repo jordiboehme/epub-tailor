@@ -7,7 +7,8 @@
 //! the chain of sole element children below `<body>` get an inline
 //! `background-color:#fff`, which the device applies over any stylesheet rule
 //! (`ChapterHtmlSlimParser.cpp:1430-1433` at firmware 2.0.0). The chain stops
-//! at the first element with more than one element child (that element is
+//! at the first element with more than one element child or with text of
+//! its own beside its element child (that element is
 //! still a wrapper of the whole chapter and gets white too) or at an element
 //! that is not a plain container, so boxes deeper in the chapter keep their
 //! shade.
@@ -45,6 +46,13 @@ pub(crate) fn keep_page_white(doc: &NodeRef) {
     merge_inline_style(&body, &[WHITE]);
     let mut current = body;
     loop {
+        // Text next to the element makes it one block among several.
+        if current
+            .children()
+            .any(|c| c.as_text().is_some_and(|t| !t.borrow().trim().is_empty()))
+        {
+            return;
+        }
         let children = child_elements(&current);
         let [only] = children.as_slice() else {
             return;
@@ -96,6 +104,25 @@ mod tests {
             "{out}"
         );
         assert!(out.contains(r#"<div class="tip">"#), "{out}");
+    }
+
+    #[test]
+    fn text_beside_the_only_element_ends_the_chain() {
+        // The text is page content, so the element next to it is a box.
+        let out = run(r#"Text<div class="tip"><p>b</p></div>"#);
+        assert!(out.contains(r#"<div class="tip">"#), "{out}");
+        let out = run(r#"<div class="page">Intro <div class="tip"><p>b</p></div></div>"#);
+        assert!(
+            out.contains(r#"<div class="page" style="background-color:#fff">"#),
+            "{out}"
+        );
+        assert!(out.contains(r#"<div class="tip">"#), "{out}");
+        // Whitespace between tags is not text.
+        let out = run("\n  <div class=\"page\">\n <p>a</p></div>\n");
+        assert!(
+            out.contains(r#"<div class="page" style="background-color:#fff">"#),
+            "{out}"
+        );
     }
 
     #[test]

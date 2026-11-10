@@ -56,24 +56,39 @@ const MAX_UNIQUE_STYLES: usize = 256;
 const SELECTOR_POOL_CAP: usize = 32 * 1024;
 
 /// Book-wide warnings for the device's CSS rule store, given every stylesheet
-/// it will load (minified, device-conformant CSS). The device stores one rule
-/// per comma member, up to `max_rules`; at most 256 distinct declaration
-/// blocks; and at most 32 KB of selector text (`CssParser.cpp:44-46, 1172,
-/// 1226-1240`). Past any of them it stops storing new rules, so rules in later
-/// sheets are lost. The device compares parsed styles rather than text, so
-/// counting distinct declaration text is a close, slightly high, estimate.
+/// it will load (minified, device-conformant CSS), counted like the device
+/// stores them (`CssParser.cpp:44-46, 727-736, 1172, 1226-1240`). A sheet
+/// byte-identical to an earlier one is parsed once (`Epub.cpp:257-318`). Each
+/// comma member is one rule, except that a selector equal to the one stored
+/// just before it merges into that entry (`insertOrMerge`) and adds neither a
+/// rule nor selector bytes; a repeat with another selector in between is
+/// stored again. The store holds up to `max_rules` rules, 256 distinct
+/// declaration blocks and 32 KB of selector text; past any of them the device
+/// stops storing new rules, so rules in later sheets are lost. The device
+/// compares parsed styles rather than text, so counting distinct declaration
+/// text is a close, slightly high, estimate.
 pub(crate) fn store_cap_warnings(sheets: &[&str], max_rules: usize) -> Vec<Warning> {
     let mut rules = 0usize;
     let mut selector_bytes = 0usize;
     let mut bodies: HashSet<&str> = HashSet::new();
+    let mut seen_sheets: HashSet<&str> = HashSet::new();
+    let mut last_selector: Option<String> = None;
     for sheet in sheets {
+        if !seen_sheets.insert(sheet) {
+            continue;
+        }
         for rule in sheet.split('}') {
             let Some((selectors, body)) = rule.split_once('{') else {
                 continue;
             };
             for selector in selectors.split(',') {
+                let key = selector.to_ascii_lowercase();
+                if last_selector.as_deref() == Some(key.as_str()) {
+                    continue;
+                }
                 rules += 1;
                 selector_bytes += selector.len();
+                last_selector = Some(key);
             }
             bodies.insert(body);
         }
@@ -197,6 +212,35 @@ mod tests {
         let warnings = store_cap_warnings(&[&first, &second], 1500);
         assert_eq!(warnings.len(), 1, "{warnings:?}");
         assert!(warnings[0].message.contains("257"), "{warnings:?}");
+    }
+
+    #[test]
+    fn byte_identical_sheets_are_parsed_once() {
+        // The device skips a stylesheet identical to an earlier one
+        // (`Epub.cpp:257-318`), so a per-chapter copy adds nothing.
+        let mut sheet = String::new();
+        for i in 0..800 {
+            sheet.push_str(&format!(".a{i}{{margin-left:1em}}"));
+        }
+        let warnings = store_cap_warnings(&[sheet.as_str(), sheet.as_str()], 1000);
+        assert!(warnings.is_empty(), "{warnings:?}");
+        let other = ".z{margin-left:1em}";
+        let warnings = store_cap_warnings(&[sheet.as_str(), other, sheet.as_str()], 800);
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(warnings[0].message.contains("801"), "{warnings:?}");
+    }
+
+    #[test]
+    fn a_repeated_adjacent_selector_merges_into_one_stored_rule() {
+        // `insertOrMerge` folds a rule into the entry stored just before it
+        // (`CssParser.cpp:727-736`): one rule, one selector, one style.
+        let sheet = ".a{margin-left:1em}.a{text-indent:1em}.a,.a{margin-top:1em}";
+        assert!(store_cap_warnings(&[sheet], 1).is_empty());
+        // With another selector in between, the device stores the repeat again.
+        let sheet = ".a{margin-left:1em}.b{margin-left:1em}.a{text-indent:1em}";
+        let warnings = store_cap_warnings(&[sheet], 2);
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(warnings[0].message.contains('3'), "{warnings:?}");
     }
 
     #[test]
