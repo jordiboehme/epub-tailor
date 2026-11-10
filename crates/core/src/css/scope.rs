@@ -147,7 +147,7 @@ fn scope_through_root(doc: &NodeRef, selector: &str, root_class: &str) -> Option
     matched.then_some(scoped)
 }
 
-/// Rewrite one device-legal selector (`tag`, `.class`, or `tag.class`) to
+/// Rewrite one simple selector (`tag`, `.class`, or `tag.class`) to
 /// require the chapter's scope class, tagging every matching element in `doc` as
 /// a side effect. Returns the scoped selector, or `None` when nothing matched
 /// (a dead selector to drop).

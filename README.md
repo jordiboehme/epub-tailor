@@ -81,7 +81,7 @@ The app keeps itself current. When a new version ships it mentions it, quietly, 
 - Strips embedded fonts the device will never load.
 - Trims every stylesheet to exactly the CSS CrossPoint 2.0 understands. That is a lot more than it used to be: font sizes, small caps, borders, drop caps, page breaks and shaded boxes now survive, and the rest goes before it eats the firmware's rule budget.
 - Rescues and scopes chapter `<style>` blocks the firmware would otherwise ignore or misapply, descendant and child selectors included.
-- Splits oversized chapters at heading boundaries before they stall the indexer.
+- Splits oversized chapters at heading boundaries before they slow the device down.
 
 **With the `generic` profile:**
 
@@ -197,11 +197,10 @@ Kobo brands its colour models "Colour" and everyone else writes "Color", so both
 
 **Other CrossPoint readers.** CrossPoint runs on more than Xteink hardware, and the engine is the same everywhere, so pick the profile by screen, not by logo:
 
-- 480x800: Xteink X4, X4 Pro and X4C (X4 Classic), Seeed reTerminal Sticky, M5PaperMono and PaperMono Lite, BOOX Picco. Use `x4`.
+- 480x800: Xteink X4, X4 Pro and X4C (X4 Classic), Seeed reTerminal Sticky, M5PaperMono and PaperMono Lite, BOOX Picco, Metalio E-Ink 4 (hardware validation still pending on the CrossPoint side). Use `x4`.
 - 528x792: Xteink X3. Use `x3`.
-- 552x768: EEGOREAD A4 and A4 Lite. `x4` works fine, the images just come out a little narrower than the screen. Want them edge to edge? Put a small profile layer with the A4 geometry on top (see [Writing a device profile](#writing-a-device-profile)).
+- 552x768: EEGOREAD A4 and A4 Lite. `x4` works fine, the images just come out a little smaller than the screen. Want them edge to edge? Put a small profile layer with the A4 geometry on top (see [Writing a device profile](#writing-a-device-profile)).
 - 540x960: M5Paper v1.1 and LilyGO T5 E-Paper S3 Pro Lite. CrossPoint itself lists them as "not fully supported yet", so we wait for it.
-- The Metalio E-Ink 4 also runs CrossPoint. Its screen size is not in the sources we read, so we make no promise for it yet.
 
 Four things worth knowing about the device profiles:
 

@@ -1,8 +1,9 @@
 //! CSS handling. Two very different passes, for two very different renderers:
 //!
-//! - [`subset`] filters a stylesheet down to the dozen properties the
-//!   CrossPoint firmware parses (see `docs/device-constraints.md`). It is a
-//!   demolition job, and it is only ever right for the Xteink readers.
+//! - [`subset`] filters a stylesheet down to the simple selector chains and
+//!   few dozen properties the CrossPoint firmware parses (see
+//!   `docs/device-constraints.md`). It is a demolition job, and it is only
+//!   ever right for the CrossPoint readers.
 //! - [`sanitize`] keeps a stylesheet whole and removes only the handful of
 //!   modern constructs that make Adobe RMSDK - the engine behind a plain
 //!   `.epub` on Kobo, PocketBook's EPUB2 path and tolino's RMSDK mode - throw

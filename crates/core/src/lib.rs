@@ -214,7 +214,7 @@ pub fn convert(input: Input, opts: &ConvertOptions) -> Result<Converted, Convert
     //
     // - `sanitize_css` keeps the sheet whole and removes only what makes Adobe
     //   RMSDK throw all of it away (Kobo, PocketBook, tolino in RMSDK mode).
-    // - `filter_css` demolishes it down to CrossPoint's dozen properties.
+    // - `filter_css` demolishes it down to CrossPoint's few dozen properties.
     //
     // Sanitizing runs first so that a profile with both on (nobody's, today)
     // still behaves: filtering a sanitized sheet is the same as filtering the

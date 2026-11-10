@@ -67,7 +67,7 @@ impl Features {
     ///
     /// `sanitize_css` is off here and that is not an oversight: it exists to
     /// stop Adobe RMSDK discarding a stylesheet, and `filter_css` - which these
-    /// profiles do run - has already reduced the sheet to a dozen properties
+    /// profiles do run - has already reduced the sheet to a few dozen properties
     /// with no modern value functions left in it. Running both would be
     /// redundant work on a device that has never heard of RMSDK.
     pub fn all_on() -> Self {
