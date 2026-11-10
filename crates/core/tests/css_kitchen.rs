@@ -90,7 +90,7 @@ fn css_kitchen_filters_relocates_and_strips_fonts() {
         "a color-only style attr survives remapped:\n{chapter}"
     );
     assert!(
-        !chapter.contains("font-size"),
+        !chapter.contains("letter-spacing"),
         "unsupported inline decl dropped:\n{chapter}"
     );
 
@@ -114,11 +114,12 @@ fn css_kitchen_filters_relocates_and_strips_fonts() {
         "the .note paragraph should carry the class scope class:\n{chapter}"
     );
 
-    // The external stylesheet was filtered in place, its color remapped.
+    // The external stylesheet was filtered in place, its color remapped. The
+    // child selector `.x > .y` is device-legal since CrossPoint 2.0.
     let ext = read_entry(&converted.epub, "OEBPS/styles/ext.css");
     assert_eq!(
         ext,
-        "p{color:#555;margin:1em}.keep{text-align:center;margin-left:2em}"
+        "p{color:#555;margin:1em}.x > .y{color:#555}.keep{text-align:center;margin-left:2em}"
     );
 
     // Both generated/filtered sheets are declared in the regenerated manifest.

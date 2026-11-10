@@ -1,11 +1,18 @@
 //! Filter arbitrary stylesheet text down to the tiny subset the CrossPoint
 //! firmware actually parses.
 //!
-//! The device's CSS grammar (see `docs/device-constraints.md`) is minute:
-//! selectors may only be `tag`, `.class`, `tag.class` or comma groups of those;
-//! there are no @-rules; and roughly a dozen properties are honored. Everything
-//! outside that is dead weight at best and layout noise at worst, so we drop it
-//! and keep only what renders.
+//! The device's CSS grammar (see `docs/device-constraints.md`) is small. A
+//! selector is a chain of compounds joined by descendant (` `) or child (` > `)
+//! combinators, optionally ending in `::first-letter`; a compound is an element
+//! or `*`, at most one `#id` and at most 4 classes (`CssParser.cpp:111-138,
+//! 1180-1205` at firmware 2.0.0). The device sets no limit on the chain
+//! length; we keep at most 8 compounds as our own conservative cap. Sibling
+//! combinators, attribute selectors and every other pseudo are unsupported,
+//! there are no @-rules besides an unconditional `@media screen`/`all`, and a
+//! few dozen properties are honored (`CssParser.cpp:938-1144`). Everything
+//! outside that is dead weight at best and layout noise at worst, so we drop
+//! it and keep only what renders. Font sizes get extra care so the reader's
+//! size setting stays in charge (see [`super::font_size`]).
 //!
 //! Parsing goes through [`lightningcss`] in error-recovery mode, so a malformed
 //! construct is skipped rather than failing the whole conversion. We do not use
@@ -19,17 +26,23 @@ use std::sync::{Arc, RwLock};
 
 use lightningcss::declaration::DeclarationBlock;
 use lightningcss::media_query::{MediaList, MediaType, Qualifier};
+use lightningcss::properties::Property;
 use lightningcss::rules::CssRule;
 use lightningcss::selector::SelectorList;
 use lightningcss::stylesheet::{ParserOptions, PrinterOptions, StyleSheet};
 use lightningcss::traits::{Parse, ToCss};
 use lightningcss::values::color::CssColor;
 
+use super::font_size::{self, SizeSubject, device_font_size};
 use crate::report::Warning;
 
-/// Properties the device honors, matched by canonical (unprefixed) name.
-/// `display` and `vertical-align` are additionally value-restricted and handled
-/// in [`property_is_supported`].
+/// Properties the device honors, matched by canonical (unprefixed) name
+/// (`CssParser.cpp:938-1144` at firmware 2.0.0). `display`, `vertical-align`
+/// and `white-space` are additionally value-restricted and handled in
+/// [`property_is_supported`]. `float` and `list-style-type` keep every value:
+/// the device records any value as an override of an earlier rule. The
+/// `list-style` and `background` shorthands are rewritten in
+/// [`device_declaration`].
 const ALLOWED_PROPERTIES: &[&str] = &[
     "text-align",
     "font-style",
@@ -50,6 +63,35 @@ const ALLOWED_PROPERTIES: &[&str] = &[
     "width",
     "height",
     "direction",
+    "font-size",
+    "font-variant",
+    "font-variant-caps",
+    "page-break-before",
+    "page-break-after",
+    "break-before",
+    "break-after",
+    // The device ignores border colors (`CssParser.cpp:1089-1144`).
+    "border",
+    "border-width",
+    "border-style",
+    "border-top",
+    "border-right",
+    "border-bottom",
+    "border-left",
+    "border-top-width",
+    "border-right-width",
+    "border-bottom-width",
+    "border-left-width",
+    "border-top-style",
+    "border-right-style",
+    "border-bottom-style",
+    "border-left-style",
+    "initial-letter",
+    "white-space",
+    // Any value: the device records every value as an override of an
+    // earlier rule (`CssParser.cpp:1071-1073, 1082-1085`).
+    "float",
+    "list-style-type",
 ];
 
 /// Color properties kept only when the gray-tone remap is active
@@ -98,8 +140,8 @@ pub struct FilteredCss {
 /// minified, whitelisted declaration block behind them.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FilteredRule {
-    /// The kept selectors, already validated as device-legal (`tag`,
-    /// `.class`, or `tag.class`). Joining with `,` reproduces the selector
+    /// The kept selectors, already validated as device-legal (see
+    /// `selector_is_supported`). Joining with `,` reproduces the selector
     /// list of the original rule (minus any rejected group members).
     pub selectors: Vec<String>,
     /// The minified `name:value;name:value` declaration block, with no
@@ -125,6 +167,7 @@ fn filter_css_to_accumulator(
     css: &str,
     path: &str,
     keep_colors: bool,
+    rem_scale: Option<f64>,
     warnings: &mut Vec<Warning>,
 ) -> Option<Accumulator> {
     let parse_warnings = Arc::new(RwLock::new(Vec::new()));
@@ -146,8 +189,16 @@ fn filter_css_to_accumulator(
         }
     };
 
+    let rem_scale = rem_scale
+        .or_else(|| font_size::root_font_scale_of(&stylesheet.rules.0))
+        .unwrap_or(1.0);
     let mut acc = Accumulator::default();
-    process_rules(&stylesheet.rules.0, path, keep_colors, warnings, &mut acc);
+    let ctx = RuleContext {
+        path,
+        keep_colors,
+        rem_scale,
+    };
+    process_rules(&stylesheet.rules.0, &ctx, warnings, &mut acc);
 
     // One warning per construct lightningcss skipped during error recovery.
     let skipped = parse_warnings.read().map(|w| w.len()).unwrap_or(0);
@@ -166,13 +217,30 @@ fn filter_css_to_accumulator(
 /// declarations for the gray-tone remap pass to rewrite. Never fails: parse
 /// errors are recovered from and reported as warnings, and a stylesheet that
 /// cannot be parsed at all is dropped entirely.
+///
+/// `rem` font sizes are rescaled by the root size the sheet itself sets on
+/// `html` (see [`super::font_size`]); [`filter_css_scaled`] takes a book-wide
+/// root size instead.
 pub fn filter_css(
     css: &str,
     path: &str,
     keep_colors: bool,
     warnings: &mut Vec<Warning>,
 ) -> FilteredCss {
-    let Some(acc) = filter_css_to_accumulator(css, path, keep_colors, warnings) else {
+    filter_css_scaled(css, path, keep_colors, None, warnings)
+}
+
+/// [`filter_css`] with the book's root font size (`rem_scale`, a factor of
+/// 16px) given by the caller, or found in `css` itself when `None`. Rescale a
+/// sheet once only: its output no longer carries the root size.
+pub(crate) fn filter_css_scaled(
+    css: &str,
+    path: &str,
+    keep_colors: bool,
+    rem_scale: Option<f64>,
+    warnings: &mut Vec<Warning>,
+) -> FilteredCss {
+    let Some(acc) = filter_css_to_accumulator(css, path, keep_colors, rem_scale, warnings) else {
         return FilteredCss::default();
     };
 
@@ -200,7 +268,18 @@ pub fn filter_css_rules(
     keep_colors: bool,
     warnings: &mut Vec<Warning>,
 ) -> Vec<FilteredRule> {
-    filter_css_to_accumulator(css, path, keep_colors, warnings)
+    filter_css_rules_scaled(css, path, keep_colors, None, warnings)
+}
+
+/// [`filter_css_rules`] with a root font size, as in [`filter_css_scaled`].
+pub(crate) fn filter_css_rules_scaled(
+    css: &str,
+    path: &str,
+    keep_colors: bool,
+    rem_scale: Option<f64>,
+    warnings: &mut Vec<Warning>,
+) -> Vec<FilteredRule> {
+    filter_css_to_accumulator(css, path, keep_colors, rem_scale, warnings)
         .map(|acc| acc.rules)
         .unwrap_or_default()
 }
@@ -220,12 +299,24 @@ pub(crate) fn push_rule(out: &mut String, selectors: &[String], declarations: &s
 /// whitelist. Returns the minified survivors, or `None` when nothing survives
 /// (so the caller can drop the attribute).
 pub fn filter_inline_style(style: &str, keep_colors: bool) -> Option<String> {
+    filter_inline_style_on(style, keep_colors, "", 1.0)
+}
+
+/// [`filter_inline_style`] for the style of an element named `tag`, with the
+/// book's root font size `rem_scale` (see [`super::font_size`]).
+pub(crate) fn filter_inline_style_on(
+    style: &str,
+    keep_colors: bool,
+    tag: &str,
+    rem_scale: f64,
+) -> Option<String> {
     let options = ParserOptions {
         error_recovery: true,
         ..Default::default()
     };
     let block = DeclarationBlock::parse_string(style, options).ok()?;
-    let (declarations, _) = filter_declarations(&block, keep_colors);
+    let (declarations, _) =
+        filter_declarations(&block, keep_colors, SizeSubject::of_tag(tag), rem_scale);
     if declarations.is_empty() {
         None
     } else {
@@ -233,23 +324,33 @@ pub fn filter_inline_style(style: &str, keep_colors: bool) -> Option<String> {
     }
 }
 
+/// What every rule of one stylesheet is filtered with.
+struct RuleContext<'a> {
+    /// The sheet's path, for warnings.
+    path: &'a str,
+    /// Keep concrete colors for the remap pass.
+    keep_colors: bool,
+    /// The book's root font size as a factor of 16px.
+    rem_scale: f64,
+}
+
 /// Walk a rule list, appending kept style rules to `acc.out`. `@media all` /
 /// `@media screen` bodies are hoisted (their inner rules processed in place);
 /// every other at-rule is dropped.
 fn process_rules(
     rules: &[CssRule<'_>],
-    path: &str,
-    keep_colors: bool,
+    ctx: &RuleContext<'_>,
     warnings: &mut Vec<Warning>,
     acc: &mut Accumulator,
 ) {
+    let path = ctx.path;
     for rule in rules {
         match rule {
             CssRule::Style(style) => {
-                emit_style_rule(&style.selectors, &style.declarations, keep_colors, acc)
+                emit_style_rule(&style.selectors, &style.declarations, ctx, acc)
             }
             CssRule::Media(media) if media_is_screen_or_all(&media.query) => {
-                process_rules(&media.rules.0, path, keep_colors, warnings, acc);
+                process_rules(&media.rules.0, ctx, warnings, acc);
             }
             CssRule::Import(import) => {
                 acc.dropped += 1;
@@ -269,12 +370,15 @@ fn process_rules(
     }
 }
 
-/// Emit a single style rule if at least one selector and one declaration
-/// survive; otherwise count it as dropped.
+/// Emit a style rule if at least one selector and one declaration survive;
+/// otherwise count it as dropped. A `font-size` depends on the subject (see
+/// [`super::font_size`]), so a comma group whose members end up with different
+/// declarations is split into one rule per distinct block, in the order of
+/// each block's first member.
 fn emit_style_rule(
     selectors: &SelectorList<'_>,
     declarations: &DeclarationBlock<'_>,
-    keep_colors: bool,
+    ctx: &RuleContext<'_>,
     acc: &mut Accumulator,
 ) {
     let kept_selectors: Vec<String> = selectors
@@ -288,24 +392,49 @@ fn emit_style_rule(
         return;
     }
 
-    let (declarations, dropped) = filter_declarations(declarations, keep_colors);
-    acc.decls_dropped += dropped;
-    if declarations.is_empty() {
+    let mut by_subject: Vec<(SizeSubject, String, usize)> = Vec::new();
+    let mut groups: Vec<FilteredRule> = Vec::new();
+    for selector in kept_selectors {
+        let subject = SizeSubject::of_selector(&selector);
+        let filtered = match by_subject.iter().find(|(s, _, _)| *s == subject) {
+            Some((_, decls, _)) => decls.clone(),
+            None => {
+                let (decls, dropped) =
+                    filter_declarations(declarations, ctx.keep_colors, subject, ctx.rem_scale);
+                by_subject.push((subject, decls.clone(), dropped));
+                decls
+            }
+        };
+        if filtered.is_empty() {
+            continue;
+        }
+        match groups.iter_mut().find(|g| g.declarations == filtered) {
+            Some(group) => group.selectors.push(selector),
+            None => groups.push(FilteredRule {
+                selectors: vec![selector],
+                declarations: filtered,
+            }),
+        }
+    }
+    acc.decls_dropped += by_subject.iter().map(|(_, _, d)| *d).max().unwrap_or(0);
+    if groups.is_empty() {
         acc.dropped += 1;
         return;
     }
-
-    acc.rules.push(FilteredRule {
-        selectors: kept_selectors,
-        declarations,
-    });
-    acc.kept += 1;
+    acc.kept += groups.len();
+    acc.rules.extend(groups);
 }
 
-/// Filter a declaration block to the whitelist, stripping `!important`. Returns
-/// the minified `name:value;name:value` string and the count of dropped
-/// declarations.
-fn filter_declarations(block: &DeclarationBlock<'_>, keep_colors: bool) -> (String, usize) {
+/// Filter a declaration block to the whitelist, stripping `!important`, for a
+/// rule or element whose font-size `subject` is given (see
+/// [`super::font_size`]). Returns the minified `name:value;name:value` string
+/// and the count of dropped declarations.
+fn filter_declarations(
+    block: &DeclarationBlock<'_>,
+    keep_colors: bool,
+    subject: SizeSubject,
+    rem_scale: f64,
+) -> (String, usize) {
     let mut kept: Vec<String> = Vec::new();
     let mut dropped = 0usize;
     for property in block
@@ -313,20 +442,75 @@ fn filter_declarations(block: &DeclarationBlock<'_>, keep_colors: bool) -> (Stri
         .iter()
         .chain(block.important_declarations.iter())
     {
-        let id = property.property_id();
-        let name = id.name();
-        let Ok(value) = property.value_to_css_string(PrinterOptions::default()) else {
+        let Some((name, value)) = device_declaration(property, keep_colors) else {
             dropped += 1;
             continue;
         };
-        let value = restore_leading_zeros(&value);
-        if property_is_supported(name, &value, keep_colors) {
+        let mut value = restore_leading_zeros(&value);
+        if name == "font-size" {
+            match device_font_size(&value, subject, rem_scale) {
+                Some(device_value) => value = device_value,
+                None => {
+                    dropped += 1;
+                    continue;
+                }
+            }
+        }
+        if property_is_supported(&name, &value, keep_colors) {
             kept.push(format!("{name}:{value}"));
         } else {
             dropped += 1;
         }
     }
     (kept.join(";"), dropped)
+}
+
+/// The `name` and serialized `value` a declaration reaches the device as, or
+/// `None` when it has no device form. Most declarations pass through as they
+/// are. Two shorthands the device does not parse are rewritten to the longhand
+/// it does (`CssParser.cpp:1068-1085`): every `list-style` becomes
+/// `list-style-type` with its parsed marker type, and under `keep_colors`
+/// `background` becomes `background-color` with its color, dropping images and
+/// positions. A `background` with no color gives `transparent` (printed
+/// `#0000`), which the device records as "not shaded", so it still overrides
+/// an earlier shade. A `list-style-type` that is not a keyword becomes `disc`.
+fn device_declaration(property: &Property<'_>, keep_colors: bool) -> Option<(String, String)> {
+    let (name, value) = device_declaration_raw(property, keep_colors)?;
+    // The device reads only a keyword marker type; a string or `symbols()`
+    // marker becomes the default `disc` (a quoted `}` would also break the
+    // rule splitting in `caps::split_css`).
+    if name == "list-style-type" && !is_ident(&value) {
+        return Some((name, "disc".to_string()));
+    }
+    Some((name, value))
+}
+
+/// [`device_declaration`] before the marker type is restricted to a keyword.
+fn device_declaration_raw(property: &Property<'_>, keep_colors: bool) -> Option<(String, String)> {
+    match property {
+        Property::ListStyle(list_style) => {
+            let value = list_style
+                .list_style_type
+                .to_css_string(PrinterOptions::default())
+                .ok()?;
+            Some(("list-style-type".to_string(), value))
+        }
+        Property::Background(layers) if keep_colors => {
+            // Only the final layer carries a color.
+            let value = layers
+                .last()?
+                .color
+                .to_css_string(PrinterOptions::default())
+                .ok()?;
+            Some(("background-color".to_string(), value))
+        }
+        _ => {
+            let value = property
+                .value_to_css_string(PrinterOptions::default())
+                .ok()?;
+            Some((property.property_id().name().to_string(), value))
+        }
+    }
 }
 
 /// Put back the integer `0` that lightningcss strips from a fractional length
@@ -368,16 +552,126 @@ fn property_is_supported(name: &str, value: &str, keep_colors: bool) -> bool {
         "vertical-align" => {
             value.eq_ignore_ascii_case("super") || value.eq_ignore_ascii_case("sub")
         }
+        // The device acts only on these; any other value is ignored rather
+        // than recorded (`CssParser.cpp:949-955`).
+        "white-space" => ["pre", "pre-wrap", "break-spaces", "normal"]
+            .iter()
+            .any(|keep| value.eq_ignore_ascii_case(keep)),
         other if keep_colors && COLOR_PROPERTIES.contains(&other) => is_concrete_color(value),
         other => ALLOWED_PROPERTIES.contains(&other),
     }
 }
 
-/// Whether a serialized selector matches one of the three device-supported
-/// shapes: `tag`, `.class`, or `tag.class`. Anything with a combinator,
-/// descendant space, universal, id, attribute, pseudo, or a second class is
-/// rejected.
-fn selector_is_supported(selector: &str) -> bool {
+/// The device skips a selector longer than this many bytes
+/// (`CssParser.cpp:50, 1175` at firmware 2.0.0).
+pub(crate) const MAX_SELECTOR_LEN: usize = 256;
+
+/// Bytes kept free under [`MAX_SELECTOR_LEN`] for the scope class a chapter's
+/// relocated styles get prefixed with. The cap applies to every sheet, so a
+/// selector of 241 to 256 bytes in a book's main stylesheet is dropped too,
+/// although the device would store it.
+const SCOPE_PREFIX_HEADROOM: usize = 16;
+
+/// Most compounds we keep in one selector chain. This cap is ours, not the
+/// firmware's: the device has no explicit limit and tracks ancestors to depth
+/// 16, so 8 is a conservative choice.
+const MAX_COMPOUNDS: usize = 8;
+
+/// Most classes in one compound; the device rejects a fifth
+/// (`CssParser.h:32`, `CssParser.cpp:130`).
+const MAX_CLASSES: usize = 4;
+
+/// Whether a serialized selector is one the device parses: a chain of up to
+/// [`MAX_COMPOUNDS`] compounds joined by descendant (` `) or child (` > `)
+/// combinators, optionally ending in `::first-letter`, and at most
+/// `MAX_SELECTOR_LEN - SCOPE_PREFIX_HEADROOM` bytes long. Expects lightningcss
+/// serialization, which normalizes the spacing around combinators.
+pub(crate) fn selector_is_supported(selector: &str) -> bool {
+    if selector.is_empty() || selector.len() > MAX_SELECTOR_LEN - SCOPE_PREFIX_HEADROOM {
+        return false;
+    }
+    let chain = strip_first_letter(selector);
+    let mut compounds = 0usize;
+    let mut subject_is_empty = true;
+    let mut awaiting_compound = true;
+    for token in chain.split(' ') {
+        if token == ">" {
+            if awaiting_compound {
+                return false;
+            }
+            awaiting_compound = true;
+            continue;
+        }
+        let Some(is_empty) = parse_compound(token) else {
+            return false;
+        };
+        compounds += 1;
+        subject_is_empty = is_empty;
+        awaiting_compound = false;
+    }
+    // The device rejects a bare `*` as the subject (the last compound): it
+    // stores rules under the subject's tag, id and classes, and `*` has none
+    // (`CssParser.cpp:1196`). A `*` ancestor is fine.
+    !awaiting_compound && !subject_is_empty && compounds <= MAX_COMPOUNDS
+}
+
+/// `selector` without a trailing `::first-letter` (or legacy `:first-letter`),
+/// which the device stores as its own rule key (`CssParser.cpp:1180-1188`).
+/// Something must precede the pseudo; a bare `::first-letter` is left as it is
+/// and later rejected for its `:`.
+pub(crate) fn strip_first_letter(selector: &str) -> &str {
+    for suffix in ["::first-letter", ":first-letter"] {
+        if selector.len() > suffix.len() {
+            let split = selector.len() - suffix.len();
+            if selector.is_char_boundary(split) && selector[split..].eq_ignore_ascii_case(suffix) {
+                return &selector[..split];
+            }
+        }
+    }
+    selector
+}
+
+/// Parse one compound - an optional element or `*`, then `#id` and `.class`
+/// parts in any order with at most one id and [`MAX_CLASSES`] classes - the way
+/// the device does (`CssParser.cpp:111-138`). Returns `None` when the device
+/// rejects it, else whether it is a bare `*` (no element, id or class).
+fn parse_compound(token: &str) -> Option<bool> {
+    if token.is_empty() {
+        return None;
+    }
+    let (tag, mut rest) = match token.strip_prefix('*') {
+        Some(rest) => ("", rest),
+        None => {
+            let end = token.find(['#', '.']).unwrap_or(token.len());
+            token.split_at(end)
+        }
+    };
+    if !tag.is_empty() && !is_ident(tag) {
+        return None;
+    }
+    let mut has_id = false;
+    let mut classes = 0usize;
+    while let Some(marker) = rest.chars().next() {
+        let body = &rest[marker.len_utf8()..];
+        let end = body.find(['#', '.']).unwrap_or(body.len());
+        let (name, tail) = body.split_at(end);
+        if !is_ident(name) {
+            return None;
+        }
+        match marker {
+            '#' if !has_id => has_id = true,
+            '.' if classes < MAX_CLASSES => classes += 1,
+            _ => return None,
+        }
+        rest = tail;
+    }
+    Some(tag.is_empty() && !has_id && classes == 0)
+}
+
+/// Whether a serialized selector is one of the three simple shapes `tag`,
+/// `.class` or `tag.class`. Anything with a combinator, descendant space,
+/// universal, id, attribute, pseudo, or a second class is rejected.
+pub(crate) fn is_simple_selector(selector: &str) -> bool {
     if selector.is_empty() {
         return false;
     }
@@ -430,7 +724,7 @@ fn is_ident(s: &str) -> bool {
 
 /// Whether a media query list is effectively `all` or `screen` (including
 /// `only screen`), i.e. one the device would apply unconditionally.
-fn media_is_screen_or_all(query: &MediaList<'_>) -> bool {
+pub(crate) fn media_is_screen_or_all(query: &MediaList<'_>) -> bool {
     query.media_queries.iter().any(|q| {
         !matches!(q.qualifier, Some(Qualifier::Not))
             && q.condition.is_none()
@@ -451,6 +745,62 @@ mod tests {
     fn filter_keeping_colors(css: &str) -> FilteredCss {
         let mut warnings = Vec::new();
         filter_css(css, "test.css", true, &mut warnings)
+    }
+
+    #[test]
+    fn root_size_rescales_rem_and_body_sizes_are_dropped() {
+        let out = filter(
+            "html{font-size:62.5%}body{font-size:1.6rem;margin:0}\
+             p{font-size:1.6rem}h1{font-size:3.2rem}",
+        );
+        assert_eq!(out.css, "body{margin:0}h1{font-size:2rem}");
+    }
+
+    #[test]
+    fn near_one_sizes_go_and_real_sizes_stay() {
+        let out = filter(
+            "p{font-size:0.9em}h1{font-size:2em}small{font-size:0.75em}\
+             h2{font-size:1em}.note{font-size:110%}",
+        );
+        assert_eq!(
+            out.css,
+            "h1{font-size:2em}small{font-size:0.75em}h2{font-size:1em}"
+        );
+    }
+
+    #[test]
+    fn a_root_member_of_a_comma_group_loses_only_its_size() {
+        let out = filter("body,.x{font-size:2em;margin:0}html,p{font-size:1em}");
+        assert_eq!(out.css, "body{margin:0}.x{font-size:2em;margin:0}");
+    }
+
+    #[test]
+    fn a_book_root_size_from_another_sheet_rescales_rem() {
+        let mut warnings = Vec::new();
+        let out = filter_css_scaled(
+            "p{font-size:3.2rem}",
+            "test.css",
+            false,
+            Some(0.625),
+            &mut warnings,
+        );
+        assert_eq!(out.css, "p{font-size:2rem}");
+    }
+
+    #[test]
+    fn inline_font_size_follows_the_element() {
+        assert_eq!(
+            filter_inline_style_on("font-size:2em;margin:0", false, "body", 1.0).as_deref(),
+            Some("margin:0")
+        );
+        assert_eq!(
+            filter_inline_style_on("font-size:1.6rem", false, "span", 0.625),
+            None
+        );
+        assert_eq!(
+            filter_inline_style_on("font-size:1em", false, "h1", 1.0).as_deref(),
+            Some("font-size:1em")
+        );
     }
 
     #[test]
@@ -538,6 +888,10 @@ sub { vertical-align: sub; }
 @media only screen { .o { padding: 1em; } }
 @media (min-width: 500px) { .cond { text-align: right; } }
 .trailing { text-align: center }
+ul { list-style: none outside; }
+div > p::first-letter { float: left; initial-letter: 3; color: red; }
+p + p { text-indent: 0; }
+.box { border: 1px solid; page-break-before: always; float: right; }
 "#;
         let filtered = filter(input);
         insta::assert_snapshot!(filtered.css);
@@ -573,6 +927,10 @@ sub { vertical-align: sub; }
 @media only screen { .o { padding: 1em; } }
 @media (min-width: 500px) { .cond { text-align: right; } }
 .trailing { text-align: center }
+ul { list-style: none outside; }
+div > p::first-letter { float: left; initial-letter: 3; color: red; }
+p + p { text-indent: 0; }
+.box { border: 1px solid; page-break-before: always; float: right; }
 "#;
         let filtered = filter(input);
         let mut warnings = Vec::new();
@@ -630,29 +988,268 @@ sub { vertical-align: sub; }
 
     #[test]
     fn unsupported_selectors_are_dropped() {
-        assert_eq!(filter("div p{text-align:center}").css, "");
-        assert_eq!(filter("#id{text-align:center}").css, "");
-        assert_eq!(filter(".a.b{text-align:center}").css, "");
         assert_eq!(filter("a:hover{text-align:center}").css, "");
-        assert_eq!(filter("*{text-align:center}").css, "");
         assert_eq!(filter("[href]{text-align:center}").css, "");
+        assert_eq!(filter("p + p{text-align:center}").css, "");
+        assert_eq!(filter("#a#b{text-align:center}").css, "");
     }
 
     #[test]
     fn supported_selector_shapes_are_kept() {
-        assert_eq!(filter("p{text-align:center}").css, "p{text-align:center}");
-        assert_eq!(filter(".c{text-align:center}").css, ".c{text-align:center}");
+        for selector in ["p", ".c", "p.c", "div p", "#id", ".a.b", "* p"] {
+            let css = format!("{selector}{{text-align:center}}");
+            assert_eq!(filter(&css).css, css, "selector {selector}");
+        }
+    }
+
+    /// The selector a rule keeps after filtering, or `None` when it is dropped.
+    fn kept_selector(selector: &str) -> Option<String> {
+        let css = filter(&format!("{selector}{{text-align:center}}")).css;
+        css.strip_suffix("{text-align:center}").map(str::to_string)
+    }
+
+    #[test]
+    fn two_point_oh_selector_shapes_are_kept() {
+        for selector in [
+            "#intro",
+            "p#intro",
+            "p.a.b.c.d",
+            "div p",
+            "div > p",
+            ".box .title",
+            "* > p",
+        ] {
+            assert_eq!(
+                kept_selector(selector).as_deref(),
+                Some(selector),
+                "selector {selector}"
+            );
+        }
+        // lightningcss prints `::first-letter` in its legacy one-colon form,
+        // which the device accepts too (`CssParser.cpp:1180-1188`).
         assert_eq!(
-            filter("p.c{text-align:center}").css,
-            "p.c{text-align:center}"
+            kept_selector("p::first-letter").as_deref(),
+            Some("p:first-letter")
+        );
+        assert_eq!(
+            kept_selector("p.first::first-letter").as_deref(),
+            Some("p.first:first-letter")
         );
     }
 
     #[test]
+    fn a_bare_universal_subject_is_dropped() {
+        // The device keys a rule by its subject's element, id and classes; a
+        // bare `*` subject has none of them and is skipped
+        // (`CssParser.cpp:1196`). `*` works as an ancestor.
+        assert_eq!(kept_selector("*"), None);
+        assert_eq!(kept_selector("div *"), None);
+        assert_eq!(kept_selector("*::first-letter"), None);
+    }
+
+    #[test]
+    fn still_unsupported_selectors_are_dropped() {
+        // A well-formed selector of 250 bytes: only its length rejects it.
+        let long = format!(".{}", "a".repeat(249));
+        for selector in [
+            "p + p",
+            "p ~ p",
+            "a[href]",
+            "a:hover",
+            "p:first-child",
+            "p.a.b.c.d.e",
+            "p::before",
+            "p::first-letter span",
+            long.as_str(),
+        ] {
+            assert_eq!(kept_selector(selector), None, "selector {selector}");
+        }
+    }
+
+    #[test]
+    fn selector_length_and_depth_limits() {
+        let compounds_8 = ["p"; 8].join(" ");
+        let compounds_9 = ["p"; 9].join(" ");
+        assert!(selector_is_supported(&compounds_8));
+        assert!(!selector_is_supported(&compounds_9));
+        // 240 bytes is the most we keep: 16 bytes of headroom under the
+        // device's 256-byte limit for the scope prefix.
+        let exactly = format!(".{}", "a".repeat(MAX_SELECTOR_LEN - 16 - 1));
+        assert_eq!(exactly.len(), MAX_SELECTOR_LEN - 16);
+        assert!(selector_is_supported(&exactly));
+        let over = format!(".{}", "a".repeat(MAX_SELECTOR_LEN - 16));
+        assert!(!selector_is_supported(&over));
+    }
+
+    #[test]
+    fn non_ascii_after_a_universal_is_rejected_not_a_panic() {
+        assert!(!selector_is_supported("*é"));
+        assert!(!selector_is_supported("p é"));
+    }
+
+    #[test]
+    fn simple_selector_is_the_one_three_shapes() {
+        for simple in ["p", ".c", "p.c"] {
+            assert!(is_simple_selector(simple), "{simple}");
+        }
+        for complex in ["div p", "#id", ".a.b", "*", "p::first-letter", "div > p"] {
+            assert!(!is_simple_selector(complex), "{complex}");
+        }
+    }
+
+    #[test]
     fn partial_selector_group_keeps_survivors() {
-        // `div p` is dropped, `.keep` survives, so the rule is kept with only it.
-        let filtered = filter("div p,.keep{text-align:center}");
+        // `p + p` is dropped, `.keep` survives, so the rule is kept with only it.
+        let filtered = filter("p + p,.keep{text-align:center}");
         assert_eq!(filtered.css, ".keep{text-align:center}");
+    }
+
+    #[test]
+    fn two_point_oh_properties_are_kept() {
+        for declaration in [
+            "font-size:1.2em",
+            "font-variant:small-caps",
+            "font-variant-caps:small-caps",
+            "page-break-before:always",
+            "page-break-after:always",
+            "break-before:page",
+            "break-after:page",
+            "border:1px solid",
+            "border-width:2px",
+            "border-style:solid",
+            "border-top:1px solid",
+            "border-right:1px solid",
+            "border-bottom:1px solid",
+            "border-left:1px solid",
+            "border-top-width:2px",
+            "border-right-width:2px",
+            "border-bottom-width:2px",
+            "border-left-width:2px",
+            "border-top-style:dotted",
+            "border-right-style:dotted",
+            "border-bottom-style:dotted",
+            "border-left-style:dotted",
+            "initial-letter:3",
+            "white-space:pre",
+            "white-space:pre-wrap",
+            "white-space:break-spaces",
+            "white-space:normal",
+            "float:left",
+            "list-style-type:none",
+        ] {
+            let css = format!("p{{{declaration}}}");
+            assert_eq!(filter(&css).css, css, "declaration {declaration}");
+        }
+    }
+
+    #[test]
+    fn white_space_values_the_device_ignores_are_dropped() {
+        // The device acts only on pre, pre-wrap, break-spaces and normal
+        // (`CssParser.cpp:949-955`).
+        assert_eq!(filter("p{white-space:nowrap}").css, "");
+        assert_eq!(filter("p{white-space:pre-line}").css, "");
+    }
+
+    #[test]
+    fn every_float_and_list_style_type_value_is_kept() {
+        // The device records any value as an explicit override (non-left
+        // clears a float, non-none draws the default marker;
+        // `CssParser.cpp:1071-1073, 1082-1085`), so dropping one would let an
+        // earlier rule win.
+        assert_eq!(filter("p{float:right}").css, "p{float:right}");
+        assert_eq!(filter("p{float:none}").css, "p{float:none}");
+        assert_eq!(
+            filter("ul{list-style-type:disc}").css,
+            "ul{list-style-type:disc}"
+        );
+        assert_eq!(
+            filter("ol{list-style-type:decimal}").css,
+            "ol{list-style-type:decimal}"
+        );
+    }
+
+    #[test]
+    fn a_list_style_type_override_survives_the_cascade() {
+        assert_eq!(
+            filter("ul{list-style:none}ul.bullets{list-style-type:disc}").css,
+            "ul{list-style-type:none}ul.bullets{list-style-type:disc}"
+        );
+    }
+
+    #[test]
+    fn a_string_list_marker_becomes_disc() {
+        // A quoted marker can carry `}` or `;`, which would break the naive
+        // rule splitting in `caps::split_css`; the device reads no strings.
+        for css in [
+            r#"ul{list-style:"}" inside}"#,
+            r#"ul{list-style-type:"}"}"#,
+            r#"ul{list-style-type:symbols(cyclic "*")}"#,
+        ] {
+            let out = filter(css);
+            assert_eq!(out.css, "ul{list-style-type:disc}", "{css}");
+            assert_eq!(super::super::caps::split_css(&out.css, 8).concat(), out.css);
+        }
+        assert_eq!(
+            filter("ol{list-style-type:lower-roman}").css,
+            "ol{list-style-type:lower-roman}"
+        );
+    }
+
+    #[test]
+    fn list_style_shorthand_becomes_list_style_type() {
+        assert_eq!(
+            filter("ul{list-style:none outside}").css,
+            "ul{list-style-type:none}"
+        );
+        assert_eq!(
+            filter("ul{list-style:none}").css,
+            "ul{list-style-type:none}"
+        );
+        // The device has no `list-style`, so every shorthand becomes its
+        // parsed marker type (the default `disc` when it names none).
+        assert_eq!(
+            filter("ul{list-style:square inside}").css,
+            "ul{list-style-type:square}"
+        );
+        assert_eq!(
+            filter("ul{list-style:url(x.png)}").css,
+            "ul{list-style-type:disc}"
+        );
+        assert_eq!(
+            filter_inline_style("list-style:none", false),
+            Some("list-style-type:none".to_string())
+        );
+    }
+
+    #[test]
+    fn background_shorthand_becomes_background_color_when_keeping_colors() {
+        assert_eq!(
+            filter_keeping_colors("div{background:#eee url(x.png) no-repeat}").css,
+            "div{background-color:#eee}"
+        );
+        assert_eq!(filter("div{background:#eee url(x.png) no-repeat}").css, "");
+        // No color resolves to `transparent`, which the device records as
+        // "not shaded" (`CssParser.cpp:1068-1070`), so it is kept as an
+        // override. lightningcss prints `transparent` as `#0000` (as it does
+        // for an authored `background-color:transparent`); the device reads
+        // that as luminance 0, also "not shaded", and the remap pass leaves
+        // fully transparent paint alone.
+        assert_eq!(
+            filter_keeping_colors("div{background:url(x.png) no-repeat}").css,
+            "div{background-color:#0000}"
+        );
+        assert_eq!(
+            filter_keeping_colors("div{background:none}").css,
+            "div{background-color:#0000}"
+        );
+        assert_eq!(
+            filter_keeping_colors("div{background-color:transparent}").css,
+            "div{background-color:#0000}"
+        );
+        assert_eq!(
+            filter_inline_style("background:#ddd", true),
+            Some("background-color:#ddd".to_string())
+        );
     }
 
     #[test]
@@ -686,14 +1283,17 @@ sub { vertical-align: sub; }
     #[test]
     fn inline_style_keeps_supported_drops_unsupported() {
         assert_eq!(
-            filter_inline_style("color:red;text-align:center;font-size:12px", false),
+            filter_inline_style("color:red;text-align:center;letter-spacing:1px", false),
             Some("text-align:center".to_string())
         );
     }
 
     #[test]
     fn inline_style_all_unsupported_returns_none() {
-        assert_eq!(filter_inline_style("color:blue;font-size:9px", false), None);
+        assert_eq!(
+            filter_inline_style("color:blue;letter-spacing:1px", false),
+            None
+        );
     }
 
     #[test]
@@ -707,12 +1307,12 @@ sub { vertical-align: sub; }
     #[test]
     fn keep_colors_keeps_concrete_color_declarations() {
         let out = filter_keeping_colors(
-            ".x{color:red;background-color:#eef;border-color:rgb(1,2,3);font-size:9px}",
+            ".x{color:red;background-color:#eef;border-color:rgb(1,2,3);letter-spacing:1px}",
         );
         assert!(out.css.contains("color:red"), "got: {}", out.css);
         assert!(out.css.contains("background-color:"), "got: {}", out.css);
         assert!(out.css.contains("border-color:"), "got: {}", out.css);
-        assert!(!out.css.contains("font-size"), "got: {}", out.css);
+        assert!(!out.css.contains("letter-spacing"), "got: {}", out.css);
         assert_conformant_with(&out.css, true);
     }
 
@@ -731,17 +1331,9 @@ sub { vertical-align: sub; }
     }
 
     #[test]
-    fn keep_colors_still_drops_the_shorthands() {
-        // `background`/`border` shorthands carry constructs beyond a color;
-        // they stay out even when colors are kept.
-        let out = filter_keeping_colors(".x{background:#eef;border:1px solid red}");
-        assert_eq!(out.css, "", "got: {}", out.css);
-    }
-
-    #[test]
     fn keep_colors_inline_style_keeps_the_color() {
         assert_eq!(
-            filter_inline_style("color:teal;font-size:9px", true),
+            filter_inline_style("color:teal;letter-spacing:1px", true),
             Some("color:teal".to_string())
         );
     }
@@ -765,7 +1357,29 @@ sub { vertical-align: sub; }
 
     fn selector_fragment() -> impl Strategy<Value = &'static str> {
         prop::sample::select(vec![
-            ".a", "div", "div.a", "#id", ".a .b", "a:hover", "*", "[x]", ".a.b", "h1", "span",
+            ".a",
+            "div",
+            "div.a",
+            "#id",
+            "p#id.a",
+            ".a .b",
+            "div > p",
+            "p.a.b.c.d",
+            "p.a.b.c.d.e",
+            "p::first-letter",
+            "p::before",
+            "p + p",
+            "p ~ p",
+            "a:hover",
+            "*",
+            "* p",
+            "[x]",
+            ".a.b",
+            "h1",
+            "span",
+            "html",
+            "body.a p",
+            "BODY",
         ])
     }
 
@@ -786,6 +1400,28 @@ sub { vertical-align: sub; }
             "text-indent:0.5em",
             "foo:bar",
             "width:10px",
+            "font-size:1.2em",
+            "font-size:62.5%",
+            "font-size:1.6rem",
+            "font-size:3.2rem",
+            "font-size:1em",
+            "font-size:inherit",
+            "font-variant:small-caps",
+            "break-after:page",
+            "border:1px solid red",
+            "border-left-style:dotted",
+            "initial-letter:3",
+            "white-space:pre",
+            "white-space:nowrap",
+            "float:left",
+            "float:right",
+            "list-style-type:none",
+            "list-style-type:disc",
+            "list-style:none outside",
+            "list-style:square",
+            "background:#eee url(x.png) no-repeat",
+            "background:url(x.png)",
+            "background:none",
         ])
     }
 

@@ -9,7 +9,7 @@
 //! dark range, which is exactly what makes the output readable on paper-white
 //! e-ink.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::profile::caps::Panel;
 
@@ -29,6 +29,11 @@ const NEUTRAL_TEXT_MAX_C: f32 = 12.0;
 /// Floor for background tones: light enough that dark text stays readable on
 /// them.
 const BG_MIN_L: f32 = 80.0;
+
+/// The gray the 2.0 firmware shades a light box with. It draws a background
+/// only when its luma is in `128..240` (`CssParser.cpp:340-397` at tag
+/// `2.0.0`), and the gray4 panel's only level in that band is 170.
+const CROSSPOINT_SHADE: u8 = 170;
 
 /// Where a collected color was used. The role picks the readable range its
 /// gray tone is confined to.
@@ -67,6 +72,11 @@ impl Collected {
 
     pub(crate) fn is_empty(&self) -> bool {
         self.counts.is_empty()
+    }
+
+    /// Whether any collected color has `role`.
+    pub(crate) fn has_role(&self, role: Role) -> bool {
+        self.counts.keys().any(|&(_, r)| r == role)
     }
 
     /// The distinct `(color, role)` pairs collected so far, in no particular
@@ -112,15 +122,51 @@ struct Item {
     input: ToneInput,
 }
 
+/// The background gray for a CrossPoint (gray4) panel: the device shade when
+/// the firmware luma `(299R + 587G + 114B) / 1000` of `rgb` is in `128..240`,
+/// else white. Dark backgrounds go white on purpose; text is pinned dark
+/// elsewhere, so a dark theme stays readable without a shade.
+/// [`build_palette`] uses it for every [`Panel::Gray4`] panel, which means a
+/// CrossPoint panel: a custom gray4 profile gets the same shade mapping.
+fn crosspoint_background(rgb: Rgb8) -> u8 {
+    let luma = (299 * u32::from(rgb.r) + 587 * u32::from(rgb.g) + 114 * u32::from(rgb.b)) / 1000;
+    if (128..240).contains(&luma) {
+        CROSSPOINT_SHADE
+    } else {
+        255
+    }
+}
+
 /// Solve the collected colors of one scope into panel gray tones.
 pub(crate) fn build_palette(collected: &Collected, panel: Panel) -> (Palette, PaletteStats) {
     if collected.is_empty() {
         return (Palette::default(), PaletteStats::default());
     }
 
+    // On gray4 the firmware decides backgrounds by luma, not by tone, so they
+    // bypass the solve and take the device shade or white directly. Gray4
+    // stands for a CrossPoint panel here: the x4 and x3 profiles are the only
+    // built-in gray4 panels, and a custom profile that declares gray4 gets the
+    // same CrossPoint shade mapping.
+    let bypass_backgrounds = panel == Panel::Gray4;
+    let mut palette = Palette::default();
+    let mut background_grays: HashSet<u8> = HashSet::new();
+    let mut background_count = 0;
+    if bypass_backgrounds {
+        for &(rgb, role) in collected.counts.keys() {
+            if role == Role::Background {
+                let value = crosspoint_background(rgb);
+                palette.map.insert((rgb, role), value);
+                background_grays.insert(value);
+                background_count += 1;
+            }
+        }
+    }
+
     let mut items: Vec<Item> = collected
         .counts
         .iter()
+        .filter(|&(&(_, role), _)| !(bypass_backgrounds && role == Role::Background))
         .map(|(&(rgb, role), &count)| Item {
             rgb,
             role,
@@ -158,7 +204,6 @@ pub(crate) fn build_palette(collected: &Collected, panel: Panel) -> (Palette, Pa
     // Group items by their final gray to count visible collapses: a group
     // whose member targets span a JND or more holds colors the reader was
     // meant to tell apart.
-    let mut palette = Palette::default();
     let mut group_span: HashMap<u8, (f32, f32, usize)> = HashMap::new();
     for (cluster, &value) in clusters.iter().zip(&assigned) {
         for &member in &cluster.members {
@@ -179,8 +224,13 @@ pub(crate) fn build_palette(collected: &Collected, panel: Panel) -> (Palette, Pa
         .sum();
 
     let stats = PaletteStats {
-        colors_in: items.len(),
-        tones_out: group_span.len(),
+        colors_in: items.len() + background_count,
+        tones_out: group_span
+            .keys()
+            .copied()
+            .chain(background_grays)
+            .collect::<HashSet<u8>>()
+            .len(),
         collapsed,
     };
     (palette, stats)
@@ -288,6 +338,16 @@ mod tests {
     }
 
     #[test]
+    fn crosspoint_background_band_edges() {
+        // For a gray, the firmware luma is the gray value itself.
+        let shade = |v: u8| crosspoint_background(Rgb8::new(v, v, v));
+        assert_eq!(shade(127), 255);
+        assert_eq!(shade(128), CROSSPOINT_SHADE);
+        assert_eq!(shade(239), CROSSPOINT_SHADE);
+        assert_eq!(shade(240), 255);
+    }
+
+    #[test]
     fn an_empty_collection_solves_to_an_empty_palette() {
         let (palette, stats) = build(&[], Panel::Gray16);
         assert!(palette.gray_for(Rgb8::new(1, 2, 3), Role::Text).is_none());
@@ -365,6 +425,55 @@ mod tests {
             bg_l - text_l >= 15.0,
             "inverted theme should re-invert: text L*{text_l} on background L*{bg_l}"
         );
+    }
+
+    /// The firmware luma, computed independently of the production helper.
+    fn firmware_luma(rgb: Rgb8) -> u32 {
+        (299 * u32::from(rgb.r) + 587 * u32::from(rgb.g) + 114 * u32::from(rgb.b)) / 1000
+    }
+
+    fn gray4_background(rgb: Rgb8) -> u8 {
+        let (palette, _) = build(&[(rgb, Role::Background)], Panel::Gray4);
+        palette.gray_for(rgb, Role::Background).expect("solved").r
+    }
+
+    #[test]
+    fn gray4_light_background_lands_in_the_device_shade_band() {
+        for rgb in [
+            Rgb8::new(0xee, 0xee, 0xee),
+            Rgb8::new(0xd3, 0xd3, 0xd3),
+            Rgb8::new(0xf0, 0xe6, 0x8c),
+        ] {
+            assert!((128..240).contains(&firmware_luma(rgb)), "{rgb:?}");
+            assert_eq!(gray4_background(rgb), 170, "{rgb:?}");
+        }
+    }
+
+    #[test]
+    fn gray4_near_white_background_stays_white() {
+        assert_eq!(firmware_luma(Rgb8::new(0xf5, 0xf5, 0xf5)), 245);
+        assert_eq!(gray4_background(Rgb8::new(0xf5, 0xf5, 0xf5)), 255);
+        assert_eq!(gray4_background(Rgb8::new(255, 255, 255)), 255);
+    }
+
+    #[test]
+    fn gray4_dark_background_becomes_white() {
+        assert_eq!(gray4_background(Rgb8::new(0x22, 0x22, 0x22)), 255);
+        assert_eq!(gray4_background(Rgb8::new(0x00, 0x00, 0x80)), 255);
+    }
+
+    #[test]
+    fn gray4_backgrounds_count_in_the_stats() {
+        let (_, stats) = build(
+            &[
+                (Rgb8::new(0xee, 0xee, 0xee), Role::Background),
+                (Rgb8::new(255, 255, 255), Role::Background),
+                (Rgb8::new(0, 0, 0), Role::Text),
+            ],
+            Panel::Gray4,
+        );
+        assert_eq!(stats.colors_in, 3);
+        assert_eq!(stats.tones_out, 3);
     }
 
     #[test]

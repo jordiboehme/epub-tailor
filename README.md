@@ -28,7 +28,7 @@ It comes as a desktop app for macOS, Windows and Linux, and as a command line fo
 
 ## TL;DR
 
-You bought an Xteink X4, a lovely little slab of e-ink. You copied your favorite EPUB onto it and opened something else entirely: the fonts are gone, every numbered list is bullets and the diagram in chapter 3 is missing. So are a few paragraphs, and you would never have noticed.
+You bought an Xteink X4, a lovely little slab of e-ink. You copied your favorite EPUB onto it and opened something else entirely: the fonts are gone, the numbered list that started at 7 now proudly starts at 1 and the diagram in chapter 3 is missing. So are a few paragraphs, and you would never have noticed.
 
 Open EPUB Tailor, drop the book in, pick your device, press Fit. Out comes `my-book.x4.epub`, rewritten into exactly what the device can render, ready to copy over. Your original file is never touched.
 
@@ -74,13 +74,14 @@ The app keeps itself current. When a new version ships it mentions it, quietly, 
 
 - Transcodes every image to baseline grayscale JPEG or PNG, pre-fit to the screen and inside the device's byte budgets.
 - Rasterizes SVG with a real renderer (resvg, 2x supersampled), because the device has no SVG decoder at all.
-- Remaps text and diagram colors to perceptually spaced gray tones: each color keeps its apparent brightness, equal-luminance hues like teal and orange stay tellable apart and the report says so when a 4-level panel cannot keep up. Gray body text goes to solid black, so it stays crisp instead of dithering into a pale raster.
-- Bakes ordered-list numbers into the text, so `1. 2. 3.` does not silently read "• • •".
-- Linearizes tables into labeled paragraphs, or rasterizes complex ones into crisp line-art images with `--tables image`.
+- Remaps text and diagram colors to perceptually spaced gray tones: each color keeps its apparent brightness, equal-luminance hues like teal and orange stay tellable apart and the report says so when a 4-level panel cannot keep up. Gray body text goes to solid black, so it stays crisp instead of dithering into a pale raster. A light background box gets the one gray CrossPoint 2.0 shades, instead of washing out to white, while a tinted page stays white, so the dither does not cover every page.
+- Bakes ordered-list numbers into the text with a proper hanging indent, so `start="7"`, roman numerals and "2.1." survive a firmware that only ever counts 1, 2, 3.
+- Keeps the tables CrossPoint 2.0 draws as a real grid (up to 4 columns and a generous 160 words per row) and linearizes the rest into labeled paragraphs, or rasterizes complex ones into crisp line-art images with `--tables image`.
 - Rebuilds `<pre>` and code blocks with explicit breaks and spacing so indentation survives.
 - Strips embedded fonts the device will never load.
-- Rescues and scopes chapter `<style>` blocks the firmware would otherwise ignore or misapply.
-- Splits oversized chapters at heading boundaries before they stall the indexer.
+- Trims every stylesheet to exactly the CSS CrossPoint 2.0 understands. That is a lot more than it used to be: font sizes, small caps, borders, drop caps, page breaks and shaded boxes now survive, and the rest goes before it eats the firmware's rule budget. Body text keeps the size you set on the reader: headings and small print keep their sizes, a book's "every paragraph is 1.6rem" does not.
+- Rescues and scopes chapter `<style>` blocks the firmware would otherwise ignore or misapply, descendant and child selectors included.
+- Splits oversized chapters at heading boundaries before they slow the device down.
 
 **With the `generic` profile:**
 
@@ -118,7 +119,7 @@ epub-tailor fit book.epub
 
 Writes `book.tailored.epub` beside the original and prints exactly what changed.
 
-Fit a book to an Xteink X4 running [CrossPoint](https://github.com/crosspoint-reader/crosspoint-reader):
+Fit a book to an Xteink X4 running [CrossPoint](https://github.com/crosspoint-reader/crosspoint-reader) 2.0:
 
 ```sh
 epub-tailor fit book.epub --profile x4
@@ -165,8 +166,8 @@ A profile is a JSON file bundling device capabilities, feature switches, tunable
 |--------|---------|-------|------------|
 | `epub` | -       | -      | The default: repair and cleanup, everything the EPUB standard allows stays. |
 | `generic` | -    | -      | Modifier, not a device: strips per-copy watermark channels so two copies of the same shop edition converge to the same file. Composes with any device profile. |
-| `x4`   | 480x800 | gray4  | Xteink X4 (also the X4 Pro and X4 Classic, aliases `x4-pro` and `x4-classic`) running CrossPoint firmware, the full conversion. |
-| `x3`   | 528x792 | gray4  | Xteink X3, same treatment with its own geometry. |
+| `x4`   | 480x800 | gray4  | Xteink X4 (also the X4 Pro and X4 Classic, aliases `x4-pro` and `x4-classic`) running CrossPoint 2.0, the full conversion. |
+| `x3`   | 528x792 | gray4  | Xteink X3 running CrossPoint 2.0, same treatment with its own geometry. |
 | `nomad` | 1404x1872 | gray16 | Supernote A6X2 Nomad running Chauvet. |
 | `kindle` | 1072x1448 | gray16 | Kindle 11th gen (2024). |
 | `kindle-paperwhite` | 1264x1680 | gray16 | Kindle Paperwhite 12th gen / Signature. |
@@ -194,11 +195,18 @@ A profile is a JSON file bundling device capabilities, feature switches, tunable
 
 Kobo brands its colour models "Colour" and everyone else writes "Color", so both spellings resolve: `--profile kobo-clara-color` is the same thing as `--profile kobo-clara-colour`.
 
+**Other CrossPoint readers.** CrossPoint runs on more than Xteink hardware, and the engine is the same everywhere, so pick the profile by screen, not by logo:
+
+- 480x800: Xteink X4, X4 Pro and X4C (X4 Classic), Seeed reTerminal Sticky, M5PaperMono and PaperMono Lite, BOOX Picco, Metalio E-Ink 4 (hardware validation still pending on the CrossPoint side). Use `x4`.
+- 528x792: Xteink X3. Use `x3`.
+- 552x768: EEGOREAD A4 and A4 Lite. `x4` works fine, the images just come out a little smaller than the screen. Want them edge to edge? Put a small profile layer with the A4 geometry on top (see [Writing a device profile](#writing-a-device-profile)).
+- 540x960: M5Paper v1.1 and LilyGO T5 E-Paper S3 Pro Lite. CrossPoint itself lists them as "not fully supported yet", so we wait for it.
+
 Four things worth knowing about the device profiles:
 
 - **A Kindle cannot open an EPUB at all.** It ingests one through Send to Kindle, which converts it server side. So the `kindle-*` profiles tailor a book to survive Amazon's converter, not to drive a renderer.
 - **A plain EPUB on a Kobo renders through Adobe RMSDK**, whose CSS parser is frozen around 2013 and throws away the *entire* stylesheet if it meets a single `calc()`, `var()` or `clamp()` - sometimes refusing to open the book at all. The same engine sits under PocketBook's EPUB2 path and tolino's RMSDK mode. Those profiles switch on `sanitize_css`, which removes exactly those constructs and leaves the rest of the stylesheet alone.
-- **Only the Xteink readers get the full conversion.** Every other device here has a real HTML renderer, so the aggressive transforms (CSS subsetting, table linearization, code-block rebuilding) stay off - they would damage the book. What those profiles do is repair it, fit its images to the panel and rasterize its SVG.
+- **Only the CrossPoint readers get the full conversion.** Every other device here has a real HTML renderer, so the aggressive transforms (CSS subsetting, table linearization, code-block rebuilding) stay off - they would damage the book. What those profiles do is repair it, fit its images to the panel and rasterize its SVG.
 - **Boox is the weakest target and we say so.** It is plain Android with the Play Store, its stock NeoReader is widely considered mediocre and most experienced owners install KOReader instead. The profile still helps: fitting images to the panel is what stops NeoReader's V2 engine getting stuck on an oversized image, and it helps whatever app you read in.
 
 The reasoning, device by device with sources and an explicit list of what nobody publishes, is in [`research/`](research/).
@@ -332,7 +340,7 @@ As little as possible. The packaging is regenerated, junk `META-INF` files are d
 Only under a device profile, and because the X4 has no SVG decoder at all - an SVG left in place renders as nothing or an `[Image]` label. Pure vector art comes out a crisp PNG; an SVG carrying an embedded photo gets classified from its pixels, which usually means JPEG.
 
 **Why did my numbered list turn into paragraphs?**
-The CrossPoint firmware draws every list item with a "•" and no number, so a genuine `<ol>` reads "• • •". Under a device profile each item becomes a paragraph with its number ("1.", "2." and "2.1." for nested lists) baked into the text.
+Because CrossPoint can count, but only 1, 2, 3. Its native list numbering (new since 1.6.5; before that every item was a "•") ignores `start`, `value`, `reversed` and `type` and knows nothing of nested "2.1.", so a list that starts at 7 or counts in roman numerals comes out wrong. Under a device profile each item becomes a paragraph with its real number ("1.", "vii." or "2.1.") baked into the text and hanging in the margin, the way a list number should.
 
 **Why did my table become a picture?**
 Only with `--tables image`, and only for tables where flattening would actually hurt: three or more columns, a nested table or cells that are mostly numbers. A table carrying a link or an anchor target is never rasterized, because a picture cannot be clicked or jumped to.
@@ -375,4 +383,4 @@ None of the device quirks are guesses. We read the CrossPoint firmware source so
 
 ## License and compatibility
 
-MIT licensed, see [LICENSE](LICENSE). The built-in device profiles target the Xteink X4 and X3 running the [CrossPoint](https://github.com/crosspoint-reader/crosspoint-reader) reader firmware. This is an independent project and is not affiliated with or endorsed by Xteink or CrossPoint.
+MIT licensed, see [LICENSE](LICENSE). The `x4` and `x3` profiles target the Xteink X4 and X3 running the [CrossPoint](https://github.com/crosspoint-reader/crosspoint-reader) reader firmware 2.0. This is an independent project and is not affiliated with or endorsed by Xteink, CrossPoint or any other vendor named in this README (Seeed, M5Stack, BOOX, EEGOREAD, LilyGO, Metalio, Amazon, Kobo, PocketBook, tolino and Supernote included).

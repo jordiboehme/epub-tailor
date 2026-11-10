@@ -10,18 +10,24 @@
 
 use kuchikiki::NodeRef;
 
-use crate::css::filter_inline_style;
-use crate::html::dom::{collect_by_name, get_attr, remove_attr, set_attr, text_content};
+use crate::css::font_size::root_font_scale;
+use crate::css::subset::filter_inline_style_on;
+use crate::html::dom::{
+    collect_by_name, get_attr, is_named, local_name, remove_attr, set_attr, text_content,
+};
 use crate::report::Transformation;
 
 /// Extract and remove every `<style>` element, and filter every inline style
 /// attribute, in `doc`. `keep_colors` keeps concrete inline color declarations
-/// for the gray-tone remap pass to rewrite. Returns the concatenated raw text
+/// for the gray-tone remap pass to rewrite. `rem_scale` is the book's root
+/// font size (a factor of 16px); when `None`, a root size set in the
+/// chapter's own `<style>` elements is used. Returns the concatenated raw text
 /// of the removed `<style>` elements (empty when there were none) for the
 /// caller to relocate.
 pub(crate) fn relocate_styles(
     doc: &NodeRef,
     keep_colors: bool,
+    rem_scale: Option<f64>,
     report: &mut Vec<Transformation>,
     chapter_path: &str,
 ) -> String {
@@ -37,13 +43,22 @@ pub(crate) fn relocate_styles(
         style.detach();
     }
 
+    let rem_scale = rem_scale
+        .or_else(|| root_font_scale(&extracted))
+        .unwrap_or(1.0);
     let mut rewritten = 0usize;
     let mut dropped = 0usize;
     for node in doc.inclusive_descendants() {
         let Some(style) = get_attr(&node, "style") else {
             continue;
         };
-        match filter_inline_style(&style, keep_colors) {
+        // Inline <svg> markup is drawn by `rasterize_inline_svgs`, not by the
+        // device, so its style attributes are not ours to filter.
+        if node.inclusive_ancestors().any(|a| is_named(&a, "svg")) {
+            continue;
+        }
+        let tag = local_name(&node).unwrap_or_default();
+        match filter_inline_style_on(&style, keep_colors, &tag, rem_scale) {
             Some(kept) => {
                 if kept != style {
                     set_attr(&node, "style", &kept);
@@ -78,7 +93,7 @@ mod tests {
     fn run(body: &str) -> (String, String, Vec<Transformation>) {
         let doc = doc_from_body(body);
         let mut report = Vec::new();
-        let extracted = relocate_styles(&doc, false, &mut report, "ch.xhtml");
+        let extracted = relocate_styles(&doc, false, None, &mut report, "ch.xhtml");
         (serialize(&doc), extracted, report)
     }
 
@@ -94,7 +109,8 @@ mod tests {
 
     #[test]
     fn inline_style_is_filtered_to_the_subset() {
-        let (out, _, report) = run("<p style=\"color:red;text-align:center;font-size:9px\">hi</p>");
+        let (out, _, report) =
+            run("<p style=\"color:red;text-align:center;letter-spacing:1px\">hi</p>");
         assert!(out.contains(r#"style="text-align:center""#), "got: {out}");
         assert!(!out.contains("color:red"), "got: {out}");
         assert_eq!(report.len(), 1);
@@ -102,16 +118,36 @@ mod tests {
     }
 
     #[test]
+    fn inline_svg_styles_are_left_for_the_rasterizer() {
+        // The device never sees an inline <svg>: it is rasterized from these
+        // attributes, so filtering would change how it is drawn.
+        let (out, _, report) = run(
+            r#"<p style="letter-spacing:1px">a</p><svg viewBox="0 0 10 10" style="font-size:16px"><g style="letter-spacing:1px"><text style="font-size:16px;fill:red">x</text></g></svg>"#,
+        );
+        assert!(
+            out.contains(r#"<text style="font-size:16px;fill:red">"#),
+            "{out}"
+        );
+        assert!(out.contains(r#"<g style="letter-spacing:1px">"#), "{out}");
+        assert!(
+            out.contains(r#"viewBox="0 0 10 10" style="font-size:16px""#),
+            "{out}"
+        );
+        assert!(!out.contains(r#"<p style"#), "{out}");
+        assert_eq!(report.len(), 1);
+    }
+
+    #[test]
     fn empty_inline_style_attribute_is_dropped() {
-        let (out, _, _) = run("<p style=\"color:red;font-size:9px\">hi</p>");
+        let (out, _, _) = run("<p style=\"color:red;letter-spacing:1px\">hi</p>");
         assert!(!out.contains("style="), "attribute must be dropped: {out}");
     }
 
     #[test]
     fn keep_colors_preserves_inline_color_declarations() {
-        let doc = doc_from_body(r#"<p style="color:teal;font-size:9px">hi</p>"#);
+        let doc = doc_from_body(r#"<p style="color:teal;letter-spacing:1px">hi</p>"#);
         let mut report = Vec::new();
-        relocate_styles(&doc, true, &mut report, "ch.xhtml");
+        relocate_styles(&doc, true, None, &mut report, "ch.xhtml");
         let out = serialize(&doc);
         assert!(out.contains(r#"style="color:teal""#), "got: {out}");
     }

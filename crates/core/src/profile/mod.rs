@@ -8,13 +8,14 @@
 //!
 //! The built-ins ship embedded: `epub` (alias `default`, pure repair),
 //! `x4`/`x3` (full device conversions for the Xteink readers running CrossPoint
-//! firmware), and one per researched device - `nomad`, the `kindle-*` family
+//! firmware 2.0), and one per researched device - `nomad`, the `kindle-*` family
 //! and the `tolino-*` family. They live as real JSON files under
 //! `crates/core/profiles/` so the file format and the code can never drift
 //! apart - tests resolve them through the same parser user profiles go through.
 //!
 //! The CrossPoint transforms are a poor fit for a capable reader: `filter_css`
-//! filters down to CrossPoint's ~12-property grammar, and `linearize_tables`,
+//! filters down to CrossPoint's grammar (simple selector chains, a few dozen
+//! properties), and `linearize_tables`,
 //! `bake_ordered_lists` and `preserve_code_blocks` work around defects a Kindle
 //! or a Kobo-based reader does not have. The newer device profiles therefore
 //! switch those off and keep what genuinely helps: repair, image fitting to the

@@ -25,7 +25,9 @@ use crate::html::dom::{
     child_elements, collect_by_name, element, get_attr, has_descendant_named, is_named,
     move_children, replace_with, set_attr, text, text_content,
 };
+use crate::html::hang::{self, hang_inline};
 use crate::html::table_render::{Cell, TableModel};
+use crate::html::text::device_words;
 use crate::options::{ConvertOptions, TableMode};
 use crate::report::{Transformation, Warning};
 
@@ -137,20 +139,23 @@ fn has_table_ancestor(table: &NodeRef) -> bool {
 }
 
 /// The firmware's own limits for laying a table out as a grid (CrossPoint
-/// 1.5.0+, `ChapterHtmlSlimParser.h:92-103`): at most this many columns, and
-/// per cell at most this many words and bytes. A table past any of them is
-/// "stacked" on the device, each cell an unlabeled paragraph, which reads
-/// worse than our own linearization.
+/// 2.0.0, `ChapterHtmlSlimParser.h:152-154`, checked at
+/// `ChapterHtmlSlimParser.cpp:728, 756, 941`): at most this many columns, and
+/// per row at most this many words and bytes of text, counted over the words
+/// the device builds (see [`device_words`]), as `flushPartWordBuffer` does.
+/// A table past any of them is "stacked" on the device, each cell an
+/// unlabeled paragraph, which reads worse than our own linearization.
 const NATIVE_GRID_MAX_COLUMNS: usize = 4;
-const NATIVE_GRID_MAX_CELL_WORDS: usize = 32;
-const NATIVE_GRID_MAX_CELL_BYTES: usize = 512;
+const NATIVE_GRID_MAX_ROW_WORDS: usize = 160;
+const NATIVE_GRID_MAX_ROW_BYTES: usize = 2048;
 
 /// Why `table` cannot be left for the device to render as a grid, or `None`
 /// when it can. Mirrors the firmware's simple-row rules, plus the things it
 /// would silently degrade: a nested table flattens into the cell, an `hr` is
 /// dropped, an image becomes its alt text, a link or an anchor inside a grid
 /// cell is lost or forces the stacked layout, block content collapses to a
-/// word boundary, a caption has no home. A single-column table is not a grid
+/// word boundary, a caption has no home, and a `<br>` or `<li>` in a cell
+/// stacks the row on 2.0. A single-column table is not a grid
 /// worth keeping either; it unwraps to paragraphs better.
 pub(crate) fn native_grid_blocker(table: &NodeRef) -> Option<&'static str> {
     if has_descendant_named(table, &["table"]) {
@@ -174,10 +179,18 @@ pub(crate) fn native_grid_blocker(table: &NodeRef) -> Option<&'static str> {
     if has_descendant_named(table, &["caption"]) {
         return Some("caption");
     }
+    if has_descendant_named(table, &["br"]) {
+        return Some("line breaks in cells");
+    }
+    if has_descendant_named(table, &["li"]) {
+        return Some("list items in cells");
+    }
     let mut columns = 0usize;
     for row in collect_rows(table) {
         let cells = cells_of(&row);
         columns = columns.max(cells.len());
+        let mut row_words = 0usize;
+        let mut row_bytes = 0usize;
         for cell in cells {
             if spans_more_than_one(&cell) {
                 return Some("spanning cells");
@@ -185,12 +198,12 @@ pub(crate) fn native_grid_blocker(table: &NodeRef) -> Option<&'static str> {
             if cell.descendants().any(|n| is_cell_block(&n)) {
                 return Some("block content in cells");
             }
-            let text = text_content(&cell);
-            if text.split_whitespace().count() > NATIVE_GRID_MAX_CELL_WORDS
-                || text.len() > NATIVE_GRID_MAX_CELL_BYTES
-            {
-                return Some("long cells");
-            }
+            let words = device_words(&text_content(&cell));
+            row_words += words.len();
+            row_bytes += words.iter().map(String::len).sum::<usize>();
+        }
+        if row_words > NATIVE_GRID_MAX_ROW_WORDS || row_bytes > NATIVE_GRID_MAX_ROW_BYTES {
+            return Some("long rows");
         }
     }
     if columns < 2 {
@@ -533,6 +546,7 @@ fn flatten_one(
                     paragraph.append(text(" "));
                 }
                 let extras = distribute_cell(cell, &paragraph);
+                hang_inline(&paragraph, cell, hang::TABLE_CELL);
                 out.push(paragraph);
                 out.extend(extras);
             }
@@ -1173,19 +1187,111 @@ mod tests {
             blocker("<table><tr><td>only</td></tr></table>"),
             Some("single column")
         );
-        let long = "word ".repeat(33);
+    }
+
+    fn blocker_of(body: &str) -> Option<&'static str> {
+        let doc = doc_from_body(body);
+        let table = collect_by_name(&doc, "table").remove(0);
+        native_grid_blocker(&table)
+    }
+
+    #[test]
+    fn br_in_a_cell_blocks_the_native_grid() {
         assert_eq!(
-            blocker(&format!(
-                "<table><tr><td>{long}</td><td>b</td></tr></table>"
-            )),
-            Some("long cells")
+            blocker_of(
+                "<table><tr><th>A</th><th>B</th></tr><tr><td>a<br/>b</td><td>c</td></tr></table>"
+            ),
+            Some("line breaks in cells")
         );
-        let bytes = "x".repeat(513);
+    }
+
+    #[test]
+    fn br_in_a_header_cell_blocks_the_native_grid() {
         assert_eq!(
-            blocker(&format!(
-                "<table><tr><td>{bytes}</td><td>b</td></tr></table>"
-            )),
-            Some("long cells")
+            blocker_of(
+                "<table><tr><th>A<br/>x</th><th>B</th></tr><tr><td>a</td><td>c</td></tr></table>"
+            ),
+            Some("line breaks in cells")
+        );
+    }
+
+    #[test]
+    fn bare_li_in_a_cell_blocks_the_native_grid() {
+        assert_eq!(
+            blocker_of("<table><tr><td><li>x</li></td><td>b</td></tr></table>"),
+            Some("list items in cells")
+        );
+    }
+
+    #[test]
+    fn row_over_160_words_linearizes() {
+        let (a, b) = ("w ".repeat(81), "w ".repeat(80));
+        assert_eq!(
+            blocker_of(&format!("<table><tr><td>{a}</td><td>{b}</td></tr></table>")),
+            Some("long rows")
+        );
+    }
+
+    #[test]
+    fn row_over_2048_bytes_linearizes() {
+        let (a, b) = ("x".repeat(1025), "y".repeat(1024));
+        assert_eq!(
+            blocker_of(&format!("<table><tr><td>{a}</td><td>{b}</td></tr></table>")),
+            Some("long rows")
+        );
+    }
+
+    #[test]
+    fn row_of_exactly_160_words_keeps_the_grid() {
+        let (a, b) = ("w ".repeat(80), "w ".repeat(80));
+        assert_eq!(
+            blocker_of(&format!("<table><tr><td>{a}</td><td>{b}</td></tr></table>")),
+            None
+        );
+    }
+
+    #[test]
+    fn row_of_exactly_2048_bytes_keeps_the_grid() {
+        let (a, b) = ("x".repeat(1024), "y".repeat(1024));
+        assert_eq!(
+            blocker_of(&format!("<table><tr><td>{a}</td><td>{b}</td></tr></table>")),
+            None
+        );
+    }
+
+    #[test]
+    fn no_break_spaces_count_as_words_of_one_byte() {
+        // The device makes each U+00A0 / U+202F its own one-byte word
+        // (`ChapterHtmlSlimParser.cpp:2455-2510` at firmware 2.0.0).
+        // `n` no-break spaces between n + 1 words "w", plus "a" in the next
+        // cell, are 2n + 2 words.
+        let words = |n: usize| {
+            let mut text = "w".to_string();
+            for i in 0..n {
+                text.push(if i % 2 == 0 { '\u{A0}' } else { '\u{202F}' });
+                text.push('w');
+            }
+            format!("<table><tr><td>{text}</td><td>a</td></tr></table>")
+        };
+        assert_eq!(blocker_of(&words(79)), None, "160 words");
+        assert_eq!(blocker_of(&words(80)), Some("long rows"), "162 words");
+        // 100 no-break spaces are 100 bytes on the device, so 1,948 letters
+        // plus "a" make 2,049 bytes in 102 words.
+        let bytes = format!(
+            "<table><tr><td>{}{}</td><td>a</td></tr></table>",
+            "x".repeat(1948),
+            "\u{A0}".repeat(100)
+        );
+        assert_eq!(blocker_of(&bytes), Some("long rows"));
+    }
+
+    #[test]
+    fn long_cell_within_the_row_budget_keeps_the_grid() {
+        let a = "w ".repeat(100);
+        let b = "w ".repeat(10);
+        assert_eq!(
+            blocker_of(&format!("<table><tr><td>{a}</td><td>{b}</td></tr></table>")),
+            None
         );
     }
 

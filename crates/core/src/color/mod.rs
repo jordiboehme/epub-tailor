@@ -9,6 +9,7 @@
 //! flag (`remap_colors`) and the pipeline hooks in [`crate::convert`].
 
 pub(crate) mod css;
+pub(crate) mod page;
 pub(crate) mod palette;
 pub(crate) mod solve;
 pub(crate) mod space;

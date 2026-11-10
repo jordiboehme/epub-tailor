@@ -1,14 +1,20 @@
 //! Bake ordered-list numbering into text.
 //!
-//! The firmware renders every `<li>` with a "•" bullet and no number, so an
-//! `<ol>` silently loses its numbering. We replace each `<ol>` with numbered
-//! `<p class="et-ol-item">` paragraphs, honoring `start`, `type` and per-item
-//! `value`, and compounding labels ("2.1.") for nested ordered lists. `<ul>`
-//! is left untouched - its native bullets are already correct.
+//! The firmware numbers `<ol>` natively since 1.6.5, but decimal only. We keep
+//! baking because it honors `start`, `type` and per-item `value`, and compounds
+//! labels ("2.1.") for nested ordered lists. No `<ol>` survives, so nothing is
+//! numbered twice. Each `<ol>` becomes numbered `<p class="et-ol-item">`
+//! paragraphs. `<ul>` is left untouched - its native bullets are already
+//! correct.
+//!
+//! Each numbered paragraph hangs its label, and each continuation block lines
+//! up under the text; both carry their margin and indent inline as well as
+//! through their class (see [`super::hang`]).
 
 use kuchikiki::{NodeData, NodeRef};
 
 use crate::html::dom::{add_class, child_elements, element, get_attr, is_named, set_attr, text};
+use crate::html::hang::{self, hang_inline};
 use crate::report::Transformation;
 
 const NBSP: char = '\u{A0}';
@@ -114,10 +120,10 @@ fn flatten_li(
     chapter_path: &str,
 ) -> Vec<NodeRef> {
     let label = format!("{core}.");
-    let item_class = if nested {
-        "et-ol-item et-ol-nested"
+    let (item_class, item_hang) = if nested {
+        ("et-ol-item et-ol-nested", hang::OL_NESTED)
     } else {
-        "et-ol-item"
+        ("et-ol-item", hang::OL_ITEM)
     };
     // An `<li id="...">` is a same-document link target (e.g. GFM's rendered
     // footnote definitions, `<ol><li id="fn-1">`) - the `<li>` itself never
@@ -150,9 +156,11 @@ fn flatten_li(
             paragraph.append(node);
         }
         transfer_id(&paragraph, li_id.as_deref());
+        hang_inline(&paragraph, li, item_hang);
         result.push(paragraph);
         for block in blocks {
             add_class(&block, "et-ol-cont");
+            hang_inline(&block, li, hang::OL_CONT);
             result.push(block);
         }
     } else {
@@ -162,10 +170,12 @@ fn flatten_li(
             add_class(&first, item_class);
             first.prepend(text(&format!("{label}{NBSP}")));
             transfer_id(&first, li_id.as_deref());
+            hang_inline(&first, li, item_hang);
             result.push(first);
         }
         for block in iter {
             add_class(&block, "et-ol-cont");
+            hang_inline(&block, li, hang::OL_CONT);
             result.push(block);
         }
     }
@@ -328,6 +338,94 @@ mod tests {
         assert_eq!(out.matches("<p").count(), 1, "got: {out}");
         assert!(out.contains(r#"id="fn-1""#), "got: {out}");
         assert!(out.contains(r#"class="et-ol-item""#), "got: {out}");
+    }
+
+    const HANG: &str = "margin-left:1.5em;text-indent:-1.5em";
+    const NESTED_HANG: &str = "margin-left:2em;text-indent:-1em";
+    const RTL_HANG: &str = "margin-left:0;margin-right:1.5em;text-indent:-1.5em";
+
+    #[test]
+    fn items_carry_their_hang_inline() {
+        let (out, _) = run("<ol><li>a<ol><li>x</li></ol></li><li>b</li></ol>");
+        assert_eq!(
+            out.matches(&format!(r#"style="{HANG}""#)).count(),
+            2,
+            "{out}"
+        );
+        assert_eq!(
+            out.matches(&format!(r#"style="{NESTED_HANG}""#)).count(),
+            1,
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn hang_is_merged_after_an_existing_inline_style() {
+        let (out, _) =
+            run(r#"<ol><li><p style="margin:0;text-indent:2em;font-style:italic">x</p></li></ol>"#);
+        assert!(
+            out.contains(&format!(r#"style="margin:0;font-style:italic;{HANG}""#)),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn continuation_blocks_hang_inline_too() {
+        let (out, _) = run(
+            r#"<ol><li><p>first</p><p class="note" style="margin-left:0">second</p></li></ol>"#,
+        );
+        assert!(
+            out.contains(
+                r#"<p class="note et-ol-cont" style="margin-left:2em;text-indent:-1px">second</p>"#
+            ),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn rtl_dir_on_an_ancestor_hangs_on_the_right() {
+        let (out, _) = run(r#"<div dir="rtl"><ol><li>x</li></ol></div>"#);
+        assert!(out.contains(&format!(r#"style="{RTL_HANG}""#)), "{out}");
+    }
+
+    #[test]
+    fn rtl_text_without_dir_hangs_on_the_right() {
+        // The device detects the direction from the first words when no
+        // `dir` is set (`ParsedText.cpp:780-790`).
+        let (out, _) = run("<ol><li>\u{5e9}\u{5dc}\u{5d5}\u{5dd} world</li></ol>");
+        assert!(out.contains(&format!(r#"style="{RTL_HANG}""#)), "{out}");
+    }
+
+    #[test]
+    fn explicit_ltr_wins_over_rtl_text() {
+        let (out, _) = run(r#"<div dir="ltr"><ol dir="auto"><li>\u{5e9}</li></ol></div>"#);
+        assert!(out.contains(&format!(r#"style="{HANG}""#)), "{out}");
+    }
+
+    #[test]
+    fn rtl_nested_item_hangs_on_the_right() {
+        let (out, _) = run(r#"<ol dir="rtl"><li>a<ol><li>b</li></ol></li></ol>"#);
+        assert!(
+            out.contains(r#"style="margin-left:0;margin-right:2em;text-indent:-1em""#),
+            "{out}"
+        );
+        // The `<ol dir>` does not survive, so the paragraphs carry it.
+        assert_eq!(out.matches(r#"dir="rtl""#).count(), 2, "{out}");
+    }
+
+    #[test]
+    fn inline_hangs_are_kept_by_the_inline_filter() {
+        for style in [
+            HANG,
+            NESTED_HANG,
+            RTL_HANG,
+            "margin-left:0;margin-right:2em;text-indent:-1em",
+        ] {
+            assert_eq!(
+                crate::css::filter_inline_style(style, false).as_deref(),
+                Some(style)
+            );
+        }
     }
 
     #[test]

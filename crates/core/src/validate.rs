@@ -1275,6 +1275,12 @@ fn image_dimensions(data: &[u8]) -> Option<(u32, u32)> {
 // css-caps
 // ---------------------------------------------------------------------
 
+/// The per-file byte cap, and the device's rule store caps counted exactly as
+/// `convert` counts them ([`crate::css::caps::store_cap_warnings`]), so `check`
+/// and `fit` agree. Each sheet is first reduced to what the device stores
+/// (rules with a supported property) by the subset filter; on a converted book
+/// that is a no-op, since its sheets are already a fixed point of the filter.
+/// Colors are kept, as the gray remap keeps them in a converted book.
 fn check_css_caps(
     entries: &IndexMap<String, Vec<u8>>,
     opf: &OpfLint,
@@ -1282,7 +1288,7 @@ fn check_css_caps(
     profile: &DeviceCaps,
     findings: &mut Vec<LintFinding>,
 ) {
-    let mut total_rules = 0usize;
+    let mut sheets: Vec<String> = Vec::new();
     for (name, data) in entries {
         let declared = declared_media_type(opf, opf_path, name);
         let is_css = declared == Some("text/css") || name.ends_with(".css");
@@ -1300,18 +1306,12 @@ fn check_css_caps(
                 Some(name.clone()),
             ));
         }
-        total_rules += String::from_utf8_lossy(data).matches('}').count();
+        let source = String::from_utf8_lossy(data);
+        sheets.push(crate::css::filter_css(&source, name, true, &mut Vec::new()).css);
     }
-    if total_rules > profile.css_max_rules {
-        findings.push(LintFinding::warning(
-            "css-caps",
-            format!(
-                "the book has {total_rules} CSS rules, over the device's {} cap; the device \
-                 will drop the rules past the cap",
-                profile.css_max_rules
-            ),
-            None,
-        ));
+    let sheets: Vec<&str> = sheets.iter().map(String::as_str).collect();
+    for warning in crate::css::caps::store_cap_warnings(&sheets, profile.css_max_rules) {
+        findings.push(LintFinding::warning("css-caps", warning.message, None));
     }
 }
 
@@ -2472,6 +2472,54 @@ mod tests {
                 .any(|f| f.code == "css-caps" && f.severity == Severity::Warning),
             "got {findings:#?}"
         );
+    }
+
+    /// `check` counts the device's rule store like `convert` does: one rule
+    /// per comma member, and distinct declaration blocks.
+    fn css_cap_messages(css: &str) -> Vec<String> {
+        let opf = minimal_opf("", "");
+        let bytes = build_zip(&[
+            ("mimetype", b"application/epub+zip"),
+            ("META-INF/container.xml", CONTAINER_XML),
+            ("OEBPS/content.opf", &opf),
+            ("OEBPS/nav.xhtml", NAV),
+            ("OEBPS/text/chapter1.xhtml", CHAPTER1),
+            ("OEBPS/styles/main.css", css.as_bytes()),
+        ]);
+        lint_epub(&bytes, &DeviceCaps::x4(), &Features::all_on(), &[])
+            .into_iter()
+            .filter(|f| f.code == "css-caps")
+            .map(|f| f.message)
+            .collect()
+    }
+
+    #[test]
+    fn css_rule_cap_counts_comma_members() {
+        let css: String = (0..800)
+            .map(|i| format!(".a{i},.b{i}{{margin-left:1em}}"))
+            .collect();
+        let messages = css_cap_messages(&css);
+        assert!(
+            messages.iter().any(|m| m.contains("1600 CSS rules")),
+            "{messages:?}"
+        );
+    }
+
+    #[test]
+    fn css_style_cap_counts_distinct_declaration_blocks() {
+        let css: String = (0..300)
+            .map(|i| format!(".c{i}{{margin-left:{i}px}}"))
+            .collect();
+        let messages = css_cap_messages(&css);
+        assert!(
+            messages
+                .iter()
+                .any(|m| m.contains("300 distinct CSS declaration blocks")),
+            "{messages:?}"
+        );
+        // Unsupported rules are not stored by the device, so not counted.
+        let css: String = (0..300).map(|i| format!(".c{i}{{z-index:{i}}}")).collect();
+        assert!(css_cap_messages(&css).is_empty());
     }
 
     #[test]

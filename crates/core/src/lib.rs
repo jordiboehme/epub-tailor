@@ -75,7 +75,7 @@ use html::dom::{
 /// Stored already minified so it is a fixed point of the CSS subset filter
 /// (`filter_css(ET_STYLES) == ET_STYLES`, proven by a test); it is therefore not
 /// itself run through the filter during conversion.
-const ET_STYLES: &str = ".et-box-title{margin-top:1em}.et-caption{text-align:center;font-style:italic}.et-table-caption{text-align:center}.et-table-cell{margin-left:1em;text-indent:0}.et-table-row{margin-left:1em}.et-table-row-sep{text-align:center}.et-ol-item{text-indent:0}.et-ol-nested{margin-left:1em}.et-ol-cont{margin-left:2em}.et-code{text-align:left;margin-left:1em;text-indent:0}.et-dt{margin-top:0.5em}.et-dd{margin-left:1.5em}";
+const ET_STYLES: &str = ".et-box-title{margin-top:1em}.et-caption{text-align:center;font-style:italic}.et-table-caption{text-align:center}.et-table-cell{margin-left:1em;text-indent:-1px}.et-table-row{margin-left:1em}.et-table-row-sep{text-align:center}.et-ol-item{text-indent:-1.5em;margin-left:1.5em}.et-ol-nested{margin-left:2em;text-indent:-1em}.et-ol-cont{margin-left:2em;text-indent:-1px}.et-code{text-align:left;margin-left:1em;text-indent:-1px}.et-dt{margin-top:0.5em}.et-dd{margin-left:1.5em}";
 
 /// A source book handed to [`convert`]: either an `.epub` archive's raw bytes,
 /// or a Markdown document plus a resolver for its local image references.
@@ -214,12 +214,31 @@ pub fn convert(input: Input, opts: &ConvertOptions) -> Result<Converted, Convert
     //
     // - `sanitize_css` keeps the sheet whole and removes only what makes Adobe
     //   RMSDK throw all of it away (Kobo, PocketBook, tolino in RMSDK mode).
-    // - `filter_css` demolishes it down to CrossPoint's dozen properties.
+    // - `filter_css` demolishes it down to CrossPoint's few dozen properties.
     //
     // Sanitizing runs first so that a profile with both on (nobody's, today)
     // still behaves: filtering a sanitized sheet is the same as filtering the
     // original, since everything sanitize drops, filter drops too.
-    let mut total_css_rules = 0usize;
+    // The book's root font size (`html{font-size:62.5%}`), from whichever
+    // stylesheet sets it last, so `rem` sizes in every sheet, `<style>` and
+    // inline style are rescaled alike (see [`css::font_size`]). `None` lets
+    // each chapter's own `<style>` supply one.
+    let book_rem_scale = if opts.features.filter_css {
+        book.resources
+            .values()
+            .filter(|resource| resource.media_type == "text/css")
+            .filter_map(|resource| {
+                css::font_size::root_font_scale(&String::from_utf8_lossy(&resource.data))
+            })
+            .next_back()
+    } else {
+        None
+    };
+    // The stylesheets this conversion generates: et-styles.css goes ahead of
+    // the book's own in the manifest, et-relocated.css (and its parts) after
+    // them (see [`order_generated_css`]).
+    let mut helper_css: Option<String> = None;
+    let mut relocated_css: Vec<String> = Vec::new();
     if opts.features.sanitize_css || opts.features.filter_css {
         let css_paths: Vec<String> = book
             .resources
@@ -248,7 +267,13 @@ pub fn convert(input: Input, opts: &ConvertOptions) -> Result<Converted, Convert
             };
 
             let filtered = if opts.features.filter_css {
-                filter_css(&source, &path, opts.remap_active(), &mut warnings)
+                css::subset::filter_css_scaled(
+                    &source,
+                    &path,
+                    opts.remap_active(),
+                    book_rem_scale,
+                    &mut warnings,
+                )
             } else {
                 FilteredCss {
                     css: source,
@@ -257,7 +282,6 @@ pub fn convert(input: Input, opts: &ConvertOptions) -> Result<Converted, Convert
                     decls_dropped: 0,
                 }
             };
-            total_css_rules += filtered.rules_kept;
             store_filtered_css(
                 &mut book,
                 &path,
@@ -369,7 +393,14 @@ pub fn convert(input: Input, opts: &ConvertOptions) -> Result<Converted, Convert
         let ChapterTransform {
             aliases: chapter_aliases,
             extracted_css,
-        } = transform_chapter(&doc, opts, &mut transformations, &mut warnings, path);
+        } = html::transform_chapter_scaled(
+            &doc,
+            opts,
+            book_rem_scale,
+            &mut transformations,
+            &mut warnings,
+            path,
+        );
         aliases.extend(chapter_aliases);
         if !extracted_css.trim().is_empty() {
             // Scope this chapter's lifted CSS to itself (tagging its own DOM) so
@@ -383,6 +414,7 @@ pub fn convert(input: Input, opts: &ConvertOptions) -> Result<Converted, Convert
                 relocated_scope_idx,
                 path,
                 opts.remap_active(),
+                book_rem_scale,
                 &mut warnings,
             );
             if !scoped.is_empty() {
@@ -441,7 +473,9 @@ pub fn convert(input: Input, opts: &ConvertOptions) -> Result<Converted, Convert
         }
         let relocated_path = join_dir(&parent_dir(&book.opf_path), "et-relocated.css");
         // Only a filtering profile runs the relocated CSS through the subset
-        // filter; otherwise it is relocated verbatim.
+        // filter; otherwise it is relocated verbatim. Its `rem` sizes were
+        // already rescaled while scoping, and the root size is gone, so the
+        // plain filter rescales nothing a second time.
         let filtered = if opts.features.filter_css {
             filter_css(
                 &combined,
@@ -458,7 +492,6 @@ pub fn convert(input: Input, opts: &ConvertOptions) -> Result<Converted, Convert
             }
         };
         if !filtered.css.is_empty() {
-            total_css_rules += filtered.rules_kept;
             for (path, _) in &relocated_styles {
                 if let Some((_, doc)) = chapters.iter().find(|(p, _)| p == path)
                     && let Some(head) = find_head(doc)
@@ -475,6 +508,7 @@ pub fn convert(input: Input, opts: &ConvertOptions) -> Result<Converted, Convert
                     });
                 }
             }
+            let resources_before = book.resources.len();
             store_filtered_css(
                 &mut book,
                 &relocated_path,
@@ -482,6 +516,15 @@ pub fn convert(input: Input, opts: &ConvertOptions) -> Result<Converted, Convert
                 opts,
                 &mut transformations,
                 &mut warnings,
+            );
+            // The sheet itself, then any split parts (appended as new keys).
+            relocated_css.push(relocated_path.clone());
+            relocated_css.extend(
+                book.resources
+                    .keys()
+                    .skip(resources_before)
+                    .filter(|path| **path != relocated_path)
+                    .cloned(),
             );
         }
     }
@@ -533,9 +576,8 @@ pub fn convert(input: Input, opts: &ConvertOptions) -> Result<Converted, Convert
         }
     }
     if css_needed {
-        // et-styles.css is already device-conformant, so it is not filtered, but
-        // its rules still count toward the book-wide rule cap.
-        total_css_rules += ET_STYLES.matches('}').count();
+        // et-styles.css is already device-conformant, so it is not filtered.
+        helper_css = Some(css_path.clone());
         book.resources.insert(
             css_path.clone(),
             Resource {
@@ -551,10 +593,19 @@ pub fn convert(input: Input, opts: &ConvertOptions) -> Result<Converted, Convert
         });
     }
 
-    if opts.features.filter_css
-        && let Some(warning) = caps::rule_cap_warning(total_css_rules, opts.device.css_max_rules)
-    {
-        warnings.push(warning);
+    order_generated_css(&mut book, helper_css.as_deref(), &relocated_css);
+
+    // Every stylesheet in its final form (filtered, color-remapped), against
+    // the device's rule store caps.
+    if opts.features.filter_css {
+        let sheets: Vec<String> = book
+            .resources
+            .values()
+            .filter(|resource| resource.media_type == "text/css")
+            .map(|resource| String::from_utf8_lossy(&resource.data).into_owned())
+            .collect();
+        let sheets: Vec<&str> = sheets.iter().map(String::as_str).collect();
+        warnings.extend(caps::store_cap_warnings(&sheets, opts.device.css_max_rules));
     }
 
     // Split any spine chapter over the device's per-file byte cap into
@@ -2122,6 +2173,17 @@ fn remap_document_colors(
         }
     }
 
+    // A CrossPoint panel shades a light background. Once the book has any,
+    // keep the page itself and whole-chapter wrappers white (see
+    // [`color::page`]); added after the solve, so the stats are unchanged.
+    if opts.device.panel == crate::profile::caps::Panel::Gray4
+        && collected.has_role(color::palette::Role::Background)
+    {
+        for (_, doc) in chapters {
+            color::page::keep_page_white(doc);
+        }
+    }
+
     if rewritten_total == 0 {
         return;
     }
@@ -2144,6 +2206,41 @@ fn remap_document_colors(
             file: None,
         });
     }
+}
+
+/// Put the generated stylesheets where the device should load them.
+/// `book.resources` order is the manifest order, and the device loads
+/// stylesheets in manifest order (`ContentOpfParser.cpp:362-363`,
+/// `Epub.cpp:170-171, 337` at firmware 2.0.0):
+///
+/// - `helper` (et-styles.css) goes ahead of the book's own sheets, so its
+///   rules are stored before a store cap can stop the device storing more.
+///   At equal specificity the later rule wins (`CssParser.cpp:1447-1448`), so
+///   an author class rule beats a helper class rule it ties with; the
+///   generated paragraphs carry their hang inline for that reason
+///   (see [`html::hang`]).
+/// - `relocated` (et-relocated.css, then its split parts) goes after the
+///   book's own sheets, where a browser has the head `<style>` it came from,
+///   so a scoped head rule still wins a tie with an equal main-sheet rule.
+fn order_generated_css(book: &mut Book, helper: Option<&str>, relocated: &[String]) {
+    for path in relocated {
+        if let Some(resource) = book.resources.shift_remove(path) {
+            book.resources.insert(path.clone(), resource);
+        }
+    }
+    let Some(helper) = helper else {
+        return;
+    };
+    let Some(resource) = book.resources.shift_remove(helper) else {
+        return;
+    };
+    let first_sheet = book
+        .resources
+        .values()
+        .position(|resource| resource.media_type == "text/css")
+        .unwrap_or(book.resources.len());
+    book.resources
+        .shift_insert(first_sheet, helper.to_string(), resource);
 }
 
 /// Whether any element in `doc` carries a generated `et-*` helper class.
@@ -2423,6 +2520,103 @@ mod tests {
         assert_eq!(filtered.rules_kept, ET_STYLES.matches('}').count());
         assert_eq!(filtered.rules_dropped, 0);
         assert_eq!(filtered.decls_dropped, 0);
+    }
+
+    /// CrossPoint 2.0 applies its paragraph-indent setting unless `text-indent`
+    /// is negative, so `text-indent:0` no longer suppresses it. Every generated
+    /// block must hang (negative indent) and keep its first line on the page
+    /// (`margin-left` covers the hang and stays within the firmware's 2em clamp).
+    #[test]
+    fn et_styles_hang_instead_of_zero_indent() {
+        use std::collections::HashMap;
+
+        // Rules in sheet order: (class, property -> value).
+        let mut rules: Vec<(String, HashMap<String, String>)> = Vec::new();
+        for rule in ET_STYLES.split('}').filter(|r| !r.is_empty()) {
+            let (sel, body) = rule.split_once('{').expect("rule has a body");
+            let decls = body
+                .split(';')
+                .filter_map(|d| d.split_once(':'))
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect();
+            rules.push((sel.trim_start_matches('.').to_string(), decls));
+        }
+
+        // No rule may use a zero (or any non-negative) indent.
+        for (class, decls) in &rules {
+            if let Some(indent) = decls.get("text-indent") {
+                assert!(indent.starts_with('-'), ".{class} text-indent is {indent}");
+            }
+        }
+
+        // Effective value of `prop` for an element with all of `classes`:
+        // the later rule in the sheet wins.
+        let effective = |classes: &[&str], prop: &str| -> Option<String> {
+            rules
+                .iter()
+                .filter(|(sel, _)| classes.contains(&sel.as_str()))
+                .filter_map(|(_, d)| d.get(prop).cloned())
+                .next_back()
+        };
+        // Length in em; the `1px` hang counts as smaller than any em value.
+        let em = |v: &str| -> f64 {
+            if v == "1px" {
+                return 0.0;
+            }
+            assert!(!v.ends_with("px"), "only a 1px hang may use px, got {v}");
+            v.trim_end_matches("em").parse().expect("em length")
+        };
+
+        for class in [
+            "et-ol-item",
+            "et-ol-nested",
+            "et-ol-cont",
+            "et-code",
+            "et-table-cell",
+        ] {
+            let indent = effective(&[class], "text-indent")
+                .unwrap_or_else(|| panic!(".{class} must set text-indent"));
+            assert!(indent.starts_with('-'), ".{class} text-indent is {indent}");
+        }
+
+        for combo in [
+            &["et-ol-item"][..],
+            &["et-ol-item", "et-ol-nested"],
+            &["et-ol-cont"],
+            &["et-code"],
+            &["et-table-cell"],
+        ] {
+            let indent = effective(combo, "text-indent").expect("text-indent");
+            let margin = effective(combo, "margin-left").expect("margin-left");
+            assert!(indent.starts_with('-'), "{combo:?}: indent {indent}");
+            let (hang, left) = (em(indent.trim_start_matches('-')), em(&margin));
+            assert!(left >= hang, "{combo:?}: margin {margin} < hang {indent}");
+            assert!(left <= 2.0, "{combo:?}: margin {margin} exceeds 2em");
+        }
+    }
+
+    /// The pairs written inline on generated paragraphs must equal their
+    /// class rules, so other readers and CrossPoint lay them out alike.
+    #[test]
+    fn inline_hangs_match_et_styles() {
+        for hang in crate::html::hang::ALL {
+            let rule = ET_STYLES
+                .split('}')
+                .find_map(|r| r.strip_prefix(&format!(".{}{{", hang.class)))
+                .unwrap_or_else(|| panic!(".{} has a rule", hang.class));
+            assert!(
+                rule.split(';')
+                    .any(|d| d == format!("margin-left:{}", hang.margin)),
+                ".{}: {rule}",
+                hang.class
+            );
+            assert!(
+                rule.split(';')
+                    .any(|d| d == format!("text-indent:{}", hang.indent)),
+                ".{}: {rule}",
+                hang.class
+            );
+        }
     }
 
     /// A book already carrying a `styles/main-2.css` resource unrelated to

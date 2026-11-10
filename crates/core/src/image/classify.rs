@@ -61,8 +61,8 @@ pub(super) fn classify(gray: &GrayImage) -> Kind {
 }
 
 /// The 256-bin luminance histogram of a grayscale image. A single bin cannot
-/// overflow `u32`: the device's source-pixel cap (2048x1536) is far below
-/// `u32::MAX`.
+/// overflow `u32`: the device's source-pixel caps (8,388,608 px in area,
+/// 32,767 px per side) are far below `u32::MAX`.
 fn histogram(gray: &GrayImage) -> [u32; 256] {
     let mut hist = [0u32; 256];
     for px in gray.pixels() {

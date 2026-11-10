@@ -9,8 +9,8 @@
 //! the book at all, which the reader sees as a corrupt file with no explanation.
 //!
 //! So this is not a subset filter. Unlike [`super::subset`], which reduces a
-//! stylesheet to the dozen properties the CrossPoint firmware understands, this
-//! pass keeps everything and removes only the few constructs that detonate:
+//! stylesheet to the few dozen properties the CrossPoint firmware understands,
+//! this pass keeps everything and removes only the few constructs that detonate:
 //!
 //! - **Declarations using a modern value function** - `calc()`, `var()`,
 //!   `clamp()`, `min()`, `max()`, `env()`. None of them existed when RMSDK's
