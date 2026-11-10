@@ -95,7 +95,7 @@ feature switched off never reads the cap.
 | `images.inline_budget_kb` | Byte budget for an inline image; quality drops until it fits. |
 | `images.cover_budget_kb` | Byte budget for the cover. |
 | `css.max_file_kb` | Cap on bytes the device reads from a single CSS file; larger sheets split. |
-| `css.max_rules` | Book-wide CSS rule cap; exceeding it warns. |
+| `css.max_rules` | Book-wide CSS rule cap, counted per comma member; exceeding it warns. |
 
 ### `panel`
 
@@ -122,9 +122,9 @@ color. A grayscale device opts in.
 Every switch maps to exactly one pipeline step. The `epub` profile has only
 `dedupe_ids` and `unicode_hygiene` on (they fix genuine spec violations);
 `x4`/`x3` have everything on and target CrossPoint firmware 2.0 (tag `2.0.0`):
-their table limits, CSS grammar and background shading follow that release, and
-the generated paragraphs use hanging indents because 2.0 indents every
-paragraph by default. Archive repair - META-INF cleanup, OPF/nav/NCX
+their table limits, CSS grammar, font sizes and background shading follow that
+release, and the generated paragraphs use hanging indents because 2.0 indents
+every paragraph by default. Archive repair - META-INF cleanup, OPF/nav/NCX
 regeneration, strict XHTML re-serialization - is unconditional and has no
 switch.
 
@@ -166,7 +166,7 @@ declaration survives with its value intact rather than being dropped.
 | Switch | What it enables |
 |---|---|
 | `strip_fonts` | Remove embedded font files and the links pointing at them. |
-| `filter_css` | Filter stylesheets to the device-supported grammar and enforce the CSS caps. |
+| `filter_css` | Filter stylesheets to the device-supported grammar and enforce the CSS caps. Font sizes on `html`/`body` and sizes near one go, so body text follows the reader's size setting. |
 | `sanitize_css` | Remove only the CSS constructs Adobe RMSDK cannot parse, keeping the rest. |
 | `relocate_styles` | Lift `<head>`/inline `<style>` CSS into an external stylesheet, scoped per chapter. |
 | `transcode_images` | Re-encode raster images to baseline grayscale JPEG/8-bit PNG, fitted and budgeted. |
@@ -180,7 +180,7 @@ declaration survives with its value intact rather than being dropped.
 | `dedupe_ids` | Remove duplicate element ids. |
 | `unicode_hygiene` | NFC-normalize text, strip XML-invalid characters. |
 | `chapter_split` | Split chapters over `options.max_chapter_kb` at heading boundaries. |
-| `remap_colors` | Remap text (CSS) and diagram (SVG) colors to perceptually spaced gray tones: each color keeps its apparent brightness while staying distinguishable on the panel's gray levels. Colorless dark text (gray body text such as `#555`) goes to solid black, because a soft gray dithers into a pale raster on a few-level panel; colored text keeps a tone of its own. Document colors get one solve per book, each SVG its own. Never applies on a color panel. |
+| `remap_colors` | Remap text (CSS) and diagram (SVG) colors to perceptually spaced gray tones: each color keeps its apparent brightness while staying distinguishable on the panel's gray levels. Colorless dark text (gray body text such as `#555`) goes to solid black, because a soft gray dithers into a pale raster on a few-level panel; colored text keeps a tone of its own. Document colors get one solve per book, each SVG its own. On a `gray4` panel a light background becomes the device shade, and the page itself stays white. Never applies on a color panel. |
 | `strip_media_metadata` | Remove EXIF, XMP and IPTC from JPEG and PNG, without re-encoding. |
 | `strip_invisible_chars` | Remove zero-width and other invisible fingerprinting characters from text nodes, book metadata and TOC titles, script-aware. |
 | `normalize_identity` | Pin `dcterms:modified` to a fixed epoch, drop per-copy `dc:identifier` values and replace a per-copy unique identifier with one derived from title and authors. A checksum-valid ISBN or ISSN is kept, as is a DOI under an all-digit registrant a registration agency could actually have assigned. Only an all-digit registrant is recognised as a DOI at all, so the ISBN-A, ISMN-A and sub-registrant forms fall outside the screen. |

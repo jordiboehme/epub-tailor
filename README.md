@@ -74,12 +74,12 @@ The app keeps itself current. When a new version ships it mentions it, quietly, 
 
 - Transcodes every image to baseline grayscale JPEG or PNG, pre-fit to the screen and inside the device's byte budgets.
 - Rasterizes SVG with a real renderer (resvg, 2x supersampled), because the device has no SVG decoder at all.
-- Remaps text and diagram colors to perceptually spaced gray tones: each color keeps its apparent brightness, equal-luminance hues like teal and orange stay tellable apart and the report says so when a 4-level panel cannot keep up. Gray body text goes to solid black, so it stays crisp instead of dithering into a pale raster. A light background box gets the one gray CrossPoint 2.0 shades, instead of washing out to white.
+- Remaps text and diagram colors to perceptually spaced gray tones: each color keeps its apparent brightness, equal-luminance hues like teal and orange stay tellable apart and the report says so when a 4-level panel cannot keep up. Gray body text goes to solid black, so it stays crisp instead of dithering into a pale raster. A light background box gets the one gray CrossPoint 2.0 shades, instead of washing out to white, while a tinted page stays white, so the dither does not cover every page.
 - Bakes ordered-list numbers into the text with a proper hanging indent, so `start="7"`, roman numerals and "2.1." survive a firmware that only ever counts 1, 2, 3.
 - Keeps the tables CrossPoint 2.0 draws as a real grid (up to 4 columns and a generous 160 words per row) and linearizes the rest into labeled paragraphs, or rasterizes complex ones into crisp line-art images with `--tables image`.
 - Rebuilds `<pre>` and code blocks with explicit breaks and spacing so indentation survives.
 - Strips embedded fonts the device will never load.
-- Trims every stylesheet to exactly the CSS CrossPoint 2.0 understands. That is a lot more than it used to be: font sizes, small caps, borders, drop caps, page breaks and shaded boxes now survive, and the rest goes before it eats the firmware's rule budget.
+- Trims every stylesheet to exactly the CSS CrossPoint 2.0 understands. That is a lot more than it used to be: font sizes, small caps, borders, drop caps, page breaks and shaded boxes now survive, and the rest goes before it eats the firmware's rule budget. Body text keeps the size you set on the reader: headings and small print keep their sizes, a book's "every paragraph is 1.6rem" does not.
 - Rescues and scopes chapter `<style>` blocks the firmware would otherwise ignore or misapply, descendant and child selectors included.
 - Splits oversized chapters at heading boundaries before they slow the device down.
 
