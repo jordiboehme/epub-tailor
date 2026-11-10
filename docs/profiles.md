@@ -121,13 +121,17 @@ color. A grayscale device opts in.
 
 Every switch maps to exactly one pipeline step. The `epub` profile has only
 `dedupe_ids` and `unicode_hygiene` on (they fix genuine spec violations);
-`x4`/`x3` have everything on. Archive repair - META-INF cleanup, OPF/nav/NCX
+`x4`/`x3` have everything on and target CrossPoint firmware 2.0 (tag `2.0.0`):
+their table limits, CSS grammar and background shading follow that release, and
+the generated paragraphs use hanging indents because 2.0 indents every
+paragraph by default. Archive repair - META-INF cleanup, OPF/nav/NCX
 regeneration, strict XHTML re-serialization - is unconditional and has no
 switch.
 
 **Most of these switches exist to work around CrossPoint firmware defects, and
 turning them on for a capable reader damages the book.** `filter_css` reduces a
-stylesheet to CrossPoint's ~12-property grammar; a Kindle honors `@font-face`,
+stylesheet to CrossPoint's grammar (simple selector chains and a few dozen
+properties); a Kindle honors `@font-face`,
 floats, borders and positioning, and a Kobo-based tolino honors the publisher
 stylesheet too. `linearize_tables` flattens every table the firmware cannot lay out as a grid into labelled paragraphs;
 Kindle and Kobo render real tables. `preserve_code_blocks` rebuilds code with
@@ -146,7 +150,7 @@ other, and only one of them is ever right for a given device.
 | | `filter_css` | `sanitize_css` |
 |---|---|---|
 | For | Xteink / CrossPoint | Kobo, PocketBook, tolino |
-| Because | its CSS grammar is ~12 properties | Adobe RMSDK's parser is frozen around 2013 |
+| Because | its CSS grammar is a small subset: simple selector chains, a few dozen properties | Adobe RMSDK's parser is frozen around 2013 |
 | Does | demolishes the sheet down to that grammar | keeps the sheet whole |
 | Removes | everything not on the allow-list | only `calc()`, `var()`, `clamp()`, `min()`, `max()`, `env()`, `@supports` and range-syntax media queries |
 

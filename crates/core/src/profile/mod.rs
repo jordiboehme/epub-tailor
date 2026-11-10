@@ -8,7 +8,7 @@
 //!
 //! The built-ins ship embedded: `epub` (alias `default`, pure repair),
 //! `x4`/`x3` (full device conversions for the Xteink readers running CrossPoint
-//! firmware), and one per researched device - `nomad`, the `kindle-*` family
+//! firmware 2.0), and one per researched device - `nomad`, the `kindle-*` family
 //! and the `tolino-*` family. They live as real JSON files under
 //! `crates/core/profiles/` so the file format and the code can never drift
 //! apart - tests resolve them through the same parser user profiles go through.

@@ -17,9 +17,11 @@
 //! outright.
 //!
 //! Formats are chosen for the worst decoder in the family: the CrossPoint
-//! firmware only reads baseline JPEG and 8-bit PNG (a progressive JPEG blurs;
-//! GIF/WebP/TIFF/BMP/SVG render as nothing) and aborts past 2048x1536 px, so
-//! everything is normalized to baseline JPEG or PNG regardless of target.
+//! firmware reads baseline JPEG and 8-bit PNG well (a progressive JPEG blurs;
+//! WebP/TIFF/BMP/SVG render as nothing), GIF only as a static, non-interlaced
+//! image, and it aborts past 8,388,608 px in area or 32,767 px on a side
+//! (`ImageToFramebufferDecoder.h:56-57` at firmware 2.0.0), so everything is
+//! normalized to baseline JPEG or PNG regardless of target.
 //!
 //! SVG has no decoder on several of these devices; it is handled in [`svg`],
 //! which either unwraps a single-`<image>` wrapper (letting its raster payload

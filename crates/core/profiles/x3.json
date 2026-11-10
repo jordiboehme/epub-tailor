@@ -1,6 +1,6 @@
 {
   "name": "x3",
-  "description": "Xteink X3 running CrossPoint firmware",
+  "description": "Xteink X3 running CrossPoint firmware 2.0",
   "device": {
     "screen": { "width": 528, "height": 792, "ppi": 220 },
     "panel": "gray4",
