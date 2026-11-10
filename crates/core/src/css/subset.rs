@@ -473,7 +473,7 @@ const MAX_CLASSES: usize = 4;
 /// combinators, optionally ending in `::first-letter`, and at most
 /// `MAX_SELECTOR_LEN - SCOPE_PREFIX_HEADROOM` bytes long. Expects lightningcss
 /// serialization, which normalizes the spacing around combinators.
-fn selector_is_supported(selector: &str) -> bool {
+pub(crate) fn selector_is_supported(selector: &str) -> bool {
     if selector.is_empty() || selector.len() > MAX_SELECTOR_LEN - SCOPE_PREFIX_HEADROOM {
         return false;
     }
@@ -506,7 +506,7 @@ fn selector_is_supported(selector: &str) -> bool {
 /// which the device stores as its own rule key (`CssParser.cpp:1180-1188`).
 /// Something must precede the pseudo; a bare `::first-letter` is left as it is
 /// and later rejected for its `:`.
-fn strip_first_letter(selector: &str) -> &str {
+pub(crate) fn strip_first_letter(selector: &str) -> &str {
     for suffix in ["::first-letter", ":first-letter"] {
         if selector.len() > suffix.len() {
             let split = selector.len() - suffix.len();
