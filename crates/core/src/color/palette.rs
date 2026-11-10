@@ -126,6 +126,8 @@ struct Item {
 /// the firmware luma `(299R + 587G + 114B) / 1000` of `rgb` is in `128..240`,
 /// else white. Dark backgrounds go white on purpose; text is pinned dark
 /// elsewhere, so a dark theme stays readable without a shade.
+/// [`build_palette`] uses it for every [`Panel::Gray4`] panel, which means a
+/// CrossPoint panel: a custom gray4 profile gets the same shade mapping.
 fn crosspoint_background(rgb: Rgb8) -> u8 {
     let luma = (299 * u32::from(rgb.r) + 587 * u32::from(rgb.g) + 114 * u32::from(rgb.b)) / 1000;
     if (128..240).contains(&luma) {
@@ -142,7 +144,10 @@ pub(crate) fn build_palette(collected: &Collected, panel: Panel) -> (Palette, Pa
     }
 
     // On gray4 the firmware decides backgrounds by luma, not by tone, so they
-    // bypass the solve and take the device shade or white directly.
+    // bypass the solve and take the device shade or white directly. Gray4
+    // stands for a CrossPoint panel here: the x4 and x3 profiles are the only
+    // built-in gray4 panels, and a custom profile that declares gray4 gets the
+    // same CrossPoint shade mapping.
     let bypass_backgrounds = panel == Panel::Gray4;
     let mut palette = Palette::default();
     let mut background_grays: HashSet<u8> = HashSet::new();
@@ -330,6 +335,16 @@ mod tests {
     fn lightness(palette: &Palette, rgb: Rgb8, role: Role) -> f32 {
         let gray = palette.gray_for(rgb, role).expect("color was collected");
         lightness_of_gray(gray.r)
+    }
+
+    #[test]
+    fn crosspoint_background_band_edges() {
+        // For a gray, the firmware luma is the gray value itself.
+        let shade = |v: u8| crosspoint_background(Rgb8::new(v, v, v));
+        assert_eq!(shade(127), 255);
+        assert_eq!(shade(128), CROSSPOINT_SHADE);
+        assert_eq!(shade(239), CROSSPOINT_SHADE);
+        assert_eq!(shade(240), 255);
     }
 
     #[test]

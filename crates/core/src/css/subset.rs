@@ -5,12 +5,14 @@
 //! selector is a chain of compounds joined by descendant (` `) or child (` > `)
 //! combinators, optionally ending in `::first-letter`; a compound is an element
 //! or `*`, at most one `#id` and at most 4 classes (`CssParser.cpp:111-138,
-//! 1180-1205` at firmware 2.0.0). The device sets no limit on the chain length;
-//! we keep at most 8 compounds as our own conservative cap. Sibling combinators, attribute selectors and
-//! every other pseudo are unsupported, there are no @-rules besides an
-//! unconditional `@media screen`/`all`, and a few dozen properties are honored
-//! (`CssParser.cpp:938-1144`). Everything outside that is dead weight at best
-//! and layout noise at worst, so we drop it and keep only what renders.
+//! 1180-1205` at firmware 2.0.0). The device sets no limit on the chain
+//! length; we keep at most 8 compounds as our own conservative cap. Sibling
+//! combinators, attribute selectors and every other pseudo are unsupported,
+//! there are no @-rules besides an unconditional `@media screen`/`all`, and a
+//! few dozen properties are honored (`CssParser.cpp:938-1144`). Everything
+//! outside that is dead weight at best and layout noise at worst, so we drop
+//! it and keep only what renders. Font sizes get extra care so the reader's
+//! size setting stays in charge (see [`super::font_size`]).
 //!
 //! Parsing goes through [`lightningcss`] in error-recovery mode, so a malformed
 //! construct is skipped rather than failing the whole conversion. We do not use
@@ -471,8 +473,20 @@ fn filter_declarations(
 /// `background` becomes `background-color` with its color, dropping images and
 /// positions. A `background` with no color gives `transparent` (printed
 /// `#0000`), which the device records as "not shaded", so it still overrides
-/// an earlier shade.
+/// an earlier shade. A `list-style-type` that is not a keyword becomes `disc`.
 fn device_declaration(property: &Property<'_>, keep_colors: bool) -> Option<(String, String)> {
+    let (name, value) = device_declaration_raw(property, keep_colors)?;
+    // The device reads only a keyword marker type; a string or `symbols()`
+    // marker becomes the default `disc` (a quoted `}` would also break the
+    // rule splitting in `caps::split_css`).
+    if name == "list-style-type" && !is_ident(&value) {
+        return Some((name, "disc".to_string()));
+    }
+    Some((name, value))
+}
+
+/// [`device_declaration`] before the marker type is restricted to a keyword.
+fn device_declaration_raw(property: &Property<'_>, keep_colors: bool) -> Option<(String, String)> {
     match property {
         Property::ListStyle(list_style) => {
             let value = list_style
@@ -553,7 +567,9 @@ fn property_is_supported(name: &str, value: &str, keep_colors: bool) -> bool {
 pub(crate) const MAX_SELECTOR_LEN: usize = 256;
 
 /// Bytes kept free under [`MAX_SELECTOR_LEN`] for the scope class a chapter's
-/// relocated styles get prefixed with.
+/// relocated styles get prefixed with. The cap applies to every sheet, so a
+/// selector of 241 to 256 bytes in a book's main stylesheet is dropped too,
+/// although the device would store it.
 const SCOPE_PREFIX_HEADROOM: usize = 16;
 
 /// Most compounds we keep in one selector chain. This cap is ours, not the
@@ -1157,6 +1173,25 @@ p + p { text-indent: 0; }
         assert_eq!(
             filter("ul{list-style:none}ul.bullets{list-style-type:disc}").css,
             "ul{list-style-type:none}ul.bullets{list-style-type:disc}"
+        );
+    }
+
+    #[test]
+    fn a_string_list_marker_becomes_disc() {
+        // A quoted marker can carry `}` or `;`, which would break the naive
+        // rule splitting in `caps::split_css`; the device reads no strings.
+        for css in [
+            r#"ul{list-style:"}" inside}"#,
+            r#"ul{list-style-type:"}"}"#,
+            r#"ul{list-style-type:symbols(cyclic "*")}"#,
+        ] {
+            let out = filter(css);
+            assert_eq!(out.css, "ul{list-style-type:disc}", "{css}");
+            assert_eq!(super::super::caps::split_css(&out.css, 8).concat(), out.css);
+        }
+        assert_eq!(
+            filter("ol{list-style-type:lower-roman}").css,
+            "ol{list-style-type:lower-roman}"
         );
     }
 

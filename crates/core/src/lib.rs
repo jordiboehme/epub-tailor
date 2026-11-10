@@ -2520,12 +2520,7 @@ mod tests {
     fn et_styles_hang_instead_of_zero_indent() {
         use std::collections::HashMap;
 
-        assert!(
-            !ET_STYLES.contains("text-indent:0}") && !ET_STYLES.contains("text-indent:0;"),
-            "no rule may use text-indent:0"
-        );
-
-        // (selector class, property) -> value, plus rule order per class.
+        // Rules in sheet order: (class, property -> value).
         let mut rules: Vec<(String, HashMap<String, String>)> = Vec::new();
         for rule in ET_STYLES.split('}').filter(|r| !r.is_empty()) {
             let (sel, body) = rule.split_once('{').expect("rule has a body");
@@ -2537,6 +2532,13 @@ mod tests {
             rules.push((sel.trim_start_matches('.').to_string(), decls));
         }
 
+        // No rule may use a zero (or any non-negative) indent.
+        for (class, decls) in &rules {
+            if let Some(indent) = decls.get("text-indent") {
+                assert!(indent.starts_with('-'), ".{class} text-indent is {indent}");
+            }
+        }
+
         // Effective value of `prop` for an element with all of `classes`:
         // the later rule in the sheet wins.
         let effective = |classes: &[&str], prop: &str| -> Option<String> {
@@ -2546,11 +2548,12 @@ mod tests {
                 .filter_map(|(_, d)| d.get(prop).cloned())
                 .next_back()
         };
-        // Length in em; `-1px` counts as smaller than any em value.
+        // Length in em; the `1px` hang counts as smaller than any em value.
         let em = |v: &str| -> f64 {
-            if v.ends_with("px") {
+            if v == "1px" {
                 return 0.0;
             }
+            assert!(!v.ends_with("px"), "only a 1px hang may use px, got {v}");
             v.trim_end_matches("em").parse().expect("em length")
         };
 

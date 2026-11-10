@@ -26,6 +26,7 @@ use crate::html::dom::{
     move_children, replace_with, set_attr, text, text_content,
 };
 use crate::html::table_render::{Cell, TableModel};
+use crate::html::text::device_words;
 use crate::options::{ConvertOptions, TableMode};
 use crate::report::{Transformation, Warning};
 
@@ -139,10 +140,10 @@ fn has_table_ancestor(table: &NodeRef) -> bool {
 /// The firmware's own limits for laying a table out as a grid (CrossPoint
 /// 2.0.0, `ChapterHtmlSlimParser.h:152-154`, checked at
 /// `ChapterHtmlSlimParser.cpp:728, 756, 941`): at most this many columns, and
-/// per row at most this many words and bytes of text (bytes skip whitespace,
-/// as `flushPartWordBuffer` counts them). A table past any of them is
-/// "stacked" on the device, each cell an unlabeled paragraph, which reads
-/// worse than our own linearization.
+/// per row at most this many words and bytes of text, counted over the words
+/// the device builds (see [`device_words`]), as `flushPartWordBuffer` does.
+/// A table past any of them is "stacked" on the device, each cell an
+/// unlabeled paragraph, which reads worse than our own linearization.
 const NATIVE_GRID_MAX_COLUMNS: usize = 4;
 const NATIVE_GRID_MAX_ROW_WORDS: usize = 160;
 const NATIVE_GRID_MAX_ROW_BYTES: usize = 2048;
@@ -196,13 +197,9 @@ pub(crate) fn native_grid_blocker(table: &NodeRef) -> Option<&'static str> {
             if cell.descendants().any(|n| is_cell_block(&n)) {
                 return Some("block content in cells");
             }
-            let text = text_content(&cell);
-            row_words += text.split_whitespace().count();
-            row_bytes += text
-                .chars()
-                .filter(|c| !c.is_whitespace())
-                .map(char::len_utf8)
-                .sum::<usize>();
+            let words = device_words(&text_content(&cell));
+            row_words += words.len();
+            row_bytes += words.iter().map(String::len).sum::<usize>();
         }
         if row_words > NATIVE_GRID_MAX_ROW_WORDS || row_bytes > NATIVE_GRID_MAX_ROW_BYTES {
             return Some("long rows");
@@ -1240,6 +1237,50 @@ mod tests {
             blocker_of(&format!("<table><tr><td>{a}</td><td>{b}</td></tr></table>")),
             Some("long rows")
         );
+    }
+
+    #[test]
+    fn row_of_exactly_160_words_keeps_the_grid() {
+        let (a, b) = ("w ".repeat(80), "w ".repeat(80));
+        assert_eq!(
+            blocker_of(&format!("<table><tr><td>{a}</td><td>{b}</td></tr></table>")),
+            None
+        );
+    }
+
+    #[test]
+    fn row_of_exactly_2048_bytes_keeps_the_grid() {
+        let (a, b) = ("x".repeat(1024), "y".repeat(1024));
+        assert_eq!(
+            blocker_of(&format!("<table><tr><td>{a}</td><td>{b}</td></tr></table>")),
+            None
+        );
+    }
+
+    #[test]
+    fn no_break_spaces_count_as_words_of_one_byte() {
+        // The device makes each U+00A0 / U+202F its own one-byte word
+        // (`ChapterHtmlSlimParser.cpp:2455-2510` at firmware 2.0.0).
+        // `n` no-break spaces between n + 1 words "w", plus "a" in the next
+        // cell, are 2n + 2 words.
+        let words = |n: usize| {
+            let mut text = "w".to_string();
+            for i in 0..n {
+                text.push(if i % 2 == 0 { '\u{A0}' } else { '\u{202F}' });
+                text.push('w');
+            }
+            format!("<table><tr><td>{text}</td><td>a</td></tr></table>")
+        };
+        assert_eq!(blocker_of(&words(79)), None, "160 words");
+        assert_eq!(blocker_of(&words(80)), Some("long rows"), "162 words");
+        // 100 no-break spaces are 100 bytes on the device, so 1,948 letters
+        // plus "a" make 2,049 bytes in 102 words.
+        let bytes = format!(
+            "<table><tr><td>{}{}</td><td>a</td></tr></table>",
+            "x".repeat(1948),
+            "\u{A0}".repeat(100)
+        );
+        assert_eq!(blocker_of(&bytes), Some("long rows"));
     }
 
     #[test]
