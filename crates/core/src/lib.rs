@@ -75,7 +75,7 @@ use html::dom::{
 /// Stored already minified so it is a fixed point of the CSS subset filter
 /// (`filter_css(ET_STYLES) == ET_STYLES`, proven by a test); it is therefore not
 /// itself run through the filter during conversion.
-const ET_STYLES: &str = ".et-box-title{margin-top:1em}.et-caption{text-align:center;font-style:italic}.et-table-caption{text-align:center}.et-table-cell{margin-left:1em;text-indent:0}.et-table-row{margin-left:1em}.et-table-row-sep{text-align:center}.et-ol-item{text-indent:0}.et-ol-nested{margin-left:1em}.et-ol-cont{margin-left:2em}.et-code{text-align:left;margin-left:1em;text-indent:0}.et-dt{margin-top:0.5em}.et-dd{margin-left:1.5em}";
+const ET_STYLES: &str = ".et-box-title{margin-top:1em}.et-caption{text-align:center;font-style:italic}.et-table-caption{text-align:center}.et-table-cell{margin-left:1em;text-indent:-1px}.et-table-row{margin-left:1em}.et-table-row-sep{text-align:center}.et-ol-item{text-indent:-1.5em;margin-left:1.5em}.et-ol-nested{margin-left:2em;text-indent:-1em}.et-ol-cont{margin-left:2em;text-indent:-1px}.et-code{text-align:left;margin-left:1em;text-indent:-1px}.et-dt{margin-top:0.5em}.et-dd{margin-left:1.5em}";
 
 /// A source book handed to [`convert`]: either an `.epub` archive's raw bytes,
 /// or a Markdown document plus a resolver for its local image references.
@@ -2423,6 +2423,76 @@ mod tests {
         assert_eq!(filtered.rules_kept, ET_STYLES.matches('}').count());
         assert_eq!(filtered.rules_dropped, 0);
         assert_eq!(filtered.decls_dropped, 0);
+    }
+
+    /// CrossPoint 2.0 applies its paragraph-indent setting unless `text-indent`
+    /// is negative, so `text-indent:0` no longer suppresses it. Every generated
+    /// block must hang (negative indent) and keep its first line on the page
+    /// (`margin-left` covers the hang and stays within the firmware's 2em clamp).
+    #[test]
+    fn et_styles_hang_instead_of_zero_indent() {
+        use std::collections::HashMap;
+
+        assert!(
+            !ET_STYLES.contains("text-indent:0}") && !ET_STYLES.contains("text-indent:0;"),
+            "no rule may use text-indent:0"
+        );
+
+        // (selector class, property) -> value, plus rule order per class.
+        let mut rules: Vec<(String, HashMap<String, String>)> = Vec::new();
+        for rule in ET_STYLES.split('}').filter(|r| !r.is_empty()) {
+            let (sel, body) = rule.split_once('{').expect("rule has a body");
+            let decls = body
+                .split(';')
+                .filter_map(|d| d.split_once(':'))
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect();
+            rules.push((sel.trim_start_matches('.').to_string(), decls));
+        }
+
+        // Effective value of `prop` for an element with all of `classes`:
+        // the later rule in the sheet wins.
+        let effective = |classes: &[&str], prop: &str| -> Option<String> {
+            rules
+                .iter()
+                .filter(|(sel, _)| classes.contains(&sel.as_str()))
+                .filter_map(|(_, d)| d.get(prop).cloned())
+                .next_back()
+        };
+        // Length in em; `-1px` counts as smaller than any em value.
+        let em = |v: &str| -> f64 {
+            if v.ends_with("px") {
+                return 0.0;
+            }
+            v.trim_end_matches("em").parse().expect("em length")
+        };
+
+        for class in [
+            "et-ol-item",
+            "et-ol-nested",
+            "et-ol-cont",
+            "et-code",
+            "et-table-cell",
+        ] {
+            let indent = effective(&[class], "text-indent")
+                .unwrap_or_else(|| panic!(".{class} must set text-indent"));
+            assert!(indent.starts_with('-'), ".{class} text-indent is {indent}");
+        }
+
+        for combo in [
+            &["et-ol-item"][..],
+            &["et-ol-item", "et-ol-nested"],
+            &["et-ol-cont"],
+            &["et-code"],
+            &["et-table-cell"],
+        ] {
+            let indent = effective(combo, "text-indent").expect("text-indent");
+            let margin = effective(combo, "margin-left").expect("margin-left");
+            assert!(indent.starts_with('-'), "{combo:?}: indent {indent}");
+            let (hang, left) = (em(indent.trim_start_matches('-')), em(&margin));
+            assert!(left >= hang, "{combo:?}: margin {margin} < hang {indent}");
+            assert!(left <= 2.0, "{combo:?}: margin {margin} exceeds 2em");
+        }
     }
 
     /// A book already carrying a `styles/main-2.css` resource unrelated to

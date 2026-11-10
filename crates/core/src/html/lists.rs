@@ -1,10 +1,11 @@
 //! Bake ordered-list numbering into text.
 //!
-//! The firmware renders every `<li>` with a "•" bullet and no number, so an
-//! `<ol>` silently loses its numbering. We replace each `<ol>` with numbered
-//! `<p class="et-ol-item">` paragraphs, honoring `start`, `type` and per-item
-//! `value`, and compounding labels ("2.1.") for nested ordered lists. `<ul>`
-//! is left untouched - its native bullets are already correct.
+//! The firmware numbers `<ol>` natively since 1.6.5, but decimal only. We keep
+//! baking because it honors `start`, `type` and per-item `value`, and compounds
+//! labels ("2.1.") for nested ordered lists. No `<ol>` survives, so nothing is
+//! numbered twice. Each `<ol>` becomes numbered `<p class="et-ol-item">`
+//! paragraphs. `<ul>` is left untouched - its native bullets are already
+//! correct.
 
 use kuchikiki::{NodeData, NodeRef};
 
