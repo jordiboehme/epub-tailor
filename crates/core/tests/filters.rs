@@ -306,7 +306,7 @@ fn remove_targeting_files_drops_matching_stray_resources() {
         let mut file = archive.by_index(i).expect("entry");
         let mut data = Vec::new();
         file.read_to_end(&mut data).expect("read entry");
-        entries.push((file.name().to_string(), data));
+        entries.push((file.name().unwrap().into_owned(), data));
     }
     entries.push(("inventedwatermark.example".to_string(), b"marker".to_vec()));
     let with_marker = common::build_epub(
@@ -321,7 +321,10 @@ fn remove_targeting_files_drops_matching_stray_resources() {
     ));
     let converted = convert(Input::Epub(with_marker), &opts).expect("conversion succeeds");
     let archive = ZipArchive::new(Cursor::new(&converted.epub[..])).expect("output is a valid zip");
-    let names: Vec<String> = archive.file_names().map(String::from).collect();
+    let names: Vec<String> = archive
+        .file_names()
+        .map(|n| n.unwrap().into_owned())
+        .collect();
     assert!(
         !names.iter().any(|n| n.contains("inventedwatermark")),
         "the marker file must be gone, got: {names:?}"

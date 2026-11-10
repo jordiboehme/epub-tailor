@@ -17,7 +17,7 @@ fn opf_of(epub: &[u8]) -> String {
     use std::io::Read;
     let mut zip = zip::ZipArchive::new(std::io::Cursor::new(epub)).expect("zip");
     let name = (0..zip.len())
-        .map(|i| zip.by_index(i).unwrap().name().to_string())
+        .map(|i| zip.by_index(i).unwrap().name().unwrap().into_owned())
         .find(|n| n.ends_with(".opf"))
         .expect("an OPF");
     let mut text = String::new();

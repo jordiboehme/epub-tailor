@@ -32,7 +32,7 @@ fn resolver(entries: &[(&str, &[u8])]) -> Box<dyn AssetResolver> {
 fn chapter_text(epub: &[u8], name_fragment: &str) -> String {
     let mut archive = zip::ZipArchive::new(std::io::Cursor::new(epub)).expect("valid zip");
     let name = (0..archive.len())
-        .map(|i| archive.by_index(i).unwrap().name().to_string())
+        .map(|i| archive.by_index(i).unwrap().name().unwrap().into_owned())
         .find(|n| n.contains(name_fragment))
         .unwrap_or_else(|| panic!("no zip entry contains {name_fragment}"));
     let mut file = archive.by_name(&name).expect("entry exists");
@@ -154,7 +154,7 @@ fn local_image_is_processed_by_the_shared_image_pipeline_into_jpeg_or_png() {
     let mut archive =
         zip::ZipArchive::new(std::io::Cursor::new(&converted.epub)).expect("valid zip");
     let names: Vec<String> = (0..archive.len())
-        .map(|i| archive.by_index(i).unwrap().name().to_string())
+        .map(|i| archive.by_index(i).unwrap().name().unwrap().into_owned())
         .collect();
     let image_name = names
         .iter()
@@ -194,7 +194,7 @@ fn path_traversal_does_not_escape_the_resolver_root() {
     let mut archive =
         zip::ZipArchive::new(std::io::Cursor::new(&converted.epub)).expect("valid zip");
     for i in 0..archive.len() {
-        let name = archive.by_index(i).unwrap().name().to_string();
+        let name = archive.by_index(i).unwrap().name().unwrap().into_owned();
         assert!(
             !name.contains("passwd"),
             "no resource may have escaped the root: {name}"

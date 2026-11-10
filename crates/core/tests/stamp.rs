@@ -30,7 +30,7 @@ fn profiled_opts(value: &str, profile: &str) -> ConvertOptions {
 fn opf_of(epub: &[u8]) -> String {
     let mut archive = zip::ZipArchive::new(std::io::Cursor::new(epub)).expect("valid zip");
     let name = (0..archive.len())
-        .map(|i| archive.by_index(i).unwrap().name().to_string())
+        .map(|i| archive.by_index(i).unwrap().name().unwrap().into_owned())
         .find(|n| n.ends_with(".opf"))
         .expect("an OPF entry");
     let mut file = archive.by_name(&name).expect("entry exists");

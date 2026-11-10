@@ -48,7 +48,7 @@ pub fn read_stamp_info(bytes: &[u8]) -> Option<StampInfo> {
         // A foreign archive may store the entry under a name that only
         // matches after normalization (leading ./, backslashes).
         let raw = (0..archive.len())
-            .filter_map(|i| archive.by_index(i).ok().map(|f| f.name().to_string()))
+            .filter_map(|i| Some(archive.by_index(i).ok()?.name().ok()?.into_owned()))
             .find(|name| normalize_entry_name(name) == opf_path)?;
         read_entry(&mut archive, &raw)
     })?;
