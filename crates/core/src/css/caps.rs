@@ -1,11 +1,13 @@
 //! Enforce the device's CSS byte and rule caps.
 //!
 //! The firmware reads at most `css_max_bytes` from any single CSS file and
-//! parses at most `css_max_rules` rules across the whole book. We split an
-//! oversized file at rule boundaries (the device zip-scans every `.css`, so the
-//! extra parts are still read) and warn - but never delete - when the book as a
-//! whole exceeds the rule cap, since the excess is harmless and its handling is
-//! order-dependent on device.
+//! stores a bounded number of rules across the whole book. We split an
+//! oversized file at rule boundaries (the device also zip-scans for `.css`
+//! files the manifest misses, so the extra parts are still read) and warn -
+//! but never delete - when the book as a whole exceeds a store cap, since
+//! which rules are lost depends on the order the device loads the sheets in.
+
+use std::collections::HashSet;
 
 use crate::report::Warning;
 
@@ -46,15 +48,63 @@ pub(crate) fn split_path(path: &str, part: usize) -> String {
     }
 }
 
-/// A book-wide warning when the total kept rule count exceeds the device cap.
-pub(crate) fn rule_cap_warning(total_rules: usize, max_rules: usize) -> Option<Warning> {
-    (total_rules > max_rules).then(|| Warning {
-        message: format!(
-            "the book has {total_rules} CSS rules over the device cap of {max_rules}; \
-             the device will drop the rules past the cap"
-        ),
-        file: None,
-    })
+/// Most distinct declaration blocks the device stores (`CssParser.cpp:46` at
+/// firmware 2.0.0).
+const MAX_UNIQUE_STYLES: usize = 256;
+
+/// Most bytes of selector text the device stores (`CssParser.cpp:45`).
+const SELECTOR_POOL_CAP: usize = 32 * 1024;
+
+/// Book-wide warnings for the device's CSS rule store, given every stylesheet
+/// it will load (minified, device-conformant CSS). The device stores one rule
+/// per comma member, up to `max_rules`; at most 256 distinct declaration
+/// blocks; and at most 32 KB of selector text (`CssParser.cpp:44-46, 1172,
+/// 1226-1240`). Past any of them it stops storing new rules, so rules in later
+/// sheets are lost. The device compares parsed styles rather than text, so
+/// counting distinct declaration text is a close, slightly high, estimate.
+pub(crate) fn store_cap_warnings(sheets: &[&str], max_rules: usize) -> Vec<Warning> {
+    let mut rules = 0usize;
+    let mut selector_bytes = 0usize;
+    let mut bodies: HashSet<&str> = HashSet::new();
+    for sheet in sheets {
+        for rule in sheet.split('}') {
+            let Some((selectors, body)) = rule.split_once('{') else {
+                continue;
+            };
+            for selector in selectors.split(',') {
+                rules += 1;
+                selector_bytes += selector.len();
+            }
+            bodies.insert(body);
+        }
+    }
+    let mut warnings = Vec::new();
+    let mut warn = |message: String| {
+        warnings.push(Warning {
+            message,
+            file: None,
+        })
+    };
+    if rules > max_rules {
+        warn(format!(
+            "the book has {rules} CSS rules (one per selector) over the device cap of \
+             {max_rules}; the device will drop the rules past the cap"
+        ));
+    }
+    if bodies.len() > MAX_UNIQUE_STYLES {
+        warn(format!(
+            "the book has {} distinct CSS declaration blocks over the device cap of \
+             {MAX_UNIQUE_STYLES}; the device will drop the rules past the cap",
+            bodies.len()
+        ));
+    }
+    if selector_bytes > SELECTOR_POOL_CAP {
+        warn(format!(
+            "the book's CSS selectors take {selector_bytes} bytes over the device cap of \
+             {SELECTOR_POOL_CAP}; the device will drop the rules past the cap"
+        ));
+    }
+    warnings
 }
 
 #[cfg(test)]
@@ -118,10 +168,48 @@ mod tests {
     }
 
     #[test]
-    fn rule_cap_warns_only_over_the_limit() {
-        assert!(rule_cap_warning(1500, 1500).is_none());
-        let warning = rule_cap_warning(1501, 1500).expect("should warn over the cap");
-        assert!(warning.message.contains("1501"));
-        assert!(warning.file.is_none());
+    fn rule_cap_counts_every_comma_member() {
+        // 750 rules of two selectors each are 1,500 stored rules on the device.
+        let mut sheet = String::new();
+        for i in 0..750 {
+            sheet.push_str(&format!(".a{i},.b{i}{{margin-left:1em}}"));
+        }
+        assert!(store_cap_warnings(&[sheet.as_str()], 1500).is_empty());
+        sheet.push_str(".c{margin-left:1em}");
+        let warnings = store_cap_warnings(&[sheet.as_str()], 1500);
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(warnings[0].message.contains("1501"), "{warnings:?}");
+        assert!(warnings[0].file.is_none());
+    }
+
+    #[test]
+    fn style_cap_counts_distinct_declaration_blocks_across_sheets() {
+        let mut first = String::new();
+        let mut second = String::new();
+        for i in 0..128 {
+            first.push_str(&format!(".a{i}{{margin-left:{i}px}}"));
+            // Same blocks again in another sheet: not new.
+            second.push_str(&format!(".b{i}{{margin-left:{i}px}}"));
+            second.push_str(&format!(".c{i}{{margin-right:{i}px}}"));
+        }
+        assert!(store_cap_warnings(&[&first, &second], 1500).is_empty());
+        second.push_str(".d{text-indent:-1em}");
+        let warnings = store_cap_warnings(&[&first, &second], 1500);
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(warnings[0].message.contains("257"), "{warnings:?}");
+    }
+
+    #[test]
+    fn selector_text_cap_counts_bytes() {
+        // 128 selectors of 256 bytes (with the dot) are exactly 32 KB.
+        let mut sheet = String::new();
+        for i in 0..128 {
+            sheet.push_str(&format!(".{}{i:03}{{margin:0}}", "x".repeat(252)));
+        }
+        assert!(store_cap_warnings(&[sheet.as_str()], 1500).is_empty());
+        sheet.push_str(".y{margin:0}");
+        let warnings = store_cap_warnings(&[sheet.as_str()], 1500);
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(warnings[0].message.contains("32770"), "{warnings:?}");
     }
 }

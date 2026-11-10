@@ -125,3 +125,36 @@ fn a_book_root_size_rescales_rem_everywhere_and_body_text_keeps_the_reader_size(
     let chapter = text_entry(&out.epub, "OEBPS/text/chapter1.xhtml");
     assert!(chapter.contains("<span>same</span>"), "{chapter}");
 }
+
+#[test]
+fn generated_stylesheets_come_first_in_the_manifest() {
+    // The device loads sheets in manifest order and stops storing rules at a
+    // cap, so the helper rules go in before the book's own.
+    let out = fit(book("p{font-style:italic}", "p{text-align:left}", LIST));
+    let opf = text_entry(&out.epub, "OEBPS/content.opf");
+    let at = |href: &str| {
+        opf.find(&format!(r#"href="{href}""#))
+            .unwrap_or_else(|| panic!("{href} in the manifest:\n{opf}"))
+    };
+    assert!(at("et-styles.css") < at("et-relocated.css"), "{opf}");
+    assert!(at("et-relocated.css") < at("styles/main.css"), "{opf}");
+}
+
+#[test]
+fn too_many_distinct_declaration_blocks_are_warned_about() {
+    let sheet: String = (0..300)
+        .map(|i| format!(".c{i}{{margin-left:{i}px}}"))
+        .collect();
+    let body: String = (0..300)
+        .map(|i| format!(r#"<p class="c{i}">x</p>"#))
+        .collect();
+    let out = fit(book("", &sheet, &body));
+    assert!(
+        out.report
+            .warnings
+            .iter()
+            .any(|w| w.message.contains("distinct CSS declaration blocks")),
+        "{:?}",
+        out.report.warnings
+    );
+}

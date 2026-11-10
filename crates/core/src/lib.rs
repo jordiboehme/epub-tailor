@@ -234,7 +234,9 @@ pub fn convert(input: Input, opts: &ConvertOptions) -> Result<Converted, Convert
     } else {
         None
     };
-    let mut total_css_rules = 0usize;
+    // The stylesheets this conversion generates, listed ahead of the book's
+    // own in the manifest (see [`put_generated_css_first`]).
+    let mut generated_css: Vec<String> = Vec::new();
     if opts.features.sanitize_css || opts.features.filter_css {
         let css_paths: Vec<String> = book
             .resources
@@ -278,7 +280,6 @@ pub fn convert(input: Input, opts: &ConvertOptions) -> Result<Converted, Convert
                     decls_dropped: 0,
                 }
             };
-            total_css_rules += filtered.rules_kept;
             store_filtered_css(
                 &mut book,
                 &path,
@@ -489,7 +490,6 @@ pub fn convert(input: Input, opts: &ConvertOptions) -> Result<Converted, Convert
             }
         };
         if !filtered.css.is_empty() {
-            total_css_rules += filtered.rules_kept;
             for (path, _) in &relocated_styles {
                 if let Some((_, doc)) = chapters.iter().find(|(p, _)| p == path)
                     && let Some(head) = find_head(doc)
@@ -506,6 +506,7 @@ pub fn convert(input: Input, opts: &ConvertOptions) -> Result<Converted, Convert
                     });
                 }
             }
+            let resources_before = book.resources.len();
             store_filtered_css(
                 &mut book,
                 &relocated_path,
@@ -513,6 +514,15 @@ pub fn convert(input: Input, opts: &ConvertOptions) -> Result<Converted, Convert
                 opts,
                 &mut transformations,
                 &mut warnings,
+            );
+            // The sheet itself, then any split parts (appended as new keys).
+            generated_css.push(relocated_path.clone());
+            generated_css.extend(
+                book.resources
+                    .keys()
+                    .skip(resources_before)
+                    .filter(|path| **path != relocated_path)
+                    .cloned(),
             );
         }
     }
@@ -564,9 +574,8 @@ pub fn convert(input: Input, opts: &ConvertOptions) -> Result<Converted, Convert
         }
     }
     if css_needed {
-        // et-styles.css is already device-conformant, so it is not filtered, but
-        // its rules still count toward the book-wide rule cap.
-        total_css_rules += ET_STYLES.matches('}').count();
+        // et-styles.css is already device-conformant, so it is not filtered.
+        generated_css.insert(0, css_path.clone());
         book.resources.insert(
             css_path.clone(),
             Resource {
@@ -582,10 +591,19 @@ pub fn convert(input: Input, opts: &ConvertOptions) -> Result<Converted, Convert
         });
     }
 
-    if opts.features.filter_css
-        && let Some(warning) = caps::rule_cap_warning(total_css_rules, opts.device.css_max_rules)
-    {
-        warnings.push(warning);
+    put_generated_css_first(&mut book, &generated_css);
+
+    // Every stylesheet in its final form (filtered, color-remapped), against
+    // the device's rule store caps.
+    if opts.features.filter_css {
+        let sheets: Vec<String> = book
+            .resources
+            .values()
+            .filter(|resource| resource.media_type == "text/css")
+            .map(|resource| String::from_utf8_lossy(&resource.data).into_owned())
+            .collect();
+        let sheets: Vec<&str> = sheets.iter().map(String::as_str).collect();
+        warnings.extend(caps::store_cap_warnings(&sheets, opts.device.css_max_rules));
     }
 
     // Split any spine chapter over the device's per-file byte cap into
@@ -2174,6 +2192,33 @@ fn remap_document_colors(
             ),
             file: None,
         });
+    }
+}
+
+/// Move the `generated` stylesheets, in that order, ahead of the book's own
+/// stylesheets in `book.resources`, which is the manifest order. The device
+/// loads stylesheets in manifest order (`ContentOpfParser.cpp:362-363`,
+/// `Epub.cpp:170-171, 337` at firmware 2.0.0) and stops storing new rules once
+/// a store cap is hit, so the helper rules our output depends on go in first.
+/// At equal specificity an earlier rule loses (`CssParser.cpp:1447-1448`), but
+/// no author rule targets the `et-*` and `cpr*` classes.
+fn put_generated_css_first(book: &mut Book, generated: &[String]) {
+    let moved: Vec<(String, Resource)> = generated
+        .iter()
+        .filter_map(|path| {
+            book.resources
+                .shift_remove(path)
+                .map(|resource| (path.clone(), resource))
+        })
+        .collect();
+    let first_sheet = book
+        .resources
+        .values()
+        .position(|resource| resource.media_type == "text/css")
+        .unwrap_or(book.resources.len());
+    for (offset, (path, resource)) in moved.into_iter().enumerate() {
+        book.resources
+            .shift_insert(first_sheet + offset, path, resource);
     }
 }
 
