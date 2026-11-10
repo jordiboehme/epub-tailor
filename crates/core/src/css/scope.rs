@@ -19,20 +19,22 @@
 //!
 //! Every other selector CrossPoint 2.0 parses (descendant and child chains,
 //! ids, compound classes, `::first-letter`) is scoped through one root class,
-//! `cpr{k}-r`, put first in the `class` attribute of `<html>` and `<body>`.
-//! The device records every open element as an ancestor up to depth 16
-//! (`ChapterHtmlSlimParser.cpp:1425-1429`, `ChapterHtmlSlimParser.h:94`) and
-//! matches only an ancestor's first four classes (`CssParser.h:32`):
+//! `cpr{k}-r`, put first in the `class` attribute of `<html>` only, which
+//! rarely has classes of its own. The device records every open element as an
+//! ancestor up to depth 16 (`ChapterHtmlSlimParser.cpp:1425-1429`,
+//! `ChapterHtmlSlimParser.h:94`) and matches only an ancestor's first four
+//! classes (`CssParser.h:32`):
 //!
 //! | Original      | Scoped                 |
 //! |---------------|------------------------|
 //! | `div > p`     | `.cpr{k}-r div > p`    |
 //! | `#intro`      | `.cpr{k}-r #intro`     |
-//! | `body.x p`    | `body.cpr{k}-r.x p`    |
+//! | `body.x p`    | `.cpr{k}-r body.x p`   |
+//! | `html.x p`    | `html.cpr{k}-r.x p`    |
 //!
-//! A first compound on `html` or `body` takes the class inline right after its
-//! tag; one that already has four classes is dropped, since the device could
-//! not match it with the root class added.
+//! A first compound on `html` takes the class inline right after its tag; one
+//! that already has four classes is dropped, since the device could not match
+//! it with the root class added. `<body>` and its classes stay untouched.
 //!
 //! `k` is the 1-based index over chapters that yielded CSS. A selector that
 //! matches no element in its chapter is a dead rule and dropped; a comma group
@@ -96,19 +98,17 @@ pub(crate) fn scope_relocated_css(
         push_rule(&mut out, &scoped, &rule.declarations);
     }
     if root_scoped {
-        for root in ["html", "body"] {
-            for node in collect_by_name(doc, root) {
-                prepend_scope_class(&node, &root_class);
-            }
+        for node in collect_by_name(doc, "html") {
+            prepend_scope_class(&node, &root_class);
         }
     }
     out
 }
 
 /// Rewrite a device-legal selector that is not one of the simple shapes to
-/// require `root_class` on `<html>`/`<body>`, without touching `doc`. A first
-/// compound on `html` or `body` gets the class inline right after its tag;
-/// anything else gets it as an ancestor prefix. Returns `None` for a dead
+/// require `root_class` on `<html>`, without touching `doc`. A first compound
+/// on `html` gets the class inline right after its tag; anything else gets it
+/// as an ancestor prefix. Returns `None` for a dead
 /// selector (no element of `doc` matches, or kuchikiki cannot parse it) and
 /// for one the device or the subset filter would not take once scoped.
 fn scope_through_root(doc: &NodeRef, selector: &str, root_class: &str) -> Option<String> {
@@ -117,7 +117,7 @@ fn scope_through_root(doc: &NodeRef, selector: &str, root_class: &str) -> Option
         .find(['#', '.', ':'])
         .unwrap_or(first_compound.len());
     let tag = &first_compound[..tag_end];
-    let on_root = tag.eq_ignore_ascii_case("html") || tag.eq_ignore_ascii_case("body");
+    let on_root = tag.eq_ignore_ascii_case("html");
     let scoped = if on_root {
         // The root class takes one of the four classes the device matches
         // on an ancestor, so a compound that already has four cannot match.
@@ -135,13 +135,13 @@ fn scope_through_root(doc: &NodeRef, selector: &str, root_class: &str) -> Option
         return None;
     }
     // Dead-rule check. The device stores `::first-letter` as its own rule key
-    // on the element, so match the element. A prefixed selector also needs a
-    // root ancestor above its first compound.
+    // on the element, so match the element. A prefixed selector also needs
+    // `<html>` above its first compound.
     let chain = strip_first_letter(selector);
     let probe = if on_root {
         chain.to_string()
     } else {
-        format!("html {chain}, body {chain}")
+        format!("html {chain}")
     };
     let matched = doc
         .select(&probe)
@@ -381,10 +381,7 @@ mod tests {
     fn descendant_selector_is_scoped_through_the_root_class() {
         let (css, dom) = run("<div><p>x</p></div>", "div p{font-style:italic}", 1);
         assert_eq!(css, ".cpr1-r div p{font-style:italic}");
-        assert!(
-            dom.contains(r#"<body class="cpr1-r">"#),
-            "body carries the root class:\n{dom}"
-        );
+        assert!(dom.contains("<body>"), "body stays untouched:\n{dom}");
         assert!(
             dom.contains(r#"xhtml" class="cpr1-r">"#),
             "html carries the root class:\n{dom}"
@@ -405,17 +402,34 @@ mod tests {
     }
 
     #[test]
-    fn body_compound_gets_the_root_class_inline() {
+    fn body_compound_is_prefixed_and_body_classes_are_untouched() {
         let (css, dom) = run_with_body_class("dark", "<p>x</p>", "body.dark p{text-indent:1em}");
-        assert_eq!(css, "body.cpr1-r.dark p{text-indent:1em}");
-        assert!(
-            dom.contains(r#"<body class="cpr1-r dark">"#),
-            "root class goes first:\n{dom}"
-        );
+        assert_eq!(css, ".cpr1-r body.dark p{text-indent:1em}");
+        assert!(dom.contains(r#"<body class="dark">"#), "{dom}");
     }
 
     #[test]
-    fn root_class_goes_right_after_the_tag_before_an_id() {
+    fn html_compound_gets_the_root_class_inline() {
+        let doc = doc_from_body("<p>x</p>");
+        let html = doc.select_first("html").unwrap();
+        set_attr(html.as_node(), "class", "dark");
+        let mut warnings = Vec::new();
+        let css = scope_relocated_css(
+            &doc,
+            "html.dark p{margin:0}HTML#x p{margin:0}",
+            1,
+            "ch.xhtml",
+            false,
+            None,
+            &mut warnings,
+        );
+        // `#x` is not on the html element, so that selector is dead.
+        assert_eq!(css, "html.cpr1-r.dark p{margin:0}");
+        assert!(serialize(&doc).contains(r#"class="cpr1-r dark">"#));
+    }
+
+    #[test]
+    fn body_id_compound_is_prefixed() {
         let doc = doc_from_body("<p>x</p>");
         set_attr(&crate::html::dom::find_body(&doc).unwrap(), "id", "top");
         let mut warnings = Vec::new();
@@ -429,36 +443,56 @@ mod tests {
             &mut warnings,
         );
         // `.x` is not on the body, so that selector is dead.
-        assert_eq!(css, "body.cpr1-r#top p{text-indent:0}");
+        assert_eq!(css, ".cpr1-r body#top p{text-indent:0}");
     }
 
     #[test]
-    fn body_compound_with_four_classes_is_dropped() {
-        // The device matches only four classes of an ancestor, so the root
-        // class leaves no room for a fourth author class.
+    fn body_compound_with_four_classes_is_scoped_through_the_prefix() {
         let (css, dom) = run_with_body_class(
             "a b c d",
             "<p>x</p>",
             "body.a.b.c.d p{margin:0}body.a.b.c p{text-indent:0}",
         );
-        assert_eq!(css, "body.cpr1-r.a.b.c p{text-indent:0}");
-        assert!(dom.contains(r#"<body class="cpr1-r a b c d">"#), "{dom}");
+        assert_eq!(
+            css,
+            ".cpr1-r body.a.b.c.d p{margin:0}.cpr1-r body.a.b.c p{text-indent:0}"
+        );
+        assert!(dom.contains(r#"<body class="a b c d">"#), "{dom}");
     }
 
     #[test]
-    fn root_class_goes_first_on_a_crowded_body() {
+    fn html_compound_with_four_classes_is_dropped() {
+        // The device matches only four classes of an ancestor, so the root
+        // class leaves no room for a fourth author class on `<html>`.
+        let doc = doc_from_body("<p>x</p>");
+        let html = doc.select_first("html").unwrap();
+        set_attr(html.as_node(), "class", "a b c d");
+        let mut warnings = Vec::new();
+        let css = scope_relocated_css(
+            &doc,
+            "html.a.b.c.d p{margin:0}",
+            1,
+            "ch.xhtml",
+            false,
+            None,
+            &mut warnings,
+        );
+        assert_eq!(css, "");
+        assert!(serialize(&doc).contains(r#"class="a b c d">"#));
+    }
+
+    #[test]
+    fn a_crowded_body_keeps_its_classes() {
         let (css, dom) = run_with_body_class("a b c d", "<div><p>x</p></div>", "div p{margin:0}");
         assert_eq!(css, ".cpr1-r div p{margin:0}");
-        assert!(
-            dom.contains(r#"<body class="cpr1-r a b c d">"#),
-            "root class first:\n{dom}"
-        );
+        assert!(dom.contains(r#"<body class="a b c d">"#), "{dom}");
+        assert!(dom.contains(r#"xhtml" class="cpr1-r">"#), "{dom}");
     }
 
     #[test]
-    fn root_class_goes_before_a_simple_scope_class_on_the_body() {
+    fn root_class_goes_only_on_html_beside_a_simple_scope_class() {
         // The simple path appends `cpr1-e-body` while the loop runs; the root
-        // class is still put first, and only once.
+        // class goes on `<html>` only, once.
         let (css, dom) = run(
             "<div><p>x</p></div>",
             "body{text-align:justify}div p{margin:0}html p{text-indent:0}",
@@ -468,11 +502,8 @@ mod tests {
             css,
             "body.cpr1-e-body{text-align:justify}.cpr1-r div p{margin:0}html.cpr1-r p{text-indent:0}"
         );
-        assert!(
-            dom.contains(r#"<body class="cpr1-r cpr1-e-body">"#),
-            "{dom}"
-        );
-        assert_eq!(count(&dom, "cpr1-r"), 2, "html and body, once each:\n{dom}");
+        assert!(dom.contains(r#"<body class="cpr1-e-body">"#), "{dom}");
+        assert_eq!(count(&dom, "cpr1-r"), 1, "html only:\n{dom}");
     }
 
     #[test]
@@ -484,7 +515,7 @@ mod tests {
             "DIV P{margin:0}BODY P{text-indent:0}",
             1,
         );
-        assert_eq!(css, ".cpr1-r DIV P{margin:0}BODY.cpr1-r P{text-indent:0}");
+        assert_eq!(css, ".cpr1-r DIV P{margin:0}.cpr1-r BODY P{text-indent:0}");
     }
 
     #[test]
@@ -557,12 +588,27 @@ mod tests {
 
     #[test]
     fn scoped_sheet_is_a_fixed_point_of_the_filter() {
-        let (css, _) = run_with_body_class(
-            "dark",
-            r#"<div class="a b"><p id="i">x</p></div>"#,
+        let doc = doc_from_body(r#"<div class="a b"><p id="i">x</p></div>"#);
+        let body = crate::html::dom::find_body(&doc).unwrap();
+        set_attr(&body, "class", "dark");
+        set_attr(&body, "id", "top");
+        let html = doc.select_first("html").unwrap();
+        set_attr(html.as_node(), "class", "x");
+        let mut warnings = Vec::new();
+        let css = scope_relocated_css(
+            &doc,
             "body.dark p{margin:0}div > p{text-indent:0}.a.b #i{font-style:italic}\
-             p::first-letter{float:left}p{text-align:justify}",
+             p::first-letter{float:left}p{text-align:justify}BODY.dark p{margin:1em}\
+             body#top p{margin:2em}html.x p{margin:3em}",
+            1,
+            "ch.xhtml",
+            false,
+            None,
+            &mut warnings,
         );
+        assert!(css.contains(".cpr1-r BODY.dark p"), "{css}");
+        assert!(css.contains(".cpr1-r body#top p"), "{css}");
+        assert!(css.contains("html.cpr1-r.x p"), "{css}");
         assert!(css.contains(".cpr1-r"), "{css}");
         let mut warnings = Vec::new();
         let refiltered = crate::css::filter_css(&css, "et-relocated.css", false, &mut warnings);
