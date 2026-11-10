@@ -2,10 +2,11 @@
 //! firmware actually parses.
 //!
 //! The device's CSS grammar (see `docs/device-constraints.md`) is small. A
-//! selector is a chain of up to 8 compounds joined by descendant (` `) or child
-//! (` > `) combinators, optionally ending in `::first-letter`; a compound is an
-//! element or `*`, at most one `#id` and at most 4 classes (`CssParser.cpp:111-138,
-//! 1180-1205` at firmware 2.0.0). Sibling combinators, attribute selectors and
+//! selector is a chain of compounds joined by descendant (` `) or child (` > `)
+//! combinators, optionally ending in `::first-letter`; a compound is an element
+//! or `*`, at most one `#id` and at most 4 classes (`CssParser.cpp:111-138,
+//! 1180-1205` at firmware 2.0.0). The device sets no limit on the chain length;
+//! we keep at most 8 compounds as our own conservative cap. Sibling combinators, attribute selectors and
 //! every other pseudo are unsupported, there are no @-rules besides an
 //! unconditional `@media screen`/`all`, and a few dozen properties are honored
 //! (`CssParser.cpp:938-1144`). Everything outside that is dead weight at best
@@ -24,7 +25,6 @@ use std::sync::{Arc, RwLock};
 use lightningcss::declaration::DeclarationBlock;
 use lightningcss::media_query::{MediaList, MediaType, Qualifier};
 use lightningcss::properties::Property;
-use lightningcss::properties::list::ListStyleType;
 use lightningcss::rules::CssRule;
 use lightningcss::selector::SelectorList;
 use lightningcss::stylesheet::{ParserOptions, PrinterOptions, StyleSheet};
@@ -34,10 +34,12 @@ use lightningcss::values::color::CssColor;
 use crate::report::Warning;
 
 /// Properties the device honors, matched by canonical (unprefixed) name
-/// (`CssParser.cpp:938-1144` at firmware 2.0.0). `display`, `vertical-align`,
-/// `float` and `list-style-type` are additionally value-restricted and handled
-/// in [`property_is_supported`]; the `list-style` and `background` shorthands
-/// are rewritten in [`filter_declarations`].
+/// (`CssParser.cpp:938-1144` at firmware 2.0.0). `display`, `vertical-align`
+/// and `white-space` are additionally value-restricted and handled in
+/// [`property_is_supported`]. `float` and `list-style-type` keep every value:
+/// the device records any value as an override of an earlier rule. The
+/// `list-style` and `background` shorthands are rewritten in
+/// [`device_declaration`].
 const ALLOWED_PROPERTIES: &[&str] = &[
     "text-align",
     "font-style",
@@ -83,6 +85,10 @@ const ALLOWED_PROPERTIES: &[&str] = &[
     "border-left-style",
     "initial-letter",
     "white-space",
+    // Any value: the device records every value as an override of an
+    // earlier rule (`CssParser.cpp:1071-1073, 1082-1085`).
+    "float",
+    "list-style-type",
 ];
 
 /// Color properties kept only when the gray-tone remap is active
@@ -363,23 +369,28 @@ fn filter_declarations(block: &DeclarationBlock<'_>, keep_colors: bool) -> (Stri
 /// The `name` and serialized `value` a declaration reaches the device as, or
 /// `None` when it has no device form. Most declarations pass through as they
 /// are. Two shorthands the device does not parse are rewritten to the longhand
-/// it does: `list-style` that sets the marker type to `none` becomes
-/// `list-style-type:none` (`CssParser.cpp:1082-1085`; any other `list-style`
-/// has no device form), and under `keep_colors` `background` becomes
-/// `background-color` with its color, dropping images and positions (no
-/// concrete color means no device form; the default `transparent` counts as
-/// none).
+/// it does (`CssParser.cpp:1068-1085`): every `list-style` becomes
+/// `list-style-type` with its parsed marker type, and under `keep_colors`
+/// `background` becomes `background-color` with its color, dropping images and
+/// positions. A `background` with no color gives `transparent` (printed
+/// `#0000`), which the device records as "not shaded", so it still overrides
+/// an earlier shade.
 fn device_declaration(property: &Property<'_>, keep_colors: bool) -> Option<(String, String)> {
     match property {
-        Property::ListStyle(list_style) => (list_style.list_style_type == ListStyleType::None)
-            .then(|| ("list-style-type".to_string(), "none".to_string())),
+        Property::ListStyle(list_style) => {
+            let value = list_style
+                .list_style_type
+                .to_css_string(PrinterOptions::default())
+                .ok()?;
+            Some(("list-style-type".to_string(), value))
+        }
         Property::Background(layers) if keep_colors => {
             // Only the final layer carries a color.
-            let color = &layers.last()?.color;
-            if *color == CssColor::default() {
-                return None;
-            }
-            let value = color.to_css_string(PrinterOptions::default()).ok()?;
+            let value = layers
+                .last()?
+                .color
+                .to_css_string(PrinterOptions::default())
+                .ok()?;
             Some(("background-color".to_string(), value))
         }
         _ => {
@@ -430,10 +441,11 @@ fn property_is_supported(name: &str, value: &str, keep_colors: bool) -> bool {
         "vertical-align" => {
             value.eq_ignore_ascii_case("super") || value.eq_ignore_ascii_case("sub")
         }
-        // The device only models a left float (drop caps); anything else is a no-op.
-        "float" => value.eq_ignore_ascii_case("left"),
-        // The device only tells `none` from "draw the default marker".
-        "list-style-type" => value.eq_ignore_ascii_case("none"),
+        // The device acts only on these; any other value is ignored rather
+        // than recorded (`CssParser.cpp:949-955`).
+        "white-space" => ["pre", "pre-wrap", "break-spaces", "normal"]
+            .iter()
+            .any(|keep| value.eq_ignore_ascii_case(keep)),
         other if keep_colors && COLOR_PROPERTIES.contains(&other) => is_concrete_color(value),
         other => ALLOWED_PROPERTIES.contains(&other),
     }
@@ -447,7 +459,9 @@ pub(crate) const MAX_SELECTOR_LEN: usize = 256;
 /// relocated styles get prefixed with.
 const SCOPE_PREFIX_HEADROOM: usize = 16;
 
-/// Most compounds we keep in one selector chain.
+/// Most compounds we keep in one selector chain. This cap is ours, not the
+/// firmware's: the device has no explicit limit and tracks ancestors to depth
+/// 16, so 8 is a conservative choice.
 const MAX_COMPOUNDS: usize = 8;
 
 /// Most classes in one compound; the device rejects a fifth
@@ -926,12 +940,31 @@ p + p { text-indent: 0; }
         for declaration in [
             "font-size:1.2em",
             "font-variant:small-caps",
+            "font-variant-caps:small-caps",
             "page-break-before:always",
+            "page-break-after:always",
+            "break-before:page",
             "break-after:page",
             "border:1px solid",
+            "border-width:2px",
+            "border-style:solid",
+            "border-top:1px solid",
+            "border-right:1px solid",
+            "border-bottom:1px solid",
+            "border-left:1px solid",
+            "border-top-width:2px",
+            "border-right-width:2px",
             "border-bottom-width:2px",
+            "border-left-width:2px",
+            "border-top-style:dotted",
+            "border-right-style:dotted",
+            "border-bottom-style:dotted",
+            "border-left-style:dotted",
             "initial-letter:3",
             "white-space:pre",
+            "white-space:pre-wrap",
+            "white-space:break-spaces",
+            "white-space:normal",
             "float:left",
             "list-style-type:none",
         ] {
@@ -941,13 +974,41 @@ p + p { text-indent: 0; }
     }
 
     #[test]
-    fn float_right_and_list_style_disc_are_dropped() {
-        assert_eq!(filter("p{float:right}").css, "");
-        assert_eq!(filter("ul{list-style-type:disc}").css, "");
+    fn white_space_values_the_device_ignores_are_dropped() {
+        // The device acts only on pre, pre-wrap, break-spaces and normal
+        // (`CssParser.cpp:949-955`).
+        assert_eq!(filter("p{white-space:nowrap}").css, "");
+        assert_eq!(filter("p{white-space:pre-line}").css, "");
     }
 
     #[test]
-    fn list_style_none_shorthand_becomes_list_style_type() {
+    fn every_float_and_list_style_type_value_is_kept() {
+        // The device records any value as an explicit override (non-left
+        // clears a float, non-none draws the default marker;
+        // `CssParser.cpp:1071-1073, 1082-1085`), so dropping one would let an
+        // earlier rule win.
+        assert_eq!(filter("p{float:right}").css, "p{float:right}");
+        assert_eq!(filter("p{float:none}").css, "p{float:none}");
+        assert_eq!(
+            filter("ul{list-style-type:disc}").css,
+            "ul{list-style-type:disc}"
+        );
+        assert_eq!(
+            filter("ol{list-style-type:decimal}").css,
+            "ol{list-style-type:decimal}"
+        );
+    }
+
+    #[test]
+    fn a_list_style_type_override_survives_the_cascade() {
+        assert_eq!(
+            filter("ul{list-style:none}ul.bullets{list-style-type:disc}").css,
+            "ul{list-style-type:none}ul.bullets{list-style-type:disc}"
+        );
+    }
+
+    #[test]
+    fn list_style_shorthand_becomes_list_style_type() {
         assert_eq!(
             filter("ul{list-style:none outside}").css,
             "ul{list-style-type:none}"
@@ -956,9 +1017,16 @@ p + p { text-indent: 0; }
             filter("ul{list-style:none}").css,
             "ul{list-style-type:none}"
         );
-        // A shorthand that sets a marker type is dropped: the device has no
-        // `list-style` and draws its default marker anyway.
-        assert_eq!(filter("ul{list-style:square inside}").css, "");
+        // The device has no `list-style`, so every shorthand becomes its
+        // parsed marker type (the default `disc` when it names none).
+        assert_eq!(
+            filter("ul{list-style:square inside}").css,
+            "ul{list-style-type:square}"
+        );
+        assert_eq!(
+            filter("ul{list-style:url(x.png)}").css,
+            "ul{list-style-type:disc}"
+        );
         assert_eq!(
             filter_inline_style("list-style:none", false),
             Some("list-style-type:none".to_string())
@@ -972,10 +1040,23 @@ p + p { text-indent: 0; }
             "div{background-color:#eee}"
         );
         assert_eq!(filter("div{background:#eee url(x.png) no-repeat}").css, "");
-        // No concrete color: nothing for the device to shade, so it is dropped.
+        // No color resolves to `transparent`, which the device records as
+        // "not shaded" (`CssParser.cpp:1068-1070`), so it is kept as an
+        // override. lightningcss prints `transparent` as `#0000` (as it does
+        // for an authored `background-color:transparent`); the device reads
+        // that as luminance 0, also "not shaded", and the remap pass leaves
+        // fully transparent paint alone.
         assert_eq!(
             filter_keeping_colors("div{background:url(x.png) no-repeat}").css,
-            ""
+            "div{background-color:#0000}"
+        );
+        assert_eq!(
+            filter_keeping_colors("div{background:none}").css,
+            "div{background-color:#0000}"
+        );
+        assert_eq!(
+            filter_keeping_colors("div{background-color:transparent}").css,
+            "div{background-color:#0000}"
         );
         assert_eq!(
             filter_inline_style("background:#ddd", true),
@@ -1135,6 +1216,7 @@ p + p { text-indent: 0; }
             "border-left-style:dotted",
             "initial-letter:3",
             "white-space:pre",
+            "white-space:nowrap",
             "float:left",
             "float:right",
             "list-style-type:none",
@@ -1143,6 +1225,7 @@ p + p { text-indent: 0; }
             "list-style:square",
             "background:#eee url(x.png) no-repeat",
             "background:url(x.png)",
+            "background:none",
         ])
     }
 
