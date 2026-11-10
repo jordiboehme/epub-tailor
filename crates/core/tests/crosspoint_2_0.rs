@@ -7,7 +7,7 @@
 mod common;
 
 use common::{CONTAINER_XML, build_epub, entry};
-use epub_tailor_core::{ConvertOptions, Input, convert};
+use epub_tailor_core::{ConvertOptions, DeviceCaps, Features, Input, convert, lint_epub};
 
 /// A one-chapter EPUB3 book. `head_style` goes into a `<style>` element in
 /// the chapter head (skipped when empty), `sheet` into a linked
@@ -243,4 +243,32 @@ fn helper_paragraphs_keep_their_margin_under_author_resets() {
         chapter.contains(&format!("{cell}>line one</p>")),
         "{chapter}"
     );
+}
+
+#[test]
+fn check_and_fit_count_the_css_store_alike() {
+    let sheet: String = (0..300)
+        .map(|i| format!(".c{i},.d{i}{{margin-left:{i}px}}"))
+        .collect();
+    let body: String = (0..300)
+        .map(|i| format!(r#"<p class="c{i}">x</p>"#))
+        .collect();
+    let out = fit(book("", &sheet, &body));
+    let mut from_fit: Vec<String> = out
+        .report
+        .warnings
+        .iter()
+        .filter(|w| w.message.contains("over the device cap"))
+        .map(|w| w.message.clone())
+        .collect();
+    let mut from_check: Vec<String> =
+        lint_epub(&out.epub, &DeviceCaps::x4(), &Features::all_on(), &[])
+            .into_iter()
+            .filter(|f| f.code == "css-caps")
+            .map(|f| f.message)
+            .collect();
+    from_fit.sort();
+    from_check.sort();
+    assert!(!from_fit.is_empty());
+    assert_eq!(from_fit, from_check);
 }
