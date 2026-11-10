@@ -542,7 +542,12 @@ pub(crate) fn read_all_entries<R: Read + Seek>(
         if file.is_dir() {
             continue;
         }
-        let raw_name = file.name().to_string();
+        let raw_name = file
+            .name()
+            .map_err(|e| {
+                ConvertError::InvalidEpub(format!("unreadable name of zip entry {i}: {e}"))
+            })?
+            .into_owned();
         let key = normalize_entry_name(&raw_name);
         let mut data = Vec::with_capacity(file.size() as usize);
         file.read_to_end(&mut data).map_err(ConvertError::Io)?;

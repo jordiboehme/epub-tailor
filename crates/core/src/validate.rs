@@ -478,10 +478,21 @@ fn check_mimetype_first<R: Read + Seek>(
             return;
         }
     };
-    if file.name() != "mimetype" {
+    let name = match file.name() {
+        Ok(name) => name.into_owned(),
+        Err(e) => {
+            findings.push(LintFinding::error(
+                "mimetype-first",
+                format!("could not read the name of the first zip entry: {e}"),
+                None,
+            ));
+            return;
+        }
+    };
+    if name != "mimetype" {
         findings.push(LintFinding::error(
             "mimetype-first",
-            format!("the first zip entry is '{}', not 'mimetype'", file.name()),
+            format!("the first zip entry is '{name}', not 'mimetype'"),
             None,
         ));
         return;

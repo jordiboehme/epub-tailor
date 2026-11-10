@@ -33,7 +33,10 @@ fn read_entry_bytes(epub: &[u8], name: &str) -> Vec<u8> {
 
 fn entry_names(epub: &[u8]) -> Vec<String> {
     let archive = ZipArchive::new(Cursor::new(epub)).expect("output is a valid zip");
-    archive.file_names().map(str::to_string).collect()
+    archive
+        .file_names()
+        .map(|n| n.unwrap().into_owned())
+        .collect()
 }
 
 fn options_for(profile_name: &str) -> ConvertOptions {

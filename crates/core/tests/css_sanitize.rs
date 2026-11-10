@@ -154,7 +154,11 @@ fn the_output_has_the_ocf_zip_shape_rmsdk_requires() {
     let mut archive = ZipArchive::new(Cursor::new(&out[..])).expect("output is a valid zip");
 
     let first = archive.by_index(0).expect("the archive has entries");
-    assert_eq!(first.name(), "mimetype", "mimetype must be the first entry");
+    assert_eq!(
+        first.name().unwrap(),
+        "mimetype",
+        "mimetype must be the first entry"
+    );
     assert_eq!(
         first.compression(),
         CompressionMethod::Stored,
@@ -179,7 +183,14 @@ fn every_device_profile_still_emits_both_a_nav_document_and_an_ncx() {
         let out = convert_with(name, epub_with_modern_css());
         let mut archive = ZipArchive::new(Cursor::new(&out[..])).expect("valid zip");
         let names: Vec<String> = (0..archive.len())
-            .map(|i| archive.by_index(i).expect("entry").name().to_string())
+            .map(|i| {
+                archive
+                    .by_index(i)
+                    .expect("entry")
+                    .name()
+                    .unwrap()
+                    .into_owned()
+            })
             .collect();
         assert!(
             names.iter().any(|n| n.ends_with(".ncx")),

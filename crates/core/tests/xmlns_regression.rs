@@ -79,7 +79,7 @@ fn assert_all_content_valid(epub: &[u8]) {
         zip::ZipArchive::new(std::io::Cursor::new(epub.to_vec())).expect("output is a valid zip");
     for i in 0..archive.len() {
         let mut file = archive.by_index(i).expect("entry");
-        let name = file.name().to_string();
+        let name = file.name().unwrap().into_owned();
         if !(name.ends_with(".xhtml") || name.ends_with(".html")) {
             continue;
         }

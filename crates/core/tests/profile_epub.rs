@@ -32,7 +32,10 @@ fn entry(epub: &[u8], name: &str) -> Option<Vec<u8>> {
 
 fn entry_names(epub: &[u8]) -> Vec<String> {
     let archive = ZipArchive::new(Cursor::new(epub)).expect("output is a valid zip");
-    archive.file_names().map(String::from).collect()
+    archive
+        .file_names()
+        .map(|n| n.unwrap().into_owned())
+        .collect()
 }
 
 #[test]
@@ -147,7 +150,7 @@ fn repair_profile_drops_meta_inf_junk() {
         let mut file = archive.by_index(i).expect("entry");
         let mut data = Vec::new();
         file.read_to_end(&mut data).expect("read entry");
-        entries.push((file.name().to_string(), data));
+        entries.push((file.name().unwrap().into_owned(), data));
     }
     entries.push(("META-INF/cdp.info".to_string(), b"junk".to_vec()));
     entries.push((

@@ -44,15 +44,27 @@ ignore = [
     # -> gtk -> muda -> tauri. Unmaintained-only, no vulnerability, no upgrade
     # until glib-macros moves off it.
     "RUSTSEC-2024-0370",
-    # The rust-unic Unicode crates are all unmaintained (the whole
-    # open-i18n/rust-unic project is retired). They reach us through
-    # tauri-utils -> urlpattern -> unic-ucd-ident. Unmaintained-only, no
-    # vulnerability, no safe upgrade until urlpattern drops rust-unic.
-    "RUSTSEC-2025-0075", # unic-char-range
-    "RUSTSEC-2025-0080", # unic-common
-    "RUSTSEC-2025-0081", # unic-char-property
-    "RUSTSEC-2025-0098", # unic-ucd-version
-    "RUSTSEC-2025-0100", # unic-ucd-ident
+    # The rust-unic crates (RUSTSEC-2025-0075, -0080, -0081, -0098, -0100) left
+    # the tree with tauri-utils 2.10, whose urlpattern 0.6 no longer uses them.
+    #
+    # zbus split crates: since zbus 6 the names/variant crates live inside
+    # zbus itself, so the standalone ones are unmaintained. They reach us
+    # through tauri-plugin-opener and tauri-plugin-single-instance (zbus 5,
+    # Linux D-Bus). Unmaintained-only, no upgrade until those plugins move to
+    # zbus 6.
+    "RUSTSEC-2026-0370", # zvariant
+    "RUSTSEC-2026-0371", # zbus_names
+    "RUSTSEC-2026-0372", # zvariant_derive
+
+    # --- Core tree ---
+    # basic-toml is archived. askama_derive 0.16.1 uses it to read an
+    # optional askama.toml at compile time; we have none. Build-time only,
+    # unmaintained-only, no askama release without it yet.
+    "RUSTSEC-2026-0374",
+    # unsafe-libyaml is archived. It is the parser under serde_yaml_ng, which
+    # reads Markdown front matter and metadata sidecar files. Unmaintained-only,
+    # no vulnerability; replacing serde_yaml_ng is a separate change.
+    "RUSTSEC-2024-0449",
 ]
 
 [bans]
