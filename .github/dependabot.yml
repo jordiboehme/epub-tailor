@@ -19,6 +19,12 @@ updates:
     groups:
       cargo-minor-patch:
         update-types: [minor, patch]
+    ignore:
+      # kuchikiki pins html5ever 0.26 and passes its types to us. A newer
+      # html5ever next to it does not compile (two incompatible Atom types).
+      # Move it only together with a kuchikiki that supports the new version.
+      - dependency-name: html5ever
+      - dependency-name: markup5ever
 
   # The desktop app's frontend.
   - package-ecosystem: npm
