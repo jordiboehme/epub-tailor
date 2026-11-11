@@ -146,7 +146,7 @@ jobs:
         uses: devops-actions/actionlint@ec02b36684b2f574f1d219ad0a43b082e46bf3e4 # v0.1.13
 
       - name: zizmor
-        uses: zizmorcore/zizmor-action@85b2b9fb8e3325e7a23d7d0a9d7ba5ae0f999e3e # v0.7.1
+        uses: zizmorcore/zizmor-action@45d7276c9ca790aabd705e31ca99c6185c3e76dd # v0.8.1
         with:
           version: 1.31.1
           advanced-security: false
