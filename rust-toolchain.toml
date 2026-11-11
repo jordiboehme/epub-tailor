@@ -1,2 +1,6 @@
 [toolchain]
-channel = "stable"
+# An exact version, so a new Rust release (and its new clippy lints) never
+# turns CI red without a change here. Bump it on purpose, together with the
+# cargo-deny `rust-version` in .github/workflows/ci.yml and security.yml.
+channel = "1.99.1"
+components = ["rustfmt", "clippy"]

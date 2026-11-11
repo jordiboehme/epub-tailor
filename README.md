@@ -381,6 +381,15 @@ isbn: 9780261102217
 
 None of the device quirks are guesses. We read the CrossPoint firmware source so you do not have to, and wrote down every decode cap, supported CSS property and rendering trap in [`docs/device-constraints.md`](docs/device-constraints.md), with full citations in [`research/`](research/). It is a genuinely fun read if you have ever wondered what a 480x800, 4-gray, 400KB-of-RAM e-reader thinks of your stylesheet.
 
+## Support
+
+epub-tailor is free and open source. If it saved your library from tiny fonts and missing images, you can support or sponsor the work here:
+
+[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/V7V31T6CL9)
+[![PayPal](https://img.shields.io/badge/PayPal-sponsor-blue?logo=paypal)](https://paypal.me/jordiboehmelopez)
+
+Want a profile for your reader? [Open an issue](https://github.com/jordiboehme/epub-tailor/issues) and let's talk.
+
 ## License and compatibility
 
 MIT licensed, see [LICENSE](LICENSE). The `x4` and `x3` profiles target the Xteink X4 and X3 running the [CrossPoint](https://github.com/crosspoint-reader/crosspoint-reader) reader firmware 2.0. This is an independent project and is not affiliated with or endorsed by Xteink, CrossPoint or any other vendor named in this README (Seeed, M5Stack, BOOX, EEGOREAD, LilyGO, Metalio, Amazon, Kobo, PocketBook, tolino and Supernote included).

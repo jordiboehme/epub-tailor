@@ -6,29 +6,34 @@ on:
     # manually published - never on the draft creation itself.
     types: [published]
 
+permissions:
+  contents: read
+
 jobs:
   homebrew:
     name: update homebrew tap
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    timeout-minutes: 10
     steps:
       - name: Download release checksums
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
         run: |
           set -euo pipefail
           mkdir -p /tmp/release
-          gh release download "${{ github.event.release.tag_name }}" \
-            --repo "${{ github.repository }}" \
+          gh release download "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
             --pattern SHA256SUMS --dir /tmp/release
 
       - name: Regenerate and push the formula and the cask
         env:
           TAP_GITHUB_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
+          TAG: ${{ github.event.release.tag_name }}
         run: |
           set -euo pipefail
-          TAG="${{ github.event.release.tag_name }}"
           VERSION="${TAG#v}"
           sums="/tmp/release/SHA256SUMS"
 
@@ -55,11 +60,11 @@ jobs:
           sha_app_intel=$(sum_of "EPUB-Tailor-${TAG}-macos-intel.dmg")
 
           git clone "https://x-access-token:${TAP_GITHUB_TOKEN}@github.com/jordiboehme/homebrew-tap.git" \
-            "${{ runner.temp }}/homebrew-tap"
+            "${RUNNER_TEMP}/homebrew-tap"
 
-          mkdir -p "${{ runner.temp }}/homebrew-tap/Formula" "${{ runner.temp }}/homebrew-tap/Casks"
+          mkdir -p "${RUNNER_TEMP}/homebrew-tap/Formula" "${RUNNER_TEMP}/homebrew-tap/Casks"
 
-          cat > "${{ runner.temp }}/homebrew-tap/Formula/epub-tailor.rb" << FORMULA
+          cat > "${RUNNER_TEMP}/homebrew-tap/Formula/epub-tailor.rb" << FORMULA
           class EpubTailor < Formula
             desc "Clean, fix and tailor EPUB books to fit your e-reader"
             homepage "https://github.com/jordiboehme/epub-tailor"
@@ -105,7 +110,7 @@ jobs:
           # updater and installs new versions itself - and it also tells Homebrew
           # not to cry version mismatch when `brew list` finds a newer app than
           # the cask installed.
-          cat > "${{ runner.temp }}/homebrew-tap/Casks/epub-tailor-app.rb" << CASK
+          cat > "${RUNNER_TEMP}/homebrew-tap/Casks/epub-tailor-app.rb" << CASK
           cask "epub-tailor-app" do
             version "${VERSION}"
 
@@ -142,7 +147,7 @@ jobs:
           end
           CASK
 
-          cd "${{ runner.temp }}/homebrew-tap"
+          cd "${RUNNER_TEMP}/homebrew-tap"
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add Formula/epub-tailor.rb Casks/epub-tailor-app.rb

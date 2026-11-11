@@ -11,6 +11,10 @@ on:
 env:
   CARGO_TERM_COLOR: always
 
+# Read only by default. The publish job names the write scope it needs.
+permissions:
+  contents: read
+
 jobs:
   build:
     name: build (${{ matrix.target }})
@@ -57,15 +61,20 @@ jobs:
             archive_ext: zip
             rustflags: '-C target-feature=+crt-static'
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable branch
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          toolchain: stable
+          persist-credentials: false
 
-      - name: Add release target
-        run: rustup target add ${{ matrix.target }}
+      # rust-toolchain.toml pins the version; this installs exactly that and
+      # adds the release target to it.
+      - name: Install Rust toolchain
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          rustup toolchain install
+          rustup target add "$TARGET"
+          rustup show active-toolchain
 
       - name: Install musl-tools
         if: matrix.musl
@@ -73,17 +82,13 @@ jobs:
           sudo apt-get -o Acquire::Retries=5 update
           sudo apt-get -o Acquire::Retries=5 install -y musl-tools
 
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
-        with:
-          key: release-${{ matrix.target }}
-
       - name: Resolve release version
         id: version
         shell: bash
         run: |
           set -euo pipefail
-          if [ "${{ github.ref_type }}" = "tag" ]; then
-            tag="${{ github.ref_name }}"
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            tag="$GITHUB_REF_NAME"
             echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
           else
             echo "version=0.0.0-dev" >> "$GITHUB_OUTPUT"
@@ -100,7 +105,7 @@ jobs:
         run: |
           set -euo pipefail
           bin="target/${{ matrix.target }}/release/epub-tailor"
-          if [ "${{ runner.os }}" = "Windows" ]; then
+          if [ "$RUNNER_OS" = "Windows" ]; then
             bin="target/${{ matrix.target }}/release/epub-tailor.exe"
           fi
           if [ ! -f "$bin" ]; then
@@ -151,7 +156,7 @@ jobs:
           done
           if [ "${#missing[@]}" -eq 0 ]; then
             echo "sign=true" >> "$GITHUB_OUTPUT"
-          elif [ "${#missing[@]}" -eq 6 ] && [ "${{ github.ref_type }}" != "tag" ]; then
+          elif [ "${#missing[@]}" -eq 6 ] && [ "$GITHUB_REF_TYPE" != "tag" ]; then
             echo "::notice::Apple signing secrets are not configured; this dry run produces an UNSIGNED macOS binary"
             echo "sign=false" >> "$GITHUB_OUTPUT"
           else
@@ -183,6 +188,7 @@ jobs:
         if: matrix.codesign && steps.signing.outputs.sign == 'true'
         shell: bash
         env:
+          BIN: ${{ steps.bin.outputs.path }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           set -euo pipefail
@@ -197,9 +203,9 @@ jobs:
             --identifier io.github.jordiboehme.epub-tailor \
             --keychain "$keychain" \
             --sign "$identity" \
-            "${{ steps.bin.outputs.path }}"
-          codesign --verify --strict --verbose=2 "${{ steps.bin.outputs.path }}"
-          info="$(codesign --display --verbose=2 "${{ steps.bin.outputs.path }}" 2>&1)"
+            "$BIN"
+          codesign --verify --strict --verbose=2 "$BIN"
+          info="$(codesign --display --verbose=2 "$BIN" 2>&1)"
           echo "$info"
           grep -q "Identifier=io.github.jordiboehme.epub-tailor" <<< "$info"
           grep -q "TeamIdentifier=${APPLE_TEAM_ID}" <<< "$info"
@@ -209,6 +215,7 @@ jobs:
         if: matrix.codesign && steps.signing.outputs.sign == 'true'
         shell: bash
         env:
+          BIN: ${{ steps.bin.outputs.path }}
           APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
           APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
           APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
@@ -217,7 +224,7 @@ jobs:
           key="$RUNNER_TEMP/asc-key.p8"
           printf '%s\n' "$APPLE_API_KEY_P8" > "$key"
           zip="$RUNNER_TEMP/notarize.zip"
-          ditto -c -k "${{ steps.bin.outputs.path }}" "$zip"
+          ditto -c -k "$BIN" "$zip"
           result="$RUNNER_TEMP/notarize-result.json"
           set +e
           xcrun notarytool submit "$zip" \
@@ -242,10 +249,12 @@ jobs:
       - name: Smoke test the signed binary
         if: matrix.codesign && steps.signing.outputs.sign == 'true'
         shell: bash
+        env:
+          BIN: ${{ steps.bin.outputs.path }}
         run: |
           set -euo pipefail
-          "${{ steps.bin.outputs.path }}" --version
-          "${{ steps.bin.outputs.path }}" check --help
+          "$BIN" --version
+          "$BIN" check --help
 
       - name: Delete signing keychain
         if: always() && matrix.codesign
@@ -260,13 +269,16 @@ jobs:
       - name: Stage archive contents
         id: stage
         shell: bash
+        env:
+          BIN: ${{ steps.bin.outputs.path }}
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -euo pipefail
-          version="${{ steps.version.outputs.version }}"
+          version="$VERSION"
           name="epub-tailor-v${version}-${{ matrix.platform }}"
           stage="dist/$name"
           mkdir -p "$stage"
-          cp "${{ steps.bin.outputs.path }}" "$stage/"
+          cp "$BIN" "$stage/"
           cp LICENSE "$stage/"
           cp README.md "$stage/"
           echo "name=$name" >> "$GITHUB_OUTPUT"
@@ -275,16 +287,20 @@ jobs:
         if: matrix.archive_ext == 'tar.gz'
         shell: bash
         working-directory: dist
-        run: tar czf "${{ steps.stage.outputs.name }}.tar.gz" "${{ steps.stage.outputs.name }}"
+        env:
+          STAGE_NAME: ${{ steps.stage.outputs.name }}
+        run: tar czf "${STAGE_NAME}.tar.gz" "${STAGE_NAME}"
 
       - name: Package archive (zip)
         if: matrix.archive_ext == 'zip'
         shell: pwsh
         working-directory: dist
-        run: Compress-Archive -Path "${{ steps.stage.outputs.name }}/*" -DestinationPath "${{ steps.stage.outputs.name }}.zip"
+        env:
+          STAGE_NAME: ${{ steps.stage.outputs.name }}
+        run: Compress-Archive -Path "${env:STAGE_NAME}/*" -DestinationPath "${env:STAGE_NAME}.zip"
 
       - name: Upload artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: epub-tailor-${{ matrix.platform }}
           path: dist/${{ steps.stage.outputs.name }}.${{ matrix.archive_ext }}
@@ -338,15 +354,20 @@ jobs:
             family: linux
             bundles: appimage,deb
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable branch
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          toolchain: stable
+          persist-credentials: false
 
-      - name: Add release target
-        run: rustup target add ${{ matrix.target }}
+      # rust-toolchain.toml pins the version; this installs exactly that and
+      # adds the release target to it.
+      - name: Install Rust toolchain
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          rustup toolchain install
+          rustup target add "$TARGET"
+          rustup show active-toolchain
 
       # Tauri's Linux dependencies: the webview itself, the AppImage tooling's
       # helpers and patchelf, which the AppImage bundler shells out to.
@@ -359,15 +380,13 @@ jobs:
             libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf \
             xdg-utils
 
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
-          cache: npm
-          cache-dependency-path: app/package-lock.json
-
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
-        with:
-          key: release-app-${{ matrix.target }}
+          # No cache in a release: a cache written by another workflow could
+          # put poisoned files into the shipped build. Release builds start
+          # clean, the same reason they have no rust-cache.
+          package-manager-cache: false
 
       - name: Resolve release version
         id: version
@@ -383,8 +402,8 @@ jobs:
             echo "::error::could not read the workspace version from Cargo.toml"
             exit 1
           fi
-          if [ "${{ github.ref_type }}" = "tag" ]; then
-            tag="${{ github.ref_name }}"
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            tag="$GITHUB_REF_NAME"
             version="${tag#v}"
             if [ "$version" != "$crate" ]; then
               echo "::error::tag ${tag} does not match the workspace version ${crate}: bump Cargo.toml (and Cargo.lock) or retag, otherwise the updater will offer this release to the people already running it"
@@ -484,7 +503,7 @@ jobs:
             # APPLE_CERTIFICATE present, Tauri imports the .p12 into a throwaway
             # keychain of its own and infers the Developer ID identity from it.
             echo "sign=true" >> "$GITHUB_OUTPUT"
-          elif [ "${#missing[@]}" -eq 6 ] && [ "${{ github.ref_type }}" != "tag" ]; then
+          elif [ "${#missing[@]}" -eq 6 ] && [ "$GITHUB_REF_TYPE" != "tag" ]; then
             echo "::notice::Apple signing secrets are not configured; this dry run produces an UNSIGNED, unnotarized macOS bundle"
             echo "sign=false" >> "$GITHUB_OUTPUT"
           else
@@ -524,7 +543,7 @@ jobs:
           mask_lines() { while IFS= read -r line; do mask "$line"; done <<< "$1"; }
 
           if [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
-            if [ -z "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}" ] && [ "${{ github.ref_type }}" == "tag" ]; then
+            if [ -z "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}" ] && [ "$GITHUB_REF_TYPE" == "tag" ]; then
               echo "::error::TAURI_SIGNING_PRIVATE_KEY_PASSWORD is not set; a tag build with TAURI_SIGNING_PRIVATE_KEY configured needs its password too, or the bundler fails deep inside minisign with an opaque decrypt error"
               exit 1
             fi
@@ -537,7 +556,7 @@ jobs:
               echo "TAURI_KEY_EOF"
               echo "TAURI_SIGNING_PRIVATE_KEY_PASSWORD=$signing_key_password"
             } >> "$GITHUB_ENV"
-          elif [ "${{ github.ref_type }}" != "tag" ]; then
+          elif [ "$GITHUB_REF_TYPE" != "tag" ]; then
             echo "::notice::TAURI_SIGNING_PRIVATE_KEY is not configured; this dry run signs its updater artifacts with a throwaway key that no released app trusts"
             npx tauri signer generate -w "$RUNNER_TEMP/updater-dry-run.key" -f --ci
             # Verbatim, for the reason the real-key branch above spells out: the
@@ -569,9 +588,11 @@ jobs:
       - name: Stage the bundles
         id: stage
         shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -euo pipefail
-          version="${{ steps.version.outputs.version }}"
+          version="$VERSION"
           bundle="target/${{ matrix.target }}/release/bundle"
           base="EPUB-Tailor-v${version}-${{ matrix.platform }}"
           mkdir -p dist-app
@@ -622,11 +643,12 @@ jobs:
         if: matrix.family == 'macos' && steps.signing.outputs.sign == 'true'
         shell: bash
         env:
+          DMG: ${{ steps.stage.outputs.dmg }}
           APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
           APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
         run: |
           set -euo pipefail
-          dmg="${{ steps.stage.outputs.dmg }}"
+          dmg="$DMG"
           key="$RUNNER_TEMP/asc-key.p8"
           result="$RUNNER_TEMP/dmg-notarize.json"
           set +e
@@ -646,7 +668,21 @@ jobs:
             fi
             exit 1
           fi
-          xcrun stapler staple "$dmg"
+          # Apple has accepted the DMG at this point. The staple step only
+          # fetches the ticket from Apple's CDN, and that fetch sometimes
+          # loses its connection (stapler exit 68). Try a few times before
+          # failing a release that is otherwise done.
+          for attempt in 1 2 3 4 5; do
+            if xcrun stapler staple "$dmg"; then
+              break
+            fi
+            if [ "$attempt" -eq 5 ]; then
+              echo "::error::stapling the DMG failed 5 times"
+              exit 1
+            fi
+            echo "stapling failed (attempt $attempt), retrying in 30 seconds"
+            sleep 30
+          done
           xcrun stapler validate "$dmg"
           spctl -a -t open --context context:primary-signature -vv "$dmg"
 
@@ -656,7 +692,7 @@ jobs:
         run: rm -f "$RUNNER_TEMP/asc-key.p8"
 
       - name: Upload artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: epub-tailor-app-${{ matrix.platform }}
           path: dist-app/*
@@ -674,12 +710,13 @@ jobs:
     steps:
       # Full history and tags are required for git-cliff to resolve the
       # commit range for the release notes below.
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Download all archives
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           path: downloads
 
@@ -714,9 +751,9 @@ jobs:
       - name: Generate latest.json for the updater
         run: |
           set -euo pipefail
-          tag="${{ github.ref_name }}"
+          tag="$GITHUB_REF_NAME"
           version="${tag#v}"
-          base_url="https://github.com/${{ github.repository }}/releases/download/${tag}"
+          base_url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${tag}"
           missing=0
           platforms='{}'
 
@@ -750,7 +787,7 @@ jobs:
 
           jq -n \
             --arg version "$version" \
-            --arg notes "EPUB Tailor ${tag}. The full notes are at https://github.com/${{ github.repository }}/releases/tag/${tag}" \
+            --arg notes "EPUB Tailor ${tag}. The full notes are at https://github.com/${GITHUB_REPOSITORY}/releases/tag/${tag}" \
             --arg pub_date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             --argjson platforms "$platforms" \
             '{ version: $version, notes: $notes, pub_date: $pub_date, platforms: $platforms }' \
@@ -758,7 +795,7 @@ jobs:
           cat release/latest.json
 
       - name: Generate release notes
-        uses: orhun/git-cliff-action@f50e11560dce63f7c33227798f90b924471a88b5 # v4.8.0
+        uses: orhun/git-cliff-action@a9a95522b26fe6403f7bb24031f21fb573d0f5ff # v4.9.1
         with:
           config: cliff.toml
           args: --latest
@@ -773,7 +810,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          gh release create "${{ github.ref_name }}" release/* \
+          gh release create "$GITHUB_REF_NAME" release/* \
             --draft \
-            --title "${{ github.ref_name }}" \
+            --title "$GITHUB_REF_NAME" \
             --notes-file release-notes.md
