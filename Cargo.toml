@@ -22,7 +22,7 @@ roxmltree = "0.21"
 encoding_rs = "0.8"
 indexmap = "2"
 kuchikiki = "0.8"
-html5ever = "0.26"
+html5ever = "0.40"
 image = { version = "0.25", default-features = false, features = [
     "png",
     "jpeg",

@@ -1447,7 +1447,7 @@ dependencies = [
  "comrak",
  "encoding_rs",
  "epub-tailor-testfixtures",
- "html5ever 0.26.0",
+ "html5ever 0.40.1",
  "image",
  "indexmap 2.14.2",
  "insta",
