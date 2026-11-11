@@ -8,8 +8,7 @@
 .idea/
 .vscode/
 plans/
-CLAUDE.md
-AGENTS.md
+/AGENTS.md
 
 # release build artifacts (packaged locally while testing release.yml)
 /*.tar.gz
