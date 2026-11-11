@@ -1,0 +1,58 @@
+version: 2
+
+updates:
+  # Cargo.lock and the version requirements in Cargo.toml. Read the
+  # changelog before merging a bump: format and rendering crates change fast.
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    # Give a new release a few days before it is proposed, so a broken or
+    # malicious version has time to be yanked. Security updates ignore this.
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 10
+    commit-message:
+      prefix: chore
+      include: scope
+    groups:
+      cargo-minor-patch:
+        update-types: [minor, patch]
+
+  # The desktop app's frontend.
+  - package-ecosystem: npm
+    directory: /app
+    schedule:
+      interval: weekly
+      day: monday
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 10
+    commit-message:
+      prefix: chore
+      include: scope
+    groups:
+      npm-minor-patch:
+        update-types: [minor, patch]
+    ignore:
+      # TypeScript stays on 6.x until the Svelte tooling supports 7
+      # (sveltejs/language-tools#3063).
+      - dependency-name: typescript
+        update-types: [version-update:semver-major]
+
+  # The SHA pins in .github/workflows. Dependabot updates the SHA and the
+  # version comment together.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 10
+    commit-message:
+      prefix: ci
+    groups:
+      actions-minor-patch:
+        update-types: [minor, patch]
