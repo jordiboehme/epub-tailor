@@ -5,23 +5,42 @@ on:
     branches: [main]
   pull_request:
 
+env:
+  CARGO_TERM_COLOR: always
+
+# Read only by default: every job can check out the tree and nothing more. A
+# job that needs another scope names it in its own `permissions:` block.
+permissions:
+  contents: read
+
+# A newer push to a pull request cancels the run it supersedes. A push to main
+# keeps one group per commit and never cancels.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   test:
+    timeout-minutes: 45
     strategy:
       matrix:
         os: [ubuntu-24.04, macos-15, windows-2025]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable branch
         with:
-          toolchain: stable
+          persist-credentials: false
+      # rust-toolchain.toml pins the version; this installs exactly that.
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install
+          rustup show active-toolchain
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - run: cargo fmt --all --check
       # epub-tailor-app (the Tauri desktop crate) is excluded from the workspace
       # clippy/test jobs: it needs a built frontend (../dist) and system webview
       # libraries, and it has its own build path. CI covers the CLI/core here.
-      - run: cargo clippy --workspace --exclude epub-tailor-app --all-targets -- -D warnings
+      - run: cargo clippy --workspace --exclude epub-tailor-app --all-targets --locked -- -D warnings
       # `epubcheck` pulls in a JRE, and installing one on 24.04 trips
       # `needrestart`, which asks which services to restart and waits for an
       # answer - `-y` covers apt's own questions, not that one. Two runs hung
@@ -41,27 +60,32 @@ jobs:
       - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         with:
           tool: nextest
-      - run: cargo nextest run --workspace --exclude epub-tailor-app
+      - run: cargo nextest run --workspace --exclude epub-tailor-app --locked
       # nextest does not run doctests; keep them covered separately.
-      - run: cargo test --workspace --exclude epub-tailor-app --doc
+      - run: cargo test --workspace --exclude epub-tailor-app --doc --locked
 
   # The desktop app, kept in its own job so the matrix above stays quick: this
   # one needs Node, a webview toolchain and a built frontend before cargo can so
   # much as look at the crate.
   app:
     name: desktop app
+    timeout-minutes: 45
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Install Linux webview dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
             libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev \
             libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf
-      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable branch
-        with:
-          toolchain: stable
+      # rust-toolchain.toml pins the version; this installs exactly that.
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install
+          rustup show active-toolchain
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
@@ -85,11 +109,68 @@ jobs:
         working-directory: app
       - run: npm run prepare-sidecar
         working-directory: app
-      - run: cargo clippy -p epub-tailor-app --all-targets -- -D warnings
-      - run: cargo test -p epub-tailor-app
+      - run: cargo clippy -p epub-tailor-app --all-targets --locked -- -D warnings
+      - run: cargo test -p epub-tailor-app --locked
 
   deny:
+    timeout-minutes: 15
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+        with:
+          # The rust-toolchain.toml pin. Move it together with that file.
+          rust-version: '1.99.1'
+          command: check
+          arguments: --all-features --locked
+
+  # Static checks of the workflows. actionlint catches expression, type and
+  # shell errors; zizmor catches the security mistakes (template injection,
+  # over-wide tokens, persisted credentials, unpinned or impostor actions).
+  # zizmor fails the job inline instead of uploading SARIF, so the job needs
+  # no write scope. An accepted finding is ignored with a
+  # `# zizmor: ignore[...]` comment next to its line and a reason above it.
+  workflow-lint:
+    name: workflow-lint
+    timeout-minutes: 10
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # actionlint 1.7.12 (the image digest is in the action's settings.json).
+      - name: actionlint
+        uses: devops-actions/actionlint@ec02b36684b2f574f1d219ad0a43b082e46bf3e4 # v0.1.13
+
+      - name: zizmor
+        uses: zizmorcore/zizmor-action@85b2b9fb8e3325e7a23d7d0a9d7ba5ae0f999e3e # v0.7.1
+        with:
+          version: 1.31.1
+          advanced-security: false
+          annotations: true
+
+  # The one check a branch protection rule requires. It always runs and
+  # passes only when every job above passed. A job `if` without always()
+  # would skip this job when a need fails, and a skipped required check is
+  # not a reliable signal.
+  ci-passed:
+    name: ci-passed
+    timeout-minutes: 5
+    needs: [test, app, deny, workflow-lint]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Every job passed
+        env:
+          RESULTS: ${{ toJSON(needs.*.result) }}
+          FAILED: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'skipped') }}
+        run: |
+          set -euo pipefail
+          echo "ci-passed: job results $RESULTS"
+          if [ "$FAILED" = "true" ]; then
+            echo "::error::at least one CI job failed, was cancelled or was skipped"
+            exit 1
+          fi
