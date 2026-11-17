@@ -1,9 +1,20 @@
 name: Homebrew
 
 on:
+  # The normal way in: release.yml calls this after it published a release.
+  # A release published with the workflow token fires no `release` event,
+  # so the call is what updates the tap.
+  workflow_call:
+    inputs:
+      tag:
+        description: The published release tag, v<version>
+        type: string
+        required: true
+    secrets:
+      TAP_GITHUB_TOKEN:
+        required: true
+  # The fallback: a release published by hand.
   release:
-    # Fires when a release is published, i.e. when release.yml's draft is
-    # manually published - never on the draft creation itself.
     types: [published]
 
 permissions:
@@ -20,7 +31,7 @@ jobs:
       - name: Download release checksums
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.event.release.tag_name }}
+          TAG: ${{ inputs.tag || github.event.release.tag_name }}
         run: |
           set -euo pipefail
           mkdir -p /tmp/release
@@ -31,7 +42,7 @@ jobs:
       - name: Regenerate and push the formula and the cask
         env:
           TAP_GITHUB_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
-          TAG: ${{ github.event.release.tag_name }}
+          TAG: ${{ inputs.tag || github.event.release.tag_name }}
         run: |
           set -euo pipefail
           VERSION="${TAG#v}"

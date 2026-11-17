@@ -1,9 +1,10 @@
 # git-cliff configuration for epub-tailor release notes.
 # https://git-cliff.org/docs/configuration
 #
-# Notes are generated per release (`git cliff --latest` in the publish job,
-# `git cliff --unreleased` for local testing) and fed straight into the
-# GitHub release body - terse bullets, no scopes, no commit SHAs or links.
+# A drafting aid only: `git cliff --unreleased` lists what changed since the
+# last tag, as a starting point for release-notes/v<version>.md. The release
+# workflow publishes that curated file, never this output. Terse bullets, no
+# scopes, no commit SHAs or links.
 # Empty sections are omitted because `filter_commits` drops everything that
 # doesn't match a parser below, so a group with zero matching commits never
 # reaches the template.
