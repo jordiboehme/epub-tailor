@@ -234,6 +234,12 @@ jobs:
           advanced-security: false
           annotations: true
 
+      # The decision release-check makes on main, made on every pull request
+      # too: a version bump without its release notes fails here, before the
+      # merge, instead of leaving an unreleased version on main.
+      - name: A new version carries its release notes
+        run: bash scripts/release-check.sh
+
   # The one check the main ruleset requires. It always runs and passes only
   # when every job above passed. The single exception: on a push to main whose
   # tree a pull request already tested, `test` and `app` are skipped on
