@@ -1,12 +1,46 @@
 name: Release
 
+# Three ways in, one release tag. The `resolve` job below works it out once,
+# and every later job reads its outputs, never the ref:
+#
+# - workflow_call: CI on main calls this after ci-passed when the workspace
+#   version has no tag yet (scripts/release-check.sh). The tag comes from the
+#   `tag` input; github.ref is the caller's (refs/heads/main) here, so it says
+#   nothing about the release. The publish job creates the tag at the tested
+#   commit (github.sha) first.
+# - push of a `v*` tag: the fallback. The tag is the pushed ref.
+# - workflow_dispatch: a dry run. It builds and packages everything and
+#   publishes nothing.
 on:
   push:
     tags:
       - 'v*'
-  # Manual dry run: exercises the full build-and-package matrix without
-  # publishing a GitHub Release (the publish job only runs for a tag push).
   workflow_dispatch: {}
+  workflow_call:
+    inputs:
+      tag:
+        description: The tag to release, v<version> of the workspace Cargo.toml
+        type: string
+        required: true
+    secrets:
+      APPLE_CERTIFICATE_P12:
+        required: false
+      APPLE_CERTIFICATE_PASSWORD:
+        required: false
+      APPLE_TEAM_ID:
+        required: false
+      APPLE_API_KEY_P8:
+        required: false
+      APPLE_API_KEY_ID:
+        required: false
+      APPLE_API_ISSUER_ID:
+        required: false
+      TAURI_SIGNING_PRIVATE_KEY:
+        required: false
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD:
+        required: false
+      TAP_GITHUB_TOKEN:
+        required: false
 
 env:
   CARGO_TERM_COLOR: always
@@ -16,9 +50,98 @@ permissions:
   contents: read
 
 jobs:
+  # Resolves the release tag once for every job below, and stops a release
+  # whose notes are missing before anything is built.
+  #
+  # Outputs:
+  # - tag: the release tag, or empty for a dry run.
+  # - publish: true when the run publishes (a call or a tag push).
+  # - build: false only when a call finds its tag already at another commit,
+  #   which means another release of this version won the race; then the run
+  #   skips everything after this job and stays green.
+  # - called: true for a call from CI, which has to create the tag.
+  resolve:
+    name: resolve the release tag
+    timeout-minutes: 10
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.resolve.outputs.tag }}
+      publish: ${{ steps.resolve.outputs.publish }}
+      build: ${{ steps.resolve.outputs.build }}
+      called: ${{ steps.resolve.outputs.called }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # inputs.tag is set only by a call. A tag push and a dry run have no
+      # inputs, and in a call GITHUB_REF_TYPE is the caller's (branch).
+      - name: Resolve the release tag
+        id: resolve
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          if [ -n "${INPUT_TAG:-}" ]; then
+            tag="$INPUT_TAG"
+            if ! [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "::error::the tag input '$tag' is not of the form vX.Y.Z"
+              exit 1
+            fi
+            # The caller checked that the tag is new, but a second push to
+            # main can pass that check while the first release still runs.
+            # The tag at this commit is a re-run and goes on; the tag at
+            # another commit means that release won, so this one stops here.
+            at="$(bash scripts/release-check.sh tag-commit "$tag")"
+            build=true
+            if [ -n "$at" ] && [ "$at" != "$GITHUB_SHA" ]; then
+              echo "release: $tag already points at $at, not at $GITHUB_SHA, so another run released it; nothing to do"
+              build=false
+            fi
+            { echo "tag=$tag"; echo "publish=$build"; echo "build=$build"; echo "called=true"; } >> "$GITHUB_OUTPUT"
+          elif [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            { echo "tag=$GITHUB_REF_NAME"; echo "publish=true"; echo "build=true"; echo "called=false"; } >> "$GITHUB_OUTPUT"
+          else
+            { echo "tag="; echo "publish=false"; echo "build=true"; echo "called=false"; } >> "$GITHUB_OUTPUT"
+          fi
+
+      # The workspace version and the tag must agree: the bundler stamps the
+      # app with the workspace version while latest.json advertises the tag's,
+      # and if those two ever disagree the updater offers every user a release
+      # they are already running. The notes must be there too, or the release
+      # would fail only at the very end, after the whole build matrix.
+      - name: Check the version and the release notes
+        env:
+          RELEASE_TAG: ${{ steps.resolve.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if [ -z "$RELEASE_TAG" ]; then
+            echo "a dry run, nothing to check"
+            exit 0
+          fi
+          version="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)"
+          if [ "$RELEASE_TAG" != "v$version" ]; then
+            echo "::error::the tag $RELEASE_TAG does not match the workspace version $version: bump Cargo.toml (and Cargo.lock) or retag"
+            exit 1
+          fi
+          file="release-notes/${RELEASE_TAG}.md"
+          if [ ! -s "$file" ]; then
+            echo "::error file=$file::$file is missing or empty. Add it to main (a merge releases again), or push the tag again after adding it."
+            exit 1
+          fi
+          if ! head -1 "$file" | grep -qE '^# .+'; then
+            echo "::error file=$file::$file must open with an H1, the release's motto."
+            exit 1
+          fi
+          echo "release: $RELEASE_TAG matches the workspace version and $file is in place"
+
   build:
     name: build (${{ matrix.target }})
+    needs: resolve
+    if: needs.resolve.outputs.build == 'true'
     runs-on: ${{ matrix.os }}
+    env:
+      RELEASE_TAG: ${{ needs.resolve.outputs.tag }}
     strategy:
       fail-fast: false
       matrix:
@@ -27,7 +150,6 @@ jobs:
             platform: macos-arm64
             os: macos-latest
             archive_ext: tar.gz
-            test: true
             codesign: true
           - target: x86_64-apple-darwin
             platform: macos-intel
@@ -36,14 +158,12 @@ jobs:
             # macOS image.
             os: macos-15-intel
             archive_ext: tar.gz
-            test: true
             codesign: true
           - target: x86_64-unknown-linux-musl
             platform: linux-amd64
             os: ubuntu-latest
             archive_ext: tar.gz
             musl: true
-            test: true
           - target: aarch64-unknown-linux-musl
             platform: linux-arm64
             os: ubuntu-24.04-arm
@@ -54,7 +174,6 @@ jobs:
             os: windows-latest
             archive_ext: zip
             rustflags: '-C target-feature=+crt-static'
-            test: true
           - target: aarch64-pc-windows-msvc
             platform: windows-arm64
             os: windows-11-arm
@@ -87,9 +206,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
-            tag="$GITHUB_REF_NAME"
-            echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+          if [ -n "$RELEASE_TAG" ]; then
+            echo "version=${RELEASE_TAG#v}" >> "$GITHUB_OUTPUT"
           else
             echo "version=0.0.0-dev" >> "$GITHUB_OUTPUT"
           fi
@@ -114,20 +232,16 @@ jobs:
           fi
           echo "path=$bin" >> "$GITHUB_OUTPUT"
 
-      # Only the four established, well-proven runner images (both macOS
-      # legs, and the x64 legs on Linux and Windows) run the workspace test
-      # suite here. The two arm64 Linux/Windows runners are newer, less
-      # proven images: CI already covers the workspace's correctness on
-      # ubuntu-24.04/macos-15/windows-2025, so this is a release-specific
-      # smoke check, not a substitute for CI.
-      - name: Run workspace tests
-        if: matrix.test
-        # epub-tailor-app (the Tauri desktop crate) is excluded: it cannot build
-        # on the musl and static-windows release targets and is not part of the
-        # CLI release artifact.
-        run: cargo test --workspace --exclude epub-tailor-app --release --target ${{ matrix.target }}
+      # No test suite here: CI tested exactly this tree before it reached
+      # main. Every leg runs on a native runner for its target, so a quick
+      # start of the release binary still proves each build runs at all.
+      - name: Smoke test the release binary
+        shell: bash
         env:
-          RUSTFLAGS: ${{ matrix.rustflags }}
+          BIN: ${{ steps.bin.outputs.path }}
+        run: |
+          set -euo pipefail
+          "$BIN" --version
 
       # macOS code signing and notarization: sign the bare Mach-O with a
       # Developer ID Application certificate under the hardened runtime,
@@ -156,11 +270,11 @@ jobs:
           done
           if [ "${#missing[@]}" -eq 0 ]; then
             echo "sign=true" >> "$GITHUB_OUTPUT"
-          elif [ "${#missing[@]}" -eq 6 ] && [ "$GITHUB_REF_TYPE" != "tag" ]; then
+          elif [ "${#missing[@]}" -eq 6 ] && [ -z "$RELEASE_TAG" ]; then
             echo "::notice::Apple signing secrets are not configured; this dry run produces an UNSIGNED macOS binary"
             echo "sign=false" >> "$GITHUB_OUTPUT"
           else
-            echo "::error::Apple signing secrets missing (${missing[*]}); a tag build must sign and a partial secret set is always a misconfiguration"
+            echo "::error::Apple signing secrets missing (${missing[*]}); a release build must sign and a partial secret set is always a misconfiguration"
             exit 1
           fi
 
@@ -312,7 +426,11 @@ jobs:
   # broken bundler leg must not take the CLI release down with it.
   build-app:
     name: build app (${{ matrix.platform }})
+    needs: resolve
+    if: needs.resolve.outputs.build == 'true'
     runs-on: ${{ matrix.os }}
+    env:
+      RELEASE_TAG: ${{ needs.resolve.outputs.tag }}
     strategy:
       fail-fast: false
       matrix:
@@ -402,8 +520,8 @@ jobs:
             echo "::error::could not read the workspace version from Cargo.toml"
             exit 1
           fi
-          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
-            tag="$GITHUB_REF_NAME"
+          if [ -n "$RELEASE_TAG" ]; then
+            tag="$RELEASE_TAG"
             version="${tag#v}"
             if [ "$version" != "$crate" ]; then
               echo "::error::tag ${tag} does not match the workspace version ${crate}: bump Cargo.toml (and Cargo.lock) or retag, otherwise the updater will offer this release to the people already running it"
@@ -503,11 +621,11 @@ jobs:
             # APPLE_CERTIFICATE present, Tauri imports the .p12 into a throwaway
             # keychain of its own and infers the Developer ID identity from it.
             echo "sign=true" >> "$GITHUB_OUTPUT"
-          elif [ "${#missing[@]}" -eq 6 ] && [ "$GITHUB_REF_TYPE" != "tag" ]; then
+          elif [ "${#missing[@]}" -eq 6 ] && [ -z "$RELEASE_TAG" ]; then
             echo "::notice::Apple signing secrets are not configured; this dry run produces an UNSIGNED, unnotarized macOS bundle"
             echo "sign=false" >> "$GITHUB_OUTPUT"
           else
-            echo "::error::Apple signing secrets missing (${missing[*]}); a tag build must sign and a partial secret set is always a misconfiguration"
+            echo "::error::Apple signing secrets missing (${missing[*]}); a release build must sign and a partial secret set is always a misconfiguration"
             exit 1
           fi
 
@@ -543,8 +661,8 @@ jobs:
           mask_lines() { while IFS= read -r line; do mask "$line"; done <<< "$1"; }
 
           if [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
-            if [ -z "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}" ] && [ "$GITHUB_REF_TYPE" == "tag" ]; then
-              echo "::error::TAURI_SIGNING_PRIVATE_KEY_PASSWORD is not set; a tag build with TAURI_SIGNING_PRIVATE_KEY configured needs its password too, or the bundler fails deep inside minisign with an opaque decrypt error"
+            if [ -z "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}" ] && [ -n "$RELEASE_TAG" ]; then
+              echo "::error::TAURI_SIGNING_PRIVATE_KEY_PASSWORD is not set; a release build with TAURI_SIGNING_PRIVATE_KEY configured needs its password too, or the bundler fails deep inside minisign with an opaque decrypt error"
               exit 1
             fi
             signing_key_password="$(printf '%s' "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}" | tr -d '\r\n')"
@@ -556,7 +674,7 @@ jobs:
               echo "TAURI_KEY_EOF"
               echo "TAURI_SIGNING_PRIVATE_KEY_PASSWORD=$signing_key_password"
             } >> "$GITHUB_ENV"
-          elif [ "$GITHUB_REF_TYPE" != "tag" ]; then
+          elif [ -z "$RELEASE_TAG" ]; then
             echo "::notice::TAURI_SIGNING_PRIVATE_KEY is not configured; this dry run signs its updater artifacts with a throwaway key that no released app trusts"
             npx tauri signer generate -w "$RUNNER_TEMP/updater-dry-run.key" -f --ci
             # Verbatim, for the reason the real-key branch above spells out: the
@@ -573,7 +691,7 @@ jobs:
               echo "TAURI_SIGNING_PRIVATE_KEY_PASSWORD="
             } >> "$GITHUB_ENV"
           else
-            echo "::error::TAURI_SIGNING_PRIVATE_KEY is not set; a tag build cannot publish updater artifacts nobody can verify"
+            echo "::error::TAURI_SIGNING_PRIVATE_KEY is not set; a release build cannot publish updater artifacts nobody can verify"
             exit 1
           fi
 
@@ -700,19 +818,19 @@ jobs:
 
   publish:
     name: publish release
-    needs: [build, build-app]
+    needs: [resolve, build, build-app]
     runs-on: ubuntu-latest
-    # Only a tag push produces a real GitHub Release; workflow_dispatch stops
-    # after the build matrix above so it can be used as a dry run.
-    if: github.ref_type == 'tag'
+    timeout-minutes: 20
+    # A call from CI and a tag push publish; workflow_dispatch stops after the
+    # build matrix above, so it works as a dry run.
+    if: needs.resolve.outputs.publish == 'true'
     permissions:
       contents: write
+    env:
+      TAG: ${{ needs.resolve.outputs.tag }}
     steps:
-      # Full history and tags are required for git-cliff to resolve the
-      # commit range for the release notes below.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 0
           persist-credentials: false
 
       - name: Download all archives
@@ -745,13 +863,13 @@ jobs:
       #
       # Schema per https://v2.tauri.app/plugin/updater ("Static JSON File").
       # The endpoint the app polls is
-      # /releases/latest/download/latest.json, which only ever resolves against
-      # a *published* release - so this file sits harmlessly in the draft until
-      # a human decides the release is real.
+      # /releases/latest/download/latest.json, which resolves against the
+      # latest published release, so the update goes out the moment the
+      # release below is published.
       - name: Generate latest.json for the updater
         run: |
           set -euo pipefail
-          tag="$GITHUB_REF_NAME"
+          tag="$TAG"
           version="${tag#v}"
           base_url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${tag}"
           missing=0
@@ -794,23 +912,56 @@ jobs:
             > release/latest.json
           cat release/latest.json
 
-      - name: Generate release notes
-        uses: orhun/git-cliff-action@a9a95522b26fe6403f7bb24031f21fb573d0f5ff # v4.9.1
-        with:
-          config: cliff.toml
-          args: --latest
+      # Only for a call from CI: a tag push brought its tag along. An annotated
+      # tag, made through the API because the checkout keeps no credentials.
+      # A tag made with the workflow token starts no other workflow, so this
+      # run is the only release of it. The tag already at this commit is a
+      # re-run of a failed publish; at another commit it is an error, never
+      # moved.
+      - name: Create the tag at the tested commit
+        if: needs.resolve.outputs.called == 'true'
         env:
-          OUTPUT: release-notes.md
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          at="$(bash scripts/release-check.sh tag-commit "$TAG")"
+          if [ -n "$at" ]; then
+            if [ "$at" != "$GITHUB_SHA" ]; then
+              echo "::error::$TAG already points at $at, not at the tested commit $GITHUB_SHA"
+              exit 1
+            fi
+            echo "release: $TAG already points at $GITHUB_SHA"
+            exit 0
+          fi
+          object="$(gh api "repos/${GITHUB_REPOSITORY}/git/tags" \
+            -f tag="$TAG" -f message="$TAG" -f object="$GITHUB_SHA" -f type=commit \
+            --jq .sha)"
+          gh api "repos/${GITHUB_REPOSITORY}/git/refs" \
+            -f ref="refs/tags/$TAG" -f sha="$object" > /dev/null
+          echo "release: tagged $GITHUB_SHA as $TAG"
 
-      # Created as a draft on purpose: the release notes get a hand-polish
-      # pass before publishing. Publishing the draft is what triggers
-      # homebrew.yml to update the tap formula.
+      # Published right away: the notes were reviewed in the pull request
+      # that bumped the version (release-notes/<tag>.md).
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          gh release create "$GITHUB_REF_NAME" release/* \
-            --draft \
-            --title "$GITHUB_REF_NAME" \
-            --notes-file release-notes.md
+          gh release create "$TAG" release/* \
+            --verify-tag \
+            --title "$TAG" \
+            --notes-file "release-notes/${TAG}.md"
+
+  # The tap update. A release published with the workflow token fires no
+  # `release: published` event, so homebrew.yml is called directly.
+  homebrew:
+    name: homebrew
+    needs: [resolve, publish]
+    if: needs.resolve.outputs.publish == 'true'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/homebrew.yml  # zizmor: ignore[self-repository]
+    with:
+      tag: ${{ needs.resolve.outputs.tag }}
+    secrets:
+      TAP_GITHUB_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}

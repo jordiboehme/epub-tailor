@@ -20,7 +20,83 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # Test once. A pull request must be up to date with main before it merges
+  # (the main ruleset requires it), so the merge commit carries the same git
+  # tree the pull request's CI tested. On a push to main this job looks for
+  # the proof a green pull request run leaves behind (the `tested-tree-<tree>`
+  # artifact, uploaded by ci-passed below). With tested=true the `test` and
+  # `app` jobs are skipped; deny and workflow-lint still run.
+  #
+  # The lookup fails open: an API error, an empty answer or anything unclear
+  # leaves tested=false, and the gates read `!= 'true'`, so the tests run.
+  # Only artifacts of runs whose head is in this repository count: a fork's
+  # pull request runs its own copy of this file and could upload any name.
+  changes:
+    name: changes
+    timeout-minutes: 10
+    runs-on: ubuntu-latest
+    # The artifact lookup needs actions: read. Naming one permission drops the
+    # rest to none, so checkout's contents: read is named as well.
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      tested: ${{ steps.tested.outputs.tested }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        with:
+          persist-credentials: false
+
+      - name: Look for a green pull request run of this tree
+        id: tested
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO_ID: ${{ github.repository_id }}
+        run: |
+          # Every failure in here has to end in tested=false and exit 0.
+          set +e
+          set -u
+
+          run_the_tests() {
+            echo "tested: $1, so the tests run."
+            echo "tested=false" >>"$GITHUB_OUTPUT"
+            exit 0
+          }
+
+          case "$REPO_ID" in
+            ''|*[!0-9]*) run_the_tests "the repository id '$REPO_ID' is not a number" ;;
+          esac
+
+          if ! tree=$(git rev-parse 'HEAD^{tree}'); then
+            run_the_tests "git could not name the tree of HEAD"
+          fi
+          case "$tree" in
+            ''|*[!0-9a-f]*) run_the_tests "'$tree' is not a tree sha" ;;
+          esac
+
+          name="tested-tree-$tree"
+          echo "tested: looking for the artifact $name"
+          if ! runs=$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=$name&per_page=100" \
+            --jq "[.artifacts[] | select(.name == \"$name\" and .expired == false and .workflow_run.repository_id == $REPO_ID and .workflow_run.head_repository_id == $REPO_ID) | .workflow_run.id] | unique | map(tostring) | join(\" \")"); then
+            run_the_tests "the artifact lookup for $name failed"
+          fi
+          if [ -z "$runs" ]; then
+            echo "::notice title=tree skip missed::no green pull request run of the tree $tree. Likely the pull request was not up to date with main when it merged, so the tests run again here."
+            run_the_tests "no pull request run of this repository left an unexpired $name"
+          fi
+
+          echo "tested: the pull request run(s) $runs passed every job on the tree $tree, so test and app are skipped."
+          echo "tested=true" >>"$GITHUB_OUTPUT"
+
   test:
+    needs: changes
+    # !cancelled(): without a status function the condition gets an implicit
+    # success(), and a `changes` job that failed outright must run the tests,
+    # not skip them.
+    if: ${{ !cancelled() && needs.changes.outputs.tested != 'true' }}
     timeout-minutes: 45
     strategy:
       matrix:
@@ -69,6 +145,8 @@ jobs:
   # much as look at the crate.
   app:
     name: desktop app
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.tested != 'true' }}
     timeout-minutes: 45
     runs-on: ubuntu-24.04
     steps:
@@ -112,6 +190,10 @@ jobs:
       - run: cargo clippy -p epub-tailor-app --all-targets --locked -- -D warnings
       - run: cargo test -p epub-tailor-app --locked
 
+  # Licenses, bans and sources only: they depend on this tree alone. The
+  # advisories check runs in security.yml, because a new advisory can turn up
+  # any day for a tree nobody touched, and it must not block a merge or a
+  # release of unrelated work.
   deny:
     timeout-minutes: 15
     runs-on: ubuntu-24.04
@@ -123,7 +205,7 @@ jobs:
         with:
           # The rust-toolchain.toml pin. Move it together with that file.
           rust-version: '1.99.1'
-          command: check
+          command: check bans licenses sources
           arguments: --all-features --locked
 
   # Static checks of the workflows. actionlint catches expression, type and
@@ -152,25 +234,130 @@ jobs:
           advanced-security: false
           annotations: true
 
-  # The one check a branch protection rule requires. It always runs and
-  # passes only when every job above passed. A job `if` without always()
-  # would skip this job when a need fails, and a skipped required check is
-  # not a reliable signal.
+  # The one check the main ruleset requires. It always runs and passes only
+  # when every job above passed. The single exception: on a push to main whose
+  # tree a pull request already tested, `test` and `app` are skipped on
+  # purpose and count as passed. A job `if` without always() would skip this
+  # job when a need fails, and a skipped required check is not a reliable
+  # signal.
+  #
+  # On a pull request where everything passed, it also uploads the proof that
+  # this tree is tested, which the `changes` job on main looks for.
   ci-passed:
     name: ci-passed
-    timeout-minutes: 5
-    needs: [test, app, deny, workflow-lint]
+    timeout-minutes: 10
+    needs: [changes, test, app, deny, workflow-lint]
     if: ${{ always() }}
     runs-on: ubuntu-latest
     steps:
       - name: Every job passed
         env:
-          RESULTS: ${{ toJSON(needs.*.result) }}
-          FAILED: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'skipped') }}
+          RESULTS: ${{ toJSON(needs) }}
+          TESTED: ${{ needs.changes.outputs.tested }}
         run: |
           set -euo pipefail
-          echo "ci-passed: job results $RESULTS"
-          if [ "$FAILED" = "true" ]; then
-            echo "::error::at least one CI job failed, was cancelled or was skipped"
+          jq -r 'to_entries[] | "  \(.value.result)  \(.key)"' <<<"$RESULTS"
+          bad=$(jq -r --arg tested "$TESTED" '
+            to_entries[]
+            | select(.value.result != "success")
+            | select(($tested == "true" and (.key == "test" or .key == "app") and .value.result == "skipped") | not)
+            | "\(.key): \(.value.result)"' <<<"$RESULTS")
+          if [ -n "$bad" ]; then
+            echo "::error::not every CI job passed: $(tr '\n' ' ' <<<"$bad")"
             exit 1
           fi
+          if [ "$TESTED" = "true" ]; then
+            echo "ci-passed: a pull request already tested this tree; every other job passed"
+          else
+            echo "ci-passed: every job passed"
+          fi
+
+      # The commit every job above checked out: refs/pull/N/merge at
+      # github.sha.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: ${{ github.event_name == 'pull_request' }}
+        with:
+          persist-credentials: false
+
+      - name: Name the tested tree
+        id: tree
+        if: ${{ github.event_name == 'pull_request' }}
+        run: |
+          set -euo pipefail
+          tree=$(git rev-parse 'HEAD^{tree}')
+          echo "ci-passed: every job passed on the tree $tree (commit $GITHUB_SHA)"
+          echo "tree=$tree" >>"$GITHUB_OUTPUT"
+          mkdir -p "$RUNNER_TEMP/tested-tree"
+          printf 'tree %s\ncommit %s\nrun %s\n' "$tree" "$GITHUB_SHA" "$GITHUB_RUN_ID" \
+            >"$RUNNER_TEMP/tested-tree/tested-tree.txt"
+
+      # A re-run of this job uploads the same name again, hence overwrite.
+      - name: Upload the proof
+        if: ${{ github.event_name == 'pull_request' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: tested-tree-${{ steps.tree.outputs.tree }}
+          path: ${{ runner.temp }}/tested-tree/tested-tree.txt
+          retention-days: 7
+          overwrite: true
+          if-no-files-found: error
+
+  # Release on merge. The last pull request of a version bumps it and adds
+  # release-notes/v<version>.md; once that merge passes ci-passed on main,
+  # this releases it. scripts/release-check.sh decides: a version that is
+  # already tagged is a no-op with one line, a new version without its notes
+  # fails here, and a new version with its notes releases.
+  #
+  # !cancelled(): without a status function the condition gets an implicit
+  # success(), which is false whenever any job up the needs chain was skipped,
+  # and on a main push whose tree a pull request tested, test and app are
+  # skipped on purpose.
+  release-check:
+    name: release-check
+    timeout-minutes: 10
+    needs: ci-passed
+    if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.ci-passed.result == 'success' }}
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.check.outputs.tag }}
+      release: ${{ steps.check.outputs.release }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Is this version new
+        id: check
+        run: bash scripts/release-check.sh
+
+  # The release itself: release.yml, called with the tag. It creates the tag
+  # at this commit, builds everything once and publishes. A tag made with the
+  # workflow token starts no other workflow, which is why this calls
+  # release.yml directly. A called workflow gets no more than this job grants.
+  # The secrets go by name, never `inherit`.
+  #
+  # One release at a time, never cancelled in progress. A second release that
+  # queues behind a running one finds its tag taken and stops green.
+  release:
+    name: release
+    needs: release-check
+    if: ${{ !cancelled() && needs.release-check.result == 'success' && needs.release-check.outputs.release == 'true' }}
+    concurrency:
+      group: release-main
+      cancel-in-progress: false
+    permissions:
+      contents: write
+    # A local reusable workflow resolves at the commit this run started on.
+    uses: ./.github/workflows/release.yml  # zizmor: ignore[self-repository]
+    with:
+      tag: ${{ needs.release-check.outputs.tag }}
+    secrets:
+      APPLE_CERTIFICATE_P12: ${{ secrets.APPLE_CERTIFICATE_P12 }}
+      APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+      APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+      APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+      TAP_GITHUB_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
