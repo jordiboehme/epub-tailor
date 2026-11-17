@@ -786,22 +786,21 @@ jobs:
             fi
             exit 1
           fi
-          # Apple has accepted the DMG at this point. The staple step only
-          # fetches the ticket from Apple's CDN, and that fetch sometimes
-          # loses its connection (stapler exit 68). Try a few times before
-          # failing a release that is otherwise done.
+          # Apple has accepted the DMG at this point. Staple and validate
+          # only fetch the ticket from Apple's CloudKit, and that fetch
+          # sometimes loses its connection (stapler exit 68). Try a few times
+          # before failing a release that is otherwise done.
           for attempt in 1 2 3 4 5; do
-            if xcrun stapler staple "$dmg"; then
+            if xcrun stapler staple "$dmg" && xcrun stapler validate "$dmg"; then
               break
             fi
             if [ "$attempt" -eq 5 ]; then
-              echo "::error::stapling the DMG failed 5 times"
+              echo "::error::stapling or validating the DMG failed 5 times"
               exit 1
             fi
-            echo "stapling failed (attempt $attempt), retrying in 30 seconds"
+            echo "stapling or validating failed (attempt $attempt), retrying in 30 seconds"
             sleep 30
           done
-          xcrun stapler validate "$dmg"
           spctl -a -t open --context context:primary-signature -vv "$dmg"
 
       - name: Delete the App Store Connect key
